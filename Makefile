@@ -18,6 +18,9 @@
 .SUFFIXES:
 SUFFIXES=
 
+# All targets deps on Makefile, but we can comment that out during dev:ing
+ALLDEPS=${BUILDDIR}/config.mak Makefile
+
 include ${CURDIR}/config.default
 
 OPTFLAGS ?= -O2
@@ -80,6 +83,9 @@ ${BUILDDIR}/ext/dvd/dvdnav/%.o : CFLAGS = ${OPTFLAGS} \
 ${BUILDDIR}/ext/spidermonkey/%.o : CFLAGS = \
 	-Iext/spidermonkey -Isrc/arch/nspr
 
+${BUILDDIR}/ext/jemalloc/src/%.o : CFLAGS = \
+	-Iext/jemalloc/include -iquote${BUILDDIR}/jemalloc
+
 CFLAGS_com += -DXP_UNIX -DJS_HAS_XML_SUPPORT -DJS_THREADSAFE
 
 ${BUILDDIR}/ext/polarssl-0.14.0/library/%.o : CFLAGS = -Wall ${OPTFLAGS}
@@ -130,19 +136,19 @@ all:	makever ${PROG}
 
 .PHONY:	clean distclean makever
 
-${PROG}: ${FFBUILDDEP} $(OBJDIRS) $(OBJS) $(BUNDLE_OBJS) Makefile src/version.c
+${PROG}: ${FFBUILDDEP} $(OBJDIRS) $(OBJS) $(BUNDLE_OBJS) $(ALLDEPS) src/version.c
 	$(CC) -o $@ $(OBJS) $(BUNDLE_OBJS) $(LDFLAGS) ${LDFLAGS_cfg}
 
 $(OBJDIRS):
 	@mkdir -p $@
 
-${BUILDDIR}/%.o: %.c ${BUILDDIR}/config.mak Makefile
+${BUILDDIR}/%.o: %.c $(ALLDEPS)
 	$(CC) -MD -MP $(CFLAGS_com) $(CFLAGS) $(CFLAGS_cfg) -c -o $@ $(CURDIR)/$<
 
-${BUILDDIR}/%.o: %.m ${BUILDDIR}/config.mak Makefile
+${BUILDDIR}/%.o: %.m $(ALLDEPS)
 	$(CC) -MD -MP $(CFLAGS_com) $(CFLAGS) $(CFLAGS_cfg) -c -o $@ $(CURDIR)/$<
 
-${BUILDDIR}/%.o: %.cpp ${BUILDDIR}/config.mak Makefile
+${BUILDDIR}/%.o: %.cpp $(ALLDEPS)
 	$(CXX) -MD -MP $(CFLAGS_com) $(CFLAGS_cfg) -c -o $@ $(CURDIR)/$<
 
 clean:
@@ -178,8 +184,8 @@ makever:
 include support/${PLATFORM}.mk
 
 # Bundle files
-$(BUILDDIR)/bundles/%.o: $(BUILDDIR)/bundles/%.c Makefile
+$(BUILDDIR)/bundles/%.o: $(BUILDDIR)/bundles/%.c $(ALLDEPS)
 	$(CC) -I${CURDIR}/src/fileaccess -c -o $@ $<
 
-$(BUILDDIR)/bundles/%.c: % $(CURDIR)/support/mkbundle Makefile
+$(BUILDDIR)/bundles/%.c: % $(CURDIR)/support/mkbundle $(ALLDEPS)
 	$(MKBUNDLE) -o $@ -s $< -d ${BUILDDIR}/bundles/$<.d -p $<
