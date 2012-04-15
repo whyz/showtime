@@ -441,6 +441,8 @@ arch_set_default_paths(int argc, char **argv)
   if(x == NULL)
     return;
   x++;
+  *x = 0;
+  showtime_path = strdup(buf);
   strcpy(x, "settings");
   showtime_persistent_path = strdup(buf);
   strcpy(x, "cache");
@@ -709,4 +711,18 @@ my_localtime(const time_t *now, struct tm *tm)
   tm->tm_hour = dt.hour;
   tm->tm_min  = dt.minute;
   tm->tm_sec  = dt.second;
+}
+
+
+void
+__assert_func(const char *file, int line,
+	      const char *func, const char *failedexpr);
+
+void
+__assert_func(const char *file, int line,
+	      const char *func, const char *failedexpr)
+{
+  TRACE(TRACE_ERROR, "ASSERT",
+	"%s:%d %s %s", file, line, func, failedexpr);
+  exit(1);
 }

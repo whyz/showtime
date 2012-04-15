@@ -89,6 +89,7 @@ static int showtime_retcode = 1;
 const char *showtime_logtarget = SHOWTIME_DEFAULT_LOGTARGET;
 char *showtime_cache_path;
 char *showtime_persistent_path;
+char *showtime_path;
 
 static int
 fflockmgr(void **_mtx, enum AVLockOp op)
@@ -340,6 +341,8 @@ main(int argc, char **argv)
 
   /* Architecture specific init */
   arch_init();
+
+  TRACE(TRACE_DEBUG, "core", "Loading resources from %s", showtime_dataroot());
 
   /* Try to create cache path */
   if(showtime_cache_path != NULL &&
