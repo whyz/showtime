@@ -8,7 +8,7 @@
 #include "ext/tlsf/tlsf.h"
 #include "networking/http_server.h"
 
-#define GPOOL_SIZE (64 * 1024 * 1024)
+#define GPOOL_SIZE (96 * 1024 * 1024)
 
 static int memstats(http_connection_t *hc, const char *remain, void *opaque,
 		    http_cmd_t method);
@@ -37,16 +37,22 @@ static void __attribute__((constructor)) mallocsetup(void)
 void *malloc(size_t bytes)
 {
   void *r;
+  if(bytes == 0)
+    return NULL;
+
   hts_mutex_lock(&mutex);
   r = tlsf_malloc(gpool, bytes);
   hts_mutex_unlock(&mutex);
-  assert(r != NULL);
+  if(r == NULL)
+    panic("OOM: malloc(%d)", (int)bytes);
   return r;
 }
 
 
 void free(void *ptr)
 {
+  if(ptr == NULL)
+    return;
   hts_mutex_lock(&mutex);
   tlsf_free(gpool, ptr);
   hts_mutex_unlock(&mutex);
@@ -58,6 +64,8 @@ void *realloc(void *ptr, size_t bytes)
   hts_mutex_lock(&mutex);
   r = tlsf_realloc(gpool, ptr, bytes);
   hts_mutex_unlock(&mutex);
+  if(r == NULL && bytes > 0)
+    panic("OOM: realloc(%p, %d)", ptr, (int)bytes);
   return r;
 }
 
@@ -65,9 +73,14 @@ void *realloc(void *ptr, size_t bytes)
 void *memalign(size_t align, size_t bytes)
 {
   void *r;
+  if(bytes == 0)
+    return NULL;
+
   hts_mutex_lock(&mutex);
   r = tlsf_memalign(gpool, align, bytes);
   hts_mutex_unlock(&mutex);
+  if(r == NULL)
+    panic("OOM: memalign(%d, %d)", (int)align, (int)bytes);
   return r;
 }
 
@@ -75,7 +88,6 @@ void *memalign(size_t align, size_t bytes)
 void *calloc(size_t nmemb, size_t bytes)
 {
   void *r = malloc(bytes * nmemb);
-  assert(r != NULL);
   memset(r, 0, bytes * nmemb);
   return r;
 }
@@ -160,4 +172,18 @@ memstats(http_connection_t *hc, const char *remain, void *opaque,
 		 ms.used, ms.free, ms.segs);
 
   return http_send_reply(hc, 0, "text/ascii", NULL, NULL, 0, &out);
+}
+
+void verify_heap(void);
+
+
+void 
+verify_heap(void)
+{
+  hts_mutex_lock(&mutex);
+  if(tlsf_check_heap(gpool))
+    trace(TRACE_NO_PROP, TRACE_ERROR, "HEAPCHECK", "Heap check verify failed");
+  else
+    trace(TRACE_NO_PROP, TRACE_DEBUG, "HEAPCHECK", "Heap OK");
+  hts_mutex_unlock(&mutex);
 }

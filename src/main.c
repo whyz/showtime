@@ -374,6 +374,7 @@ main(int argc, char **argv)
   htsmsg_store_init();
 
   /* Metadata init */
+  metadata_init();
   metadb_init();
 
   /* Metadata decoration init */
@@ -543,6 +544,7 @@ finalize(void)
   shutdown_hook_run(0);
   blobcache_fini();
   metadb_fini();
+  TRACE(TRACE_DEBUG, "core", "Showtime terminated normally");
 }
 
 
