@@ -103,21 +103,18 @@ vd_decode_video(video_decoder_t *vd, media_queue_t *mq, media_buf_t *mb)
   if(got_pic == 0 || mb->mb_skip == 1) 
     return;
 
-  vd->vd_skip = 0;
-  video_deliver_frame(vd, mp, mq, ctx, frame, mb, t);
+  video_deliver_frame_avctx(vd, mp, mq, ctx, frame, mb, t);
 }
-
 
 /**
  *
  */
 void
-video_deliver_frame(video_decoder_t *vd,
-		    media_pipe_t *mp, media_queue_t *mq,
-		    AVCodecContext *ctx, AVFrame *frame,
-		    const media_buf_t *mb, int decode_time)
+video_deliver_frame_avctx(video_decoder_t *vd,
+			  media_pipe_t *mp, media_queue_t *mq,
+			  AVCodecContext *ctx, AVFrame *frame,
+			  const media_buf_t *mb, int decode_time)
 {
-  event_ts_t *ets;
   frame_info_t fi;
 
   if(mb->mb_time != AV_NOPTS_VALUE)
@@ -197,14 +194,6 @@ video_deliver_frame(video_decoder_t *vd,
 
   if(pts != AV_NOPTS_VALUE) {
     vd->vd_nextpts = pts + duration;
-
-    if(mb->mb_send_pts) {
-      ets = event_create(EVENT_CURRENT_PTS, sizeof(event_ts_t));
-      ets->ts = pts;
-      mp_enqueue_event(mp, &ets->h);
-      event_release(&ets->h);
-    }
-
   } else {
     vd->vd_nextpts = AV_NOPTS_VALUE;
   }
@@ -226,10 +215,32 @@ video_deliver_frame(video_decoder_t *vd,
   fi.color_space = ctx->colorspace;
   fi.color_range = ctx->color_range;
 
-  vd->vd_frame_deliver(FRAME_BUFFER_TYPE_LIBAV_FRAME, frame,
-		       &fi, vd->vd_opaque);
+  video_deliver_frame(vd, FRAME_BUFFER_TYPE_LIBAV_FRAME, frame, &fi,
+		      mb->mb_send_pts);
+}
 
-  video_decoder_scan_ext_sub(vd, fi.pts);
+
+/**
+ *
+ */
+void
+video_deliver_frame(video_decoder_t *vd, frame_buffer_type_t type, void *frame,
+		    const frame_info_t *info, int send_pts)
+{
+  event_ts_t *ets;
+  
+  vd->vd_skip = 0;
+
+  if(info->pts != AV_NOPTS_VALUE && send_pts) {
+    ets = event_create(EVENT_CURRENT_PTS, sizeof(event_ts_t));
+    ets->ts = info->pts;
+    mp_enqueue_event(vd->vd_mp, &ets->h);
+    event_release(&ets->h);
+  }
+
+  vd->vd_frame_deliver(type, frame, info, vd->vd_opaque);
+  
+  video_decoder_scan_ext_sub(vd, info->pts);
 }
 
 
@@ -367,11 +378,8 @@ vd_thread(void *aux)
       break;
 
     case MB_BLACKOUT:
-      if(vd->vd_accelerator_blackout)
-	vd->vd_accelerator_blackout(vd->vd_accelerator_opaque);
-      else
-	vd->vd_frame_deliver(FRAME_BUFFER_TYPE_BLACKOUT, NULL, NULL,
-			     vd->vd_opaque);
+      vd->vd_frame_deliver(FRAME_BUFFER_TYPE_BLACKOUT, NULL, NULL,
+			   vd->vd_opaque);
       break;
 
     case MB_FLUSH_SUBTITLES:
@@ -397,9 +405,6 @@ vd_thread(void *aux)
   }
 
   hts_mutex_unlock(&mp->mp_mutex);
-
-  // Stop any video accelerator helper threads 
-  video_decoder_set_accelerator(vd, NULL, NULL, NULL);
 
   if(vd->vd_ext_subtitles != NULL)
     subtitles_destroy(vd->vd_ext_subtitles);
@@ -477,28 +482,10 @@ video_decoder_destroy(video_decoder_t *vd)
  *
  */
 void
-video_decoder_set_accelerator(video_decoder_t *vd,
-			      void (*stopfn)(void *opaque),
-			      void (*blackoutfn)(void *opaque),
-			      void *opaque)
-{
-  if(vd->vd_accelerator_opaque != NULL)
-    vd->vd_accelerator_stop(vd->vd_accelerator_opaque);
-  
-  vd->vd_accelerator_stop = stopfn;
-  vd->vd_accelerator_blackout = blackoutfn;
-  vd->vd_accelerator_opaque = opaque;
-}
-
-
-/**
- *
- */
-void
 video_decoder_scan_ext_sub(video_decoder_t *vd, int64_t pts)
 {
   pts -= vd->vd_mp->mp_svdelta;
-
+  pts -= vd->vd_mp->mp_pts_delta_for_subs;
   if(vd->vd_ext_subtitles != NULL) {
     ext_subtitle_entry_t *ese = subtitles_pick(vd->vd_ext_subtitles, pts);
     if(ese != NULL)

@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <psl1ght/lv2.h>
 #include <malloc.h>
+#include <limits.h>
 
 #include "arch/threads.h"
 #include "showtime.h"
@@ -185,5 +186,66 @@ verify_heap(void)
     trace(TRACE_NO_PROP, TRACE_ERROR, "HEAPCHECK", "Heap check verify failed");
   else
     trace(TRACE_NO_PROP, TRACE_DEBUG, "HEAPCHECK", "Heap OK");
+  hts_mutex_unlock(&mutex);
+}
+
+
+void *
+mymalloc(size_t bytes)
+{
+  if(bytes == 0)
+    return NULL;
+
+  hts_mutex_lock(&mutex);
+  void *r = tlsf_malloc(gpool, bytes);
+  hts_mutex_unlock(&mutex);
+  return r;
+}
+
+void *
+myrealloc(void *ptr, size_t bytes)
+{
+  hts_mutex_lock(&mutex);
+  void *r = tlsf_realloc(gpool, ptr, bytes);
+
+  if(r == NULL && bytes > 0 && ptr != NULL)
+    tlsf_free(gpool, ptr);
+
+  hts_mutex_unlock(&mutex);
+  return r;
+}
+
+void *
+mycalloc(size_t nmemb, size_t bytes)
+{
+  void *r = mymalloc(bytes * nmemb);
+  memset(r, 0, bytes * nmemb);
+  return r;
+}
+
+
+void *mymemalign(size_t align, size_t bytes);
+
+void *mymemalign(size_t align, size_t bytes)
+{
+  if(bytes == 0)
+    return NULL;
+
+  hts_mutex_lock(&mutex);
+  void *r = tlsf_memalign(gpool, align, bytes);
+  hts_mutex_unlock(&mutex);
+  return r;
+}
+
+
+
+void myfree(void *ptr);
+
+void myfree(void *ptr)
+{
+  if(ptr == NULL)
+    return;
+  hts_mutex_lock(&mutex);
+  tlsf_free(gpool, ptr);
   hts_mutex_unlock(&mutex);
 }

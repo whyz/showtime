@@ -241,6 +241,7 @@ typedef struct media_pipe {
   int mp_avdelta;           // Audio vs video delta (µs)
   int mp_svdelta;           // Subtitle vs video delta (µs)
   int mp_stats;
+  int64_t mp_pts_delta_for_subs;
 
   struct audio_decoder *mp_audio_decoder;
 
@@ -263,6 +264,7 @@ typedef struct media_pipe {
   prop_t *mp_prop_stats;
   prop_t *mp_prop_url;
   prop_t *mp_prop_avdiff;
+  prop_t *mp_prop_avdiff_error;
   prop_t *mp_prop_shuffle;
   prop_t *mp_prop_repeat;
 
@@ -457,15 +459,16 @@ void mp_add_track(prop_t *parent,
 		  prop_t *sourcep,
 		  int score);
 
-void mp_add_trackr(prop_t *parent,
-		   rstr_t *title,
-		   const char *url,
-		   rstr_t *format,
-		   rstr_t *longformat,
-		   rstr_t *isolang,
-		   rstr_t *source,
-		   prop_t *sourcep,
-		   int score);
+prop_vec_t *mp_add_trackr(prop_t *parent,
+			  rstr_t *title,
+			  const char *url,
+			  rstr_t *format,
+			  rstr_t *longformat,
+			  rstr_t *isolang,
+			  rstr_t *source,
+			  prop_t *sourcep,
+			  int score,
+			  prop_vec_t *vec);
 
 void mp_add_track_off(prop_t *tracks, const char *title);
 

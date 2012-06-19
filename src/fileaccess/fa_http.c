@@ -455,8 +455,6 @@ typedef struct http_file {
   char *hf_auth_realm;
 
 
-  char hf_line[1024];
-
   char hf_authurl[128];
   char hf_path[URL_MAX];
 
@@ -512,6 +510,7 @@ typedef struct http_file {
   int hf_stats[STAT_VEC_SIZE];
   int hf_stats_ptr;
   int hf_num_stats;
+  char hf_line[4096];
 
 } http_file_t;
 
@@ -890,7 +889,7 @@ http_read_content(http_file_t *hf)
       csize = strtol(chunkheader, NULL, 16);
 
       if(csize > 0) {
-	buf = realloc(buf, s + csize + 1);
+	buf = myrealloc(buf, s + csize + 1);
 	if(tcp_read_data(hc->hc_tc, buf + s, csize))
 	  break;
 
@@ -912,7 +911,9 @@ http_read_content(http_file_t *hf)
   }
 
   s = hf->hf_rsize;
-  buf = malloc(s + 1);
+  buf = mymalloc(s + 1);
+  if(buf == NULL)
+    return NULL;
   buf[s] = 0;
   
   if(tcp_read_data(hc->hc_tc, buf, s)) {
@@ -2627,12 +2628,14 @@ http_request(const char *url, const char **arguments,
     char prefix = '?';
 
     while(args[0] != NULL) {
-      htsbuf_append(&q, &prefix, 1);
-      htsbuf_append_and_escape_url(&q, args[0]);
-      htsbuf_append(&q, "=", 1);
-      htsbuf_append_and_escape_url(&q, args[1]);
+      if(args[1] != NULL) {
+	htsbuf_append(&q, &prefix, 1);
+	htsbuf_append_and_escape_url(&q, args[0]);
+	htsbuf_append(&q, "=", 1);
+	htsbuf_append_and_escape_url(&q, args[1]);
+	prefix = '&';
+      }
       args += 2;
-      prefix = '&';
     }
   }
 
@@ -2741,7 +2744,11 @@ http_request(const char *url, const char **arguments,
 
       if(size == capacity) {
 	capacity *= 2;
-	mem = realloc(mem, capacity + 1);
+	mem = myrealloc(mem, capacity + 1);
+	if(mem == NULL) {
+	  snprintf(errbuf, errlen, "Out of memory (%d)", capacity + 1);
+	  goto error;
+	}
       }
 
       if(hf->hf_content_encoding == HTTP_CE_GZIP) {
@@ -2767,7 +2774,11 @@ http_request(const char *url, const char **arguments,
 	    break;
 
 	  capacity *= 2;
-	  mem = realloc(mem, capacity + 1);
+	  mem = myrealloc(mem, capacity + 1);
+	  if(mem == NULL) {
+	    snprintf(errbuf, errlen, "Out of memory (%d)", capacity + 1);
+	    goto error;
+	  }
 	}
 
 	if(r < 0)
@@ -2809,7 +2820,11 @@ http_request(const char *url, const char **arguments,
 	csize = strtol(chunkheader, NULL, 16);
 
 	if(csize > 0) {
-	  buf = realloc(buf, size + csize + 1);
+	  buf = myrealloc(buf, size + csize + 1);
+	  if(buf == NULL) {
+	    snprintf(errbuf, errlen, "Out of memory (%zd)", size + csize + 1);
+	    goto error;
+	  }
 	  if(tcp_read_data(hc->hc_tc, buf + size, csize))
 	    break;
 
@@ -2828,8 +2843,11 @@ http_request(const char *url, const char **arguments,
     } else {
 
       size = hf->hf_filesize;
-      buf = malloc(hf->hf_filesize + 1);
-      
+      buf = mymalloc(hf->hf_filesize + 1);
+      if(buf == NULL) {
+	snprintf(errbuf, errlen, "Out of memory (%"PRId64")", hf->hf_filesize + 1);
+	goto error;
+      }
       r = tcp_read_data(hc->hc_tc, buf, hf->hf_filesize);
       
       if(r == -1) {
@@ -2861,7 +2879,12 @@ http_request(const char *url, const char **arguments,
 	  break;
 
 	if(z.avail_out == 0) {
-	  buf2 = realloc(buf2, z.total_out * 2 + 1);
+	  buf2 = myrealloc(buf2, z.total_out * 2 + 1);
+	  if(buf2 == NULL) {
+	    snprintf(errbuf, errlen, "Out of memory (%"PRId64")",
+		     (int64_t)(z.total_out * 2 + 1));
+	    goto error;
+	  }
 	  z.next_out = buf2 + z.total_out;
 	  z.avail_out = z.total_out;
 	}

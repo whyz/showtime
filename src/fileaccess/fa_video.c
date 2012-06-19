@@ -84,10 +84,14 @@ fs_sub_match(const char *video, const char *sub)
     return 0;
 
   fname++;
-  char *dot = strrchr(fname, '.');
-  if(dot)
-    *dot = 0;
-  return !strcmp(fname, video);
+  int vl = strlen(video);
+  if(strlen(fname) < vl)
+    return 0;
+
+  if(fname[vl] != '.')
+    return 0;
+  
+  return !memcmp(fname, video, vl);
 }
 
 
@@ -101,6 +105,8 @@ fs_sub_scan_dir(prop_t *prop, const char *url, const char *video)
   fa_dir_t *fd;
   fa_dir_entry_t *fde;
   char errbuf[256];
+
+  TRACE(TRACE_DEBUG, "Video", "Scanning for subs in %s for %s", url, video);
 
   if((fd = fa_scandir(url, errbuf, sizeof(errbuf))) == NULL) {
     TRACE(TRACE_DEBUG, "Video", "Unable to scan %s for subtitles: %s",
@@ -126,6 +132,7 @@ fs_sub_scan_dir(prop_t *prop, const char *url, const char *video)
       }
 
       int score = fs_sub_match(video, fde->fde_url);
+      TRACE(TRACE_DEBUG, "Video", "SRT %s score=%d", fde->fde_url, score); 
       if(score == 0 && !subtitle_settings.include_all_subs)
 	continue;
 
@@ -583,13 +590,15 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     }
   }
 
-
-  char tmp[1024];
-  fa_url_get_last_component(tmp, sizeof(tmp), canonical_url);
-  char *x = strrchr(tmp, '.');
-  if(x)
-    *x = 0;
-  prop_set_string(prop_create(mp->mp_prop_metadata, "title"), tmp);
+  
+  if(flags & BACKEND_VIDEO_SET_TITLE) {
+    char tmp[1024];
+    fa_url_get_last_component(tmp, sizeof(tmp), canonical_url);
+    char *x = strrchr(tmp, '.');
+    if(x)
+      *x = 0;
+    prop_set_string(prop_create(mp->mp_prop_metadata, "title"), tmp);
+  }
 
   int seek_is_fast = fa_seek_is_fast(fh);
 
@@ -633,8 +642,10 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
    * Update property metadata
    */
   metadata_t *md = fa_metadata_from_fctx(fctx, url);
+  prop_vec_t *streams = NULL;
   if(md != NULL) {
-    metadata_to_proptree(md, mp->mp_prop_metadata, 0);
+    streams = metadata_to_proptree(md, mp->mp_prop_metadata, 0,
+				   prop_vec_create(10));
     metadata_destroy(md);
   }
 
@@ -699,6 +710,9 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     }
 
 
+    if(ctx->codec_type == AVMEDIA_TYPE_VIDEO && mp->mp_video.mq_stream != -1)
+      continue;
+
     cwvec[i] = media_codec_create(ctx->codec_id, 0, fw, ctx, &mcp, mp);
 
     if(cwvec[i] != NULL) {
@@ -721,6 +735,7 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     }
   }
 
+  mp->mp_pts_delta_for_subs = fctx->start_time;
 
   // Start it
   mp_configure(mp, (seek_is_fast ? MP_PLAY_CAPS_SEEK : 0) | MP_PLAY_CAPS_PAUSE,
@@ -741,6 +756,12 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 
   TRACE(TRACE_DEBUG, "Video", "Stopped playback of %s", url);
 
+  if(streams != NULL) {
+    prop_vec_destroy_entries(streams);
+    prop_vec_release(streams);
+  }
+
+  mp->mp_pts_delta_for_subs = 0;
   mp_flush(mp, 0);
   mp_shutdown(mp);
 

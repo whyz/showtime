@@ -368,6 +368,7 @@ mp_create(const char *name, int flags, const char *type)
   mp->mp_prop_url         = prop_create(mp->mp_prop_root, "url");
 
   mp->mp_prop_avdiff      = prop_create(mp->mp_prop_root, "avdiff");
+  mp->mp_prop_avdiff_error= prop_create(mp->mp_prop_root, "avdiffError");
 
   mp->mp_prop_audio_channels_root = prop_create(mp->mp_prop_audio, "channels");
 
@@ -1632,7 +1633,7 @@ mp_set_mq_meta(media_queue_t *mq, AVCodec *codec, AVCodecContext *avctx)
 /**
  *
  */
-void
+prop_vec_t *
 mp_add_trackr(prop_t *parent,
 	      rstr_t *title,
 	      const char *url,
@@ -1641,7 +1642,8 @@ mp_add_trackr(prop_t *parent,
 	      rstr_t *isolang,
 	      rstr_t *source,
 	      prop_t *sourcep,
-	      int score)
+	      int score,
+	      prop_vec_t *streams)
 {
   prop_t *p = prop_create_root(NULL);
   prop_t *s;
@@ -1671,8 +1673,13 @@ mp_add_trackr(prop_t *parent,
   prop_set_rstring(prop_create(p, "title"), title);
   prop_set_int(prop_create(p, "score"), score);
 
+  if(streams != NULL)
+    streams = prop_vec_append(streams, p);
+
   if(prop_set_parent(p, parent))
     prop_destroy(p);
+
+  return streams;
 }
 
 
@@ -1697,7 +1704,7 @@ mp_add_track(prop_t *parent,
   rstr_t *rsource     = rstr_alloc(source);
 
   mp_add_trackr(parent, rtitle, url, rformat, rlongformat, risolang,
-		rsource, sourcep, score);
+		rsource, sourcep, score, NULL);
   
   rstr_release(rtitle);
   rstr_release(rformat);

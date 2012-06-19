@@ -90,6 +90,7 @@ const char *showtime_logtarget = SHOWTIME_DEFAULT_LOGTARGET;
 char *showtime_cache_path;
 char *showtime_persistent_path;
 char *showtime_path;
+char *showtime_bin;
 
 static int
 fflockmgr(void **_mtx, enum AVLockOp op)
@@ -109,6 +110,7 @@ fflockmgr(void **_mtx, enum AVLockOp op)
     break;
   case AV_LOCK_DESTROY:
     hts_mutex_destroy(*mtx);
+    free(*mtx);
     break;
   }
   return 0;
@@ -177,21 +179,20 @@ main(int argc, char **argv)
   int nuiargs = 0;
   int can_standby = 0;
   int can_poweroff = 0;
+  int can_open_shell = 0;
+  int can_logout = 0;
   int r;
 #if ENABLE_HTTPSERVER
   int do_upnp = 1;
 #endif
   int do_sd = 1;
 
+  showtime_bin = argv[0];
+
   trace_level = TRACE_INFO;
 
   gettimeofday(&tv, NULL);
   srand(tv.tv_usec);
-
-#if ENABLE_BINREPLACE
-  extern char *binary_to_replace;
-  binary_to_replace = argv[0];
-#endif
 
   arch_set_default_paths(argc, argv);
 
@@ -286,6 +287,14 @@ main(int argc, char **argv)
       can_poweroff = 1;
       argc -= 1; argv += 1;
       continue;
+    } else if(!strcmp(argv[0], "--with-logout")) {
+      can_logout = 1;
+      argc -= 1; argv += 1;
+      continue;
+    } else if(!strcmp(argv[0], "--with-openshell")) {
+      can_open_shell = 1;
+      argc -= 1; argv += 1;
+      continue;
     } else if(!strcmp(argv[0], "--ui") && argc > 1) {
       if(nuiargs < 16)
 	uiargs[nuiargs++] = argv[1];
@@ -342,6 +351,9 @@ main(int argc, char **argv)
   /* Architecture specific init */
   arch_init();
 
+  /* Initialize settings */
+  settings_init();
+
   TRACE(TRACE_DEBUG, "core", "Loading resources from %s", showtime_dataroot());
 
   /* Try to create cache path */
@@ -382,9 +394,6 @@ main(int argc, char **argv)
 
   /* Initialize keyring */
   keyring_init();
-
-  /* Initialize settings */
-  settings_init();
 
   /* Initialize libavcodec & libavformat */
   av_lockmgr_register(fflockmgr);
@@ -456,7 +465,7 @@ main(int argc, char **argv)
 
 
   /* */
-  runcontrol_init(can_standby, can_poweroff);
+  runcontrol_init(can_standby, can_poweroff, can_logout, can_open_shell);
 
   TRACE(TRACE_DEBUG, "core", "Starting UI");
 
@@ -545,6 +554,7 @@ finalize(void)
   blobcache_fini();
   metadb_fini();
   TRACE(TRACE_DEBUG, "core", "Showtime terminated normally");
+  trace_fini();
 }
 
 

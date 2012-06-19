@@ -17,6 +17,7 @@ TMPDIR=${TOPDIR}/tmp
 GLW_DEFAULT_THEME="mono"
 DEFAULT_LOGTARGET=""
 JARGS=""
+LIBSPOTIFY_VERSION="12.1.51"
 
 CONFIG_LIST="
  libasound
@@ -84,7 +85,6 @@ CONFIG_LIST="
  sqlite_locking
  libav
  vda
- jemalloc
  tlsf
 "
 
@@ -100,6 +100,11 @@ die() {
 
 die_invalid_opt() {
     echo "Invalid option: $1"
+    die
+}
+
+die_cause() {
+    echo "$1"
     die
 }
 
@@ -161,6 +166,22 @@ print_config(){
 cp_if_changed(){
     cmp -s "$1" "$2" || cp -f "$1" "$2"
 }
+
+download_file() {
+    local __resultvar=$2
+    local URL_HASH=`echo "$1" | shasum  | awk '{print $1}'`
+    mkdir -p ${TOPDIR}/.downloadcache
+    local DLPATH=${TOPDIR}/.downloadcache/${URL_HASH}
+    if [ ! -f "${DLPATH}" ]; then
+	echo "Downloading $1"
+	curl -f -L -o "${DLPATH}" "$1" || die_cause "Unable to download file" 
+    else
+	echo "Found in cache: $1"
+    fi
+    eval $__resultvar="$DLPATH"
+}
+
+
 
 common_help(){
   echo "Usage: configure [options]"

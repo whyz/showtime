@@ -38,6 +38,8 @@ extern const char *showtime_dataroot(void);
 #define DISABLE_CACHE ((int *)-2)
 #define NOT_MODIFIED ((void *)-1)
 
+#define ARRAYSIZE(x) (sizeof(x) / sizeof(x[0]))
+
 #define ONLY_CACHED(p) ((p) != BYPASS_CACHE && (p) != NULL)
 
 // NLS
@@ -90,6 +92,8 @@ enum {
 
 void trace_init(void);
 
+void trace_fini(void);
+
 void trace(int flags, int level, const char *subsys, const char *fmt, ...);
 
 void tracev(int flags, int level, const char *subsys, const char *fmt, va_list ap);
@@ -134,6 +138,29 @@ static inline const char *mystrbegins(const char *s1, const char *s2)
   return s1;
 }
 
+/*
+ * Memory allocation wrappers
+ * These are used whenever the caller can deal with failure 
+ * Some platform may have the standard libc ones to assert() on
+ * OOM conditions
+ */
+
+#if ENABLE_TLSF
+
+void *mymalloc(size_t size);
+
+void *myrealloc(void *ptr, size_t size);
+
+void *mycalloc(size_t count, size_t size);
+
+#else
+
+#define mymalloc(size) malloc(size)
+#define myrealloc(ptr, size) realloc(ptr, size)
+#define mycalloc(count, size) calloc(count, size)
+
+#endif
+
 
 void runcontrol_activity(void);
 
@@ -143,6 +170,9 @@ void *shutdown_hook_add(void (*fn)(void *opaque, int exitcode), void *opaque,
 #define SHOWTIME_EXIT_OK       0
 #define SHOWTIME_EXIT_STANDBY  10
 #define SHOWTIME_EXIT_POWEROFF 11
+#define SHOWTIME_EXIT_LOGOUT   12
+#define SHOWTIME_EXIT_RESTART  13
+#define SHOWTIME_EXIT_SHELL    14
 
 extern char *showtime_cache_path;
 extern char *showtime_persistent_path;

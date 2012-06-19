@@ -155,10 +155,13 @@ fa_imageloader2(const char *url, const char **vpaths,
   }
 
   pixmap_t *pm = pixmap_alloc_coded(p, size, fmt);
-  pm->pm_width = width;
-  pm->pm_height = height;
-  pm->pm_orientation = orientation;
-
+  if(pm != NULL) {
+    pm->pm_width = width;
+    pm->pm_height = height;
+    pm->pm_orientation = orientation;
+  } else {
+    snprintf(errbuf, errlen, "Out of memory");
+  }
   free(p);
   return pm;
 }
@@ -448,6 +451,14 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
 #endif
 		       );
 
+
+
+    if(pm == NULL) {
+      ifv_close();
+      snprintf(errbuf, errlen, "Out of memory");
+      return NULL;
+    }
+
     struct SwsContext *sws;
     sws = sws_getContext(ifv_ctx->width, ifv_ctx->height, ifv_ctx->pix_fmt,
 			 w, h, PIX_FMT_RGB24, SWS_BILINEAR, NULL, NULL, NULL);
@@ -476,7 +487,7 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
       oframe->data[0] = pm->pm_pixels;
       oframe->linesize[0] = pm->pm_linesize;
       
-      size_t outputsize = pm->pm_linesize * h;
+      size_t outputsize = MAX(pm->pm_linesize * h, FF_MIN_BUFFER_SIZE);
       void *output = malloc(outputsize);
       pngencoder->width = w;
       pngencoder->height = h;

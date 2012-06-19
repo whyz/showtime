@@ -37,8 +37,10 @@
 #include "arch/arch.h"
 #include "arch/threads.h"
 #include "arch/atomic.h"
+#include "settings.h"
+#include "notifications.h"
 
-#define BC2_MAGIC 0x62630200
+#define BC2_MAGIC 0x62630201
 
 typedef struct blobcache_item {
   struct blobcache_item *bi_link;
@@ -166,7 +168,12 @@ save_index(void)
   int tot = pool_num(item_pool);
 
   siz = 4 + tot * sizeof(blobcache_diskitem_t) + 20;
-  out = malloc(siz);
+  out = mymalloc(siz);
+  if(out == NULL) {
+    hts_mutex_unlock(&cache_lock);
+    close(fd);
+    return;
+  }
   *(uint32_t *)out = BC2_MAGIC;
   j = 0;
   for(i = 0; i < ITEM_HASH_SIZE; i++) {
@@ -224,7 +231,12 @@ load_index(void)
 
   int items = (st.st_size - 24) / sizeof(blobcache_diskitem_t);
 
-  in = malloc(st.st_size);
+  in = mymalloc(st.st_size);
+  if(in == NULL) {
+    close(fd);
+    return;
+  }
+
   size_t r = read(fd, in, st.st_size);
   close(fd);
   if(r != st.st_size) {
@@ -318,7 +330,7 @@ blobcache_put(const char *key, const char *stash,
   int64_t expiry = (int64_t)maxage + now;
 
   p->bi_modtime = mtime;
-  p->bi_expiry = MAX(INT32_MAX, expiry);
+  p->bi_expiry = MIN(INT32_MAX, expiry);
   p->bi_lastaccess = now;
   p->bi_content_hash = dc;
   current_cache_size -= p->bi_size;
@@ -397,7 +409,12 @@ blobcache_get(const char *key, const char *stash, size_t *sizep, int pad,
   if(ignore_expiry != NULL)
     *ignore_expiry = expired;
 
-  uint8_t *r = malloc(st.st_size + pad);
+  uint8_t *r = mymalloc(st.st_size + pad);
+  if(r == NULL) {
+    close(fd);
+    return NULL;
+  }
+
   if(read(fd, r, st.st_size) != st.st_size) {
     free(r);
     close(fd);
@@ -626,6 +643,26 @@ blobcache_prune_old(void)
   unlink(path);
 }  
 
+static void
+cache_clear(void *opaque, prop_event_t event, ...)
+{
+  int i;
+  blobcache_item_t *p, *n;
+
+  hts_mutex_lock(&cache_lock);
+
+  for(i = 0; i < ITEM_HASH_SIZE; i++) {
+    for(p = hashvector[i]; p != NULL; p = n) {
+      n = p->bi_link;
+      prune_item(p);
+    }
+    hashvector[i] = NULL;
+  }
+  current_cache_size = 0;
+  hts_mutex_unlock(&cache_lock);
+  save_index();
+  notify_add(NULL, NOTIFY_INFO, NULL, 3, _("Cache cleared"));
+}
 
 /**
  *
@@ -650,6 +687,9 @@ blobcache_init(void)
   TRACE(TRACE_INFO, "blobcache",
 	"Initialized: %d items consuming %"PRId64" bytes on disk in %s",
 	pool_num(item_pool), current_cache_size, buf);
+
+  settings_create_action(settings_general, _p("Clear cached files"),
+			 cache_clear, NULL, NULL);
 }
 
 
