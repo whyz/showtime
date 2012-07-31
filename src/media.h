@@ -100,6 +100,7 @@ typedef struct media_buf {
     MB_DVD_CLUT,
     MB_DVD_RESET_SPU,
     MB_DVD_SPU,
+    MB_DVD_SPU2,
     MB_DVD_PCI,
     MB_DVD_HILITE,
 
@@ -125,6 +126,7 @@ typedef struct media_buf {
     int32_t mb_data32;
     int mb_rate;
     int mb_codecid;
+    int mb_font_context;
   };
 
 
@@ -372,6 +374,8 @@ media_buf_t *media_buf_from_avpkt_unlocked(media_pipe_t *mp, struct AVPacket *pk
 
 media_pipe_t *mp_create(const char *name, int flags, const char *type);
 
+void mp_reinit_streams(media_pipe_t *mp);
+
 #define mp_ref_inc(mp) atomic_add(&(mp)->mp_refcount, 1)
 void mp_ref_dec(media_pipe_t *mp);
 
@@ -380,6 +384,9 @@ int mb_enqueue_no_block(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb,
 struct event *mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq, 
 				media_buf_t *mb);
 void mb_enqueue_always(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb);
+
+void mb_enqueue_always_head(media_pipe_t *mp, media_queue_t *mq,
+			    media_buf_t *mb);
 
 void mp_enqueue_event(media_pipe_t *mp, struct event *e);
 struct event *mp_dequeue_event(media_pipe_t *mp);
@@ -459,16 +466,15 @@ void mp_add_track(prop_t *parent,
 		  prop_t *sourcep,
 		  int score);
 
-prop_vec_t *mp_add_trackr(prop_t *parent,
-			  rstr_t *title,
-			  const char *url,
-			  rstr_t *format,
-			  rstr_t *longformat,
-			  rstr_t *isolang,
-			  rstr_t *source,
-			  prop_t *sourcep,
-			  int score,
-			  prop_vec_t *vec);
+void mp_add_trackr(prop_t *parent,
+		   rstr_t *title,
+		   const char *url,
+		   rstr_t *format,
+		   rstr_t *longformat,
+		   rstr_t *isolang,
+		   rstr_t *source,
+		   prop_t *sourcep,
+		   int score);
 
 void mp_add_track_off(prop_t *tracks, const char *title);
 

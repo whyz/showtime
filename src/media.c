@@ -37,6 +37,7 @@
 #include "i18n.h"
 #include "video/ext_subtitles.h"
 #include "video/video_settings.h"
+#include "video/video_overlay.h"
 #include "settings.h"
 
 // -- Video accelerators ---------
@@ -450,6 +451,22 @@ mp_create(const char *name, int flags, const char *type)
 }
 
 
+/**
+ *
+ */
+void
+mp_reinit_streams(media_pipe_t *mp)
+{
+  prop_destroy_childs(mp->mp_prop_audio_tracks);
+  prop_destroy_childs(mp->mp_prop_subtitle_tracks);
+
+  mp_add_track_off(mp->mp_prop_audio_tracks, "audio:off");
+  prop_set_string(mp->mp_prop_audio_track_current, "audio:off");
+
+  mp_add_track_off(mp->mp_prop_subtitle_tracks, "sub:off");
+  prop_set_string(mp->mp_prop_subtitle_track_current, "sub:off");
+}
+
 
 /**
  * Must be called with mp locked
@@ -803,6 +820,18 @@ mb_enqueue_always(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 /**
  *
  */
+void
+mb_enqueue_always_head(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
+{
+  hts_mutex_lock(&mp->mp_mutex);
+  mb_enq_head(mp, mq, mb);
+  hts_mutex_unlock(&mp->mp_mutex);
+}
+
+
+/**
+ *
+ */
 int
 mp_seek_in_queues(media_pipe_t *mp, int64_t pos)
 {
@@ -1146,6 +1175,10 @@ media_codec_create(int codec_id, int parser,
 
   } else
 #endif
+  if(!video_overlay_codec_create(mc, codec_id, ctx, mp)) {
+
+  } else
+
   if(media_codec_create_lavc(mc, codec_id, ctx, mcp)) {
     free(mc);
     return NULL;
@@ -1633,7 +1666,7 @@ mp_set_mq_meta(media_queue_t *mq, AVCodec *codec, AVCodecContext *avctx)
 /**
  *
  */
-prop_vec_t *
+void
 mp_add_trackr(prop_t *parent,
 	      rstr_t *title,
 	      const char *url,
@@ -1642,8 +1675,7 @@ mp_add_trackr(prop_t *parent,
 	      rstr_t *isolang,
 	      rstr_t *source,
 	      prop_t *sourcep,
-	      int score,
-	      prop_vec_t *streams)
+	      int score)
 {
   prop_t *p = prop_create_root(NULL);
   prop_t *s;
@@ -1673,13 +1705,8 @@ mp_add_trackr(prop_t *parent,
   prop_set_rstring(prop_create(p, "title"), title);
   prop_set_int(prop_create(p, "score"), score);
 
-  if(streams != NULL)
-    streams = prop_vec_append(streams, p);
-
   if(prop_set_parent(p, parent))
     prop_destroy(p);
-
-  return streams;
 }
 
 
@@ -1704,7 +1731,7 @@ mp_add_track(prop_t *parent,
   rstr_t *rsource     = rstr_alloc(source);
 
   mp_add_trackr(parent, rtitle, url, rformat, rlongformat, risolang,
-		rsource, sourcep, score, NULL);
+		rsource, sourcep, score);
   
   rstr_release(rtitle);
   rstr_release(rformat);
@@ -2101,7 +2128,7 @@ mp_load_ext_sub(media_pipe_t *mp, const char *url)
   mb->mb_data_type = MB_EXT_SUBTITLE;
   
   if(url != NULL)
-    mb->mb_data = subtitles_load(url);
+    mb->mb_data = subtitles_load(mp, url);
   
   mb->mb_dtor = ext_sub_dtor;
   mb_enq_head(mp, &mp->mp_video, mb);

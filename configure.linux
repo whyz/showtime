@@ -108,7 +108,6 @@ enable httpserver
 enable timegm
 enable inotify
 enable realpath
-enable font_liberation
 #enable libxrandr  -- code does not really work yet
 
 for opt do
@@ -564,16 +563,6 @@ if enabled nvctrl; then
     echo >>${CONFIG_MAK} "LDFLAGS_cfg += -lXNVCtrl"
 fi
 
-
-#
-# libopenspc
-#
-if enabled libopenspc; then
-    
-    check_header "openspc.h" || fatal "openspc" "Missing include file openspc.h"
-    check_lib    "openspc"   || fatal "openspc" "Unable to link with libopenspc"
-    echo >>${CONFIG_MAK} "LDFLAGS_cfg += -lopenspc"
-fi
 
 
 #

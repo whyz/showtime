@@ -1,7 +1,7 @@
 
 build()
 {
-    TOOLCHAIN_URL=https://github.com/andoma/ps3toolchain/tarball/5289bf8c6ce0be91606b80da4707c77c9c810de1
+    TOOLCHAIN_URL=https://github.com/andoma/ps3toolchain/tarball/57a4c9e6a33e0d7cbb2873c954e42e9f791adbd1
     TOOLCHAIN_HASH=`echo ${TOOLCHAIN_URL} | sha1sum  | awk '{print $1}'`
     TOOLCHAIN="${WORKINGDIR}/${TOOLCHAIN_HASH}"
     
@@ -17,7 +17,6 @@ build()
     export PATH=$PATH:$PSL1GHT/host/bin
     
     echo "Toolchain from: '${TOOLCHAIN_URL}' Local install in: ${TOOLCHAIN}"
-    
     if [ -d $TOOLCHAIN ]; then
 	echo "Toolchain seems to exist"
     else
@@ -41,7 +40,17 @@ build()
 	set -e
     fi
 
-    ./configure.ps3 ${JOBSARGS} --build=${TARGET} ${RELEASE} --cleanbuild ${AUTOBUILD_CONFIGURE_EXTRA}
+    which ccache >/dev/null
+    if [ $? -eq 0 ]; then
+	echo "Using ccache"
+	ccache -s
+	USE_CCACHE="--ccache"
+    else
+	USE_CCACHE=""
+    fi
+
+    ./configure.ps3 ${JOBSARGS} --build=${TARGET} ${RELEASE} --cleanbuild ${USE_CCACHE}
+
     make ${JARGS} BUILD=${TARGET} pkg self
     artifact build.${TARGET}/showtime.self self application/octect-stream showtime.self
     artifact build.${TARGET}/showtime.pkg pkg application/octect-stream showtime.pkg

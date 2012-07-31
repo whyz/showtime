@@ -24,6 +24,7 @@
 
 #define SETTINGS_INITIAL_UPDATE 0x1
 #define SETTINGS_PASSWORD       0x2 // Make a password entry (hidden display)
+#define SETTINGS_RAW_NODES      0x4
 
 typedef void (settings_saver_t)(void *opaque, htsmsg_t *htsmsg);
 
@@ -38,11 +39,11 @@ typedef struct settings_multiopt {
 
 prop_t *settings_add_dir(prop_t *parent, prop_t *title,
 			 const char *subtype, const char *icon,
-			 prop_t *shortdesc);
+			 prop_t *shortdesc, const char *url);
 
 prop_t *settings_add_dir_cstr(prop_t *parent, const char *title,
 			      const char *subtype, const char *icon,
-			      const char *shortdesc);
+			      const char *shortdesc, const char *url);
 
 prop_t *settings_create_divider(prop_t *parent, prop_t *caption);
 
@@ -114,6 +115,10 @@ void settings_generic_set_bool(void *opaque, int value);
 
 void settings_create_info(prop_t *parent, const char *image,
 			  prop_t *description);
+
+
+prop_t *settings_create_bound_string(prop_t *parent, prop_t *title,
+				     prop_t *value);
 
 extern prop_t *settings_apps;
 extern prop_t *settings_sd;

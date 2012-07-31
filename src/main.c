@@ -40,7 +40,6 @@
 #include "settings.h"
 #include "ui/ui.h"
 #include "keyring.h"
-#include "bookmarks.h"
 #include "notifications.h"
 #include "sd/sd.h"
 #include "ipc/ipc.h"
@@ -91,6 +90,11 @@ char *showtime_cache_path;
 char *showtime_persistent_path;
 char *showtime_path;
 char *showtime_bin;
+int showtime_can_standby = 0;
+int showtime_can_poweroff = 0;
+int showtime_can_open_shell = 0;
+int showtime_can_logout = 0;
+
 
 static int
 fflockmgr(void **_mtx, enum AVLockOp op)
@@ -177,10 +181,6 @@ main(int argc, char **argv)
   const char *plugin_repo = NULL;
   const char *jsfile = NULL;
   int nuiargs = 0;
-  int can_standby = 0;
-  int can_poweroff = 0;
-  int can_open_shell = 0;
-  int can_logout = 0;
   int r;
 #if ENABLE_HTTPSERVER
   int do_upnp = 1;
@@ -280,19 +280,19 @@ main(int argc, char **argv)
       argc -= 1; argv += 1;
       continue;
     } else if(!strcmp(argv[0], "--with-standby")) {
-      can_standby = 1;
+      showtime_can_standby = 1;
       argc -= 1; argv += 1;
       continue;
     } else if(!strcmp(argv[0], "--with-poweroff")) {
-      can_poweroff = 1;
+      showtime_can_poweroff = 1;
       argc -= 1; argv += 1;
       continue;
     } else if(!strcmp(argv[0], "--with-logout")) {
-      can_logout = 1;
+      showtime_can_logout = 1;
       argc -= 1; argv += 1;
       continue;
     } else if(!strcmp(argv[0], "--with-openshell")) {
-      can_open_shell = 1;
+      showtime_can_open_shell = 1;
       argc -= 1; argv += 1;
       continue;
     } else if(!strcmp(argv[0], "--ui") && argc > 1) {
@@ -425,9 +425,6 @@ main(int argc, char **argv)
   /* Initialize audio subsystem */
   audio_init();
 
-  /* Initialize bookmarks */
-  bookmarks_init();
-
   /* Initialize plugin manager and load plugins */
   plugins_init(devplugin, plugin_repo);
 
@@ -440,12 +437,6 @@ main(int argc, char **argv)
   if(jsfile)
     js_load(jsfile);
 
-  nav_open(NAV_HOME, NULL);
-
-  /* Open initial page */
-  if(argc > 0)
-    nav_open(argv[0], forceview);
-
   /* Various interprocess communication stuff (D-Bus on Linux, etc) */
   ipc_init();
 
@@ -456,6 +447,12 @@ main(int argc, char **argv)
   /* Initialize various external APIs */
   api_init();
 
+  /* Open initial page(s) */
+  nav_open(NAV_HOME, NULL);
+  if(argc > 0)
+    nav_open(argv[0], forceview);
+
+
   /* HTTP server and UPNP */
 #if ENABLE_HTTPSERVER
   http_server_init();
@@ -464,8 +461,7 @@ main(int argc, char **argv)
 #endif
 
 
-  /* */
-  runcontrol_init(can_standby, can_poweroff, can_logout, can_open_shell);
+  runcontrol_init();
 
   TRACE(TRACE_DEBUG, "core", "Starting UI");
 
