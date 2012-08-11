@@ -327,7 +327,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
   mp->mp_audio.mq_seektarget = AV_NOPTS_VALUE;
   mp_set_playstatus_by_hold(mp, 0, NULL);
 
-  if(flags & BACKEND_VIDEO_CONTINUE ||
+  if(flags & BACKEND_VIDEO_RESUME ||
      (video_settings.resume_mode == VIDEO_RESUME_YES &&
       !(flags & BACKEND_VIDEO_START_FROM_BEGINNING))) {
     int64_t start = video_get_restartpos(canonical_url) * 1000;
@@ -465,7 +465,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 	restartpos_last = sec;
 	metadb_set_video_restartpos(canonical_url, seekbase / 1000);
 
-	if(sidx->si_nitems) {
+	if(sidx != NULL && sidx->si_nitems) {
 	  int i, j = 0;
 	  for(i = 0; i < sidx->si_nitems; j = i, i++)
 	    if(sidx->si_items[i].si_start > sec)
@@ -564,6 +564,15 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 	}
       }
 
+    } else if(event_is_action(e, ACTION_SKIP_FORWARD)) {
+      // TODO: chapter support
+      break;
+    } else if(event_is_action(e, ACTION_SKIP_BACKWARD)) {
+
+      // TODO: chapter support
+      if(seekbase < MP_SKIP_LIMIT)
+	break;
+      seekbase = video_seek(fctx, mp, &mb, 0, "skip back");
     } else if(event_is_type(e, EVENT_EXIT) ||
 	      event_is_type(e, EVENT_PLAY_URL)) {
       break;
@@ -594,22 +603,27 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 static seek_index_t *
 build_index(media_pipe_t *mp, AVFormatContext *fctx, const char *url)
 {
-  int i;
-  prop_t *root = prop_create(mp->mp_prop_root, "seekindex");
-  prop_t *parent = prop_create(root, "positions");
+  if(fctx->duration == AV_NOPTS_VALUE)
+    return NULL;
+
   char buf[URL_MAX];
 
   int items = fctx->duration / 60000000;
 
-  seek_index_t *si = malloc(sizeof(seek_index_t) +
-			    sizeof(seek_item_t) * items);
+  seek_index_t *si = mymalloc(sizeof(seek_index_t) +
+			      sizeof(seek_item_t) * items);
+  if(si == NULL) 
+    return NULL;
+
+  si->si_root = prop_create(mp->mp_prop_root, "seekindex");
+  prop_t *parent = prop_create(si->si_root, "positions");
 
   si->si_current = NULL;
   si->si_nitems = items;
-  si->si_root = root;
 
-  prop_set_int(prop_create(root, "available"), 1);
+  prop_set_int(prop_create(si->si_root, "available"), 1);
 
+  int i;
   for(i = 0; i < items; i++) {
     seek_item_t *item = &si->si_items[i];
 
@@ -634,6 +648,8 @@ build_index(media_pipe_t *mp, AVFormatContext *fctx, const char *url)
 static void
 seek_index_destroy(seek_index_t *si)
 {
+  if(si == NULL)
+    return;
   prop_destroy(si->si_root);
   free(si);
 }

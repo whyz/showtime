@@ -32,6 +32,8 @@
 #include "service.h"
 #include "settings.h"
 #include "notifications.h"
+#include "misc/string.h"
+#include "db/kvstore.h"
 
 TAILQ_HEAD(nav_page_queue, nav_page);
 LIST_HEAD(bookmark_list, bookmark);
@@ -43,7 +45,7 @@ static prop_t *bookmark_nodes;
 
 static void bookmarks_init(void);
 static void bookmark_add(const char *title, const char *url, const char *type,
-			 const char *icon);
+			 const char *icon, const char *id);
 static void bookmarks_save(void);
 
 static struct bookmark_list bookmarks;
@@ -60,6 +62,7 @@ typedef struct bookmark {
   prop_sub_t *bm_type_sub;
   prop_sub_t *bm_icon_sub;
 
+  rstr_t *bm_id;
   rstr_t *bm_title;
   rstr_t *bm_url;
   rstr_t *bm_type;
@@ -71,6 +74,7 @@ typedef struct bookmark {
   setting_t *bm_delete;
 
   prop_t *bm_info;
+
 
 } bookmark_t;
 
@@ -408,7 +412,7 @@ nav_page_bookmarked_set(void *opaque, int v)
 
     notify_add(NULL, NOTIFY_INFO, NULL, 3, _("Added new bookmark: %s"), title);
 
-    bookmark_add(title, np->np_url, "other", rstr_get(np->np_icon));
+    bookmark_add(title, np->np_url, "other", rstr_get(np->np_icon), NULL);
 
   } else {
     bookmark_t *bm;
@@ -454,6 +458,9 @@ nav_page_setup_prop(navigator_t *nav, nav_page_t *np, const char *view,
 		    const char *how)
 {
   np->np_prop_root = prop_create_root("page");
+
+  kv_prop_bind_create(prop_create(np->np_prop_root, "persistent"),
+		      np->np_url);
 
   if(np->np_opened_from)
     prop_link(np->np_opened_from, prop_create(np->np_prop_root, "openedFrom"));
@@ -720,6 +727,7 @@ bookmarks_save(void)
     if(bm->bm_title == NULL || bm->bm_url == NULL || bm->bm_type == NULL)
       continue;
     htsmsg_t *b = htsmsg_create_map();
+    htsmsg_add_str(b, "id", rstr_get(bm->bm_id));
     htsmsg_add_str(b, "title", rstr_get(bm->bm_title));
     htsmsg_add_str(b, "svctype", rstr_get(bm->bm_type));
     htsmsg_add_str(b, "url", rstr_get(bm->bm_url));
@@ -756,6 +764,7 @@ bookmark_destroyed(void *opaque, prop_event_t event, ...)
   prop_unsubscribe(bm->bm_type_sub);
   prop_unsubscribe(bm->bm_icon_sub);
 
+  rstr_release(bm->bm_id);
   rstr_release(bm->bm_title);
   rstr_release(bm->bm_url);
   rstr_release(bm->bm_type);
@@ -883,7 +892,7 @@ bm_delete(void *opaque, prop_event_t event, ...)
  */
 static void
 bookmark_add(const char *title, const char *url, const char *type,
-	     const char *icon)
+	     const char *icon, const char *id)
 {
   bookmark_t *bm = calloc(1, sizeof(bookmark_t));
 
@@ -904,7 +913,14 @@ bookmark_add(const char *title, const char *url, const char *type,
   bm->bm_type_sub  = add_prop(p, "svctype", bm->bm_type,  bm, bm_set_type);
   bm->bm_icon_sub  = add_prop(p, "icon",    bm->bm_icon,  bm, bm_set_icon);
 
-  bm->bm_service = service_create(title, url, type, icon, 1, 1);
+  if(id == NULL)
+    bm->bm_id = get_random_string();
+  else
+    bm->bm_id = rstr_alloc(id);
+
+  bm->bm_service = service_create(rstr_get(bm->bm_id),
+				  title, url, type, icon, 1, 1,
+				  SVC_ORIGIN_BOOKMARK);
 
   prop_link(service_get_status_prop(bm->bm_service),
 	    prop_create(p, "status"));
@@ -937,7 +953,7 @@ bookmark_add(const char *title, const char *url, const char *type,
   settings_create_bound_string(m, _p("URL"), prop_create(md, "url"));
 
   bm->bm_type_setting = 
-    settings_create_multiopt(m, "type", _p("Type"));
+    settings_create_multiopt(m, "type", _p("Type"), 0);
 
   settings_multiopt_add_opt(bm->bm_type_setting, "other",  _p("Other"),
 			    !strcmp(type, "other"));
@@ -983,7 +999,7 @@ bookmarks_callback(void *opaque, prop_event_t event, ...)
     break;
 
   case PROP_REQ_NEW_CHILD:
-    bookmark_add("New bookmark", "none:", "other", NULL);
+    bookmark_add("New bookmark", "none:", "other", NULL, NULL);
     break;
 
   case PROP_REQ_DELETE_VECTOR:
@@ -1002,7 +1018,8 @@ bookmark_load(htsmsg_t *o)
   bookmark_add(htsmsg_get_str(o, "title"),
 	       htsmsg_get_str(o, "url"),
 	       htsmsg_get_str(o, "svctype"),
-	       htsmsg_get_str(o, "icon"));
+	       htsmsg_get_str(o, "icon"),
+	       htsmsg_get_str(o, "id"));
 }
 
 /**

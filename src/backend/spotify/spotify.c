@@ -2695,7 +2695,6 @@ playlist_container_delete_callback(void *opaque, prop_event_t event, ...)
     break;
 
   case PROP_DESTROYED:
-    (void)va_arg(ap, prop_t *);
     prop_unsubscribe(va_arg(ap, prop_sub_t *));
     break;
 
@@ -2738,6 +2737,8 @@ playlist_destroy_sub(void *opaque, prop_event_t event, ...)
 
   free(pl->pl_tracks.vec);
   LIST_REMOVE(pl, pl_link);
+  prop_ref_dec(pl->pl_prop_offline);
+  prop_ref_dec(pl->pl_prop_collab);
   free(pl);
 }
 
@@ -4532,8 +4533,10 @@ be_spotify_init(void)
 		       iconurl,
 		       _p("Spotify offers you legal and free access to a huge library of music. To use Spotify in Showtime you need a Spotify Preemium account.\nFor more information about Spotify, visit http://www.spotify.com/\n\nYou will be prompted for your Spotify username and password when first accessing any of the Spotify features in Showtime."));
 
-  spotify_service = service_create("Spotify", "spotify:start",
-				   "music", iconurl, 0, 0);
+  spotify_service = service_create("showtime:spotify",
+				   "Spotify", "spotify:start",
+				   "music", iconurl, 0, 0,
+				   SVC_ORIGIN_APP);
 
   settings_create_divider(s, NULL);
 
