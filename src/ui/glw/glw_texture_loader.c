@@ -86,6 +86,8 @@ loader_get_work(loaderaux_t *la)
   int last_queue = la->la_only_fast ? LQ_TENTATIVE : LQ_REFRESH;
   
   while(1) {
+    if(gr->gr_tex_threads_running == 0)
+      return NULL;
     for(i = 0; i <= last_queue; i++)
       if((glt = TAILQ_FIRST(&gr->gr_tex_load_queue[i])) != NULL)
 	return glt;
@@ -142,9 +144,7 @@ loader_thread(void *aux)
 
   glw_lock(gr);
 
-  while(1) {
-    
-    glt = loader_get_work(la);
+  while((glt = loader_get_work(la)) != NULL) {
 
     TAILQ_REMOVE(glt->glt_q, glt, glt_work_link);
     glt->glt_state = GLT_STATE_LOADING;
@@ -157,6 +157,8 @@ loader_thread(void *aux)
       im.im_max_width  = gr->gr_width;
       im.im_max_height = gr->gr_height;
       im.im_can_mono = 1;
+      im.im_corner_radius = glt->glt_radius;
+      im.im_corner_selection = glt->glt_flags & 0xf;
 
       if(glt->glt_q == &gr->gr_tex_load_queue[LQ_TENTATIVE]) {
 	cache_control = 0;
@@ -230,6 +232,7 @@ loader_thread(void *aux)
 	    assert(!pixmap_is_coded(pm));
 	    glt->glt_orientation = pm->pm_orientation;
 	    glt->glt_aspect = pm->pm_aspect;
+	    glt->glt_margin = pm->pm_margin;
 	    glw_tex_backend_load(gr, glt, pm);
 	  }
 	}
@@ -242,17 +245,19 @@ loader_thread(void *aux)
     glw_tex_deref(gr, glt);
   }
  
+  glw_unlock(gr);
+  free(la);
   return NULL;
 }
 
 static void
-spawn_loader(glw_root_t *gr, int only_fast)
+spawn_loader(glw_root_t *gr, int only_fast, int idx)
 {
   loaderaux_t *la = malloc(sizeof(loaderaux_t));
   la->la_gr = gr;
   la->la_only_fast = only_fast;
-  hts_thread_create_detached("GLW texture loader", loader_thread, la,
-			     THREAD_PRIO_LOW);
+  hts_thread_create_joinable("GLW texture loader", &gr->gr_tex_threads[idx],
+			     loader_thread, la, THREAD_PRIO_LOW);
 }
 
 /**
@@ -262,18 +267,32 @@ void
 glw_tex_init(glw_root_t *gr)
 {
   int i;
-
+  gr->gr_tex_threads_running = 1;
   hts_cond_init(&gr->gr_tex_load_cond, &gr->gr_mutex);
   
   TAILQ_INIT(&gr->gr_tex_rel_queue);
   for(i = 0; i < LQ_num; i++) 
     TAILQ_INIT(&gr->gr_tex_load_queue[i]);
 
-  for(i = 0; i < 4; i++)
-    spawn_loader(gr, 0);
+  for(i = 0; i < GLW_TEXTURE_THREADS; i++)
+    spawn_loader(gr, i >= 4, i);
+}
 
-  for(i = 0; i < 2; i++)
-    spawn_loader(gr, 1);
+
+/**
+ *
+ */
+void
+glw_tex_fini(glw_root_t *gr)
+{
+  int i;
+  glw_lock(gr);
+  gr->gr_tex_threads_running = 0;
+  hts_cond_broadcast(&gr->gr_tex_load_cond);
+  glw_unlock(gr);
+
+  for(i = 0; i < GLW_TEXTURE_THREADS; i++)
+    hts_thread_join(&gr->gr_tex_threads[i]);
 }
 
 /**
@@ -369,7 +388,8 @@ glw_tex_deref(glw_root_t *gr, glw_loadable_texture_t *glt)
  *
  */
 glw_loadable_texture_t *
-glw_tex_create(glw_root_t *gr, rstr_t *filename, int flags, int xs, int ys)
+glw_tex_create(glw_root_t *gr, rstr_t *filename, int flags, int xs, int ys,
+	       int radius)
 {
   glw_loadable_texture_t *glt;
 
@@ -380,7 +400,8 @@ glw_tex_create(glw_root_t *gr, rstr_t *filename, int flags, int xs, int ys)
     if(!strcmp(rstr_get(glt->glt_url), rstr_get(filename)) &&
        glt->glt_flags == flags &&
        glt->glt_req_xs == xs &&
-       glt->glt_req_ys == ys)
+       glt->glt_req_ys == ys &&
+       glt->glt_radius == radius)
       break;
 
   if(glt == NULL) {
@@ -391,6 +412,7 @@ glw_tex_create(glw_root_t *gr, rstr_t *filename, int flags, int xs, int ys)
     glt->glt_flags = flags;
     glt->glt_req_xs = xs;
     glt->glt_req_ys = ys;
+    glt->glt_radius = radius;
   }
 
   glt->glt_refcnt++;
@@ -407,8 +429,8 @@ gl_tex_req_load(glw_root_t *gr, glw_loadable_texture_t *glt)
 {
   int q;
 
-  if(!strncmp(rstr_get(glt->glt_url), "theme://", 8)) {
-    q = LQ_THEME;
+  if(!strncmp(rstr_get(glt->glt_url), "skin://", 8)) {
+    q = LQ_SKIN;
   } else {
     q = LQ_TENTATIVE;
   }

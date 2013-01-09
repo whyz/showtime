@@ -1262,9 +1262,8 @@ be_sidplayer_play(const char *url0, media_pipe_t *mp,
   sidPoke(24, 15);                /* Turn on full volume */
   cpuJSR(init_addr, subSong);     /* Start the song initialize */
 
-  mp_set_playstatus_by_hold(mp, hold, NULL);
   mp->mp_audio.mq_stream = 0;
-  mp_configure(mp, MP_PLAY_CAPS_PAUSE, MP_BUFFER_NONE);
+  mp_configure(mp, MP_PLAY_CAPS_PAUSE, MP_BUFFER_NONE, 0);
   mp_become_primary(mp);
 
 
@@ -1277,9 +1276,10 @@ be_sidplayer_play(const char *url0, media_pipe_t *mp,
       mb->mb_channels = 1;
       mb->mb_rate = 44100;
 
-      mb->mb_time = sample * 1000000LL / mb->mb_rate;
+      mb->mb_pts = sample * 1000000LL / mb->mb_rate;
+      mb->mb_drive_clock = 1;
 
-      if(!registered_play && mb->mb_time > METADB_AUDIO_PLAY_THRESHOLD) {
+      if(!registered_play && mb->mb_pts > METADB_AUDIO_PLAY_THRESHOLD) {
 	registered_play = 1;
 	metadb_register_play(url0, 1, CONTENT_AUDIO);
       }
@@ -1330,19 +1330,6 @@ be_sidplayer_play(const char *url0, media_pipe_t *mp,
     if(event_is_type(e, EVENT_PLAYQUEUE_JUMP)) {
       mp_flush(mp, 0);
       break;
-    } else if(event_is_action(e, ACTION_PLAYPAUSE) ||
-	      event_is_action(e, ACTION_PLAY) ||
-	      event_is_action(e, ACTION_PAUSE)) {
-
-      hold = action_update_hold_by_event(hold, e);
-      mp_send_cmd_head(mp, mq, hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-      mp_set_playstatus_by_hold(mp, hold, NULL);
-
-    } else if(event_is_type(e, EVENT_INTERNAL_PAUSE)) {
-
-      hold = 1;
-      mp_send_cmd_head(mp, mq, MB_CTRL_PAUSE);
-      mp_set_playstatus_by_hold(mp, hold, e->e_payload);
 
     } else if(event_is_action(e, ACTION_SKIP_FORWARD) ||
 	      event_is_action(e, ACTION_SKIP_BACKWARD) ||

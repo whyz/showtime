@@ -24,28 +24,7 @@
 
 #include <gdk/gdkkeysyms.h>
 #include <X11/Xlib.h>
-
-hts_mutex_t gu_mutex;
-
-
-/**
- *
- */
-static void
-gu_enter(void)
-{
-  hts_mutex_lock(&gu_mutex);
-}
-
-
-/**
- *
- */
-static void
-gu_leave(void)
-{
-  hts_mutex_unlock(&gu_mutex);
-}
+#include <gtk/gtk.h>
 
 
 /**
@@ -148,7 +127,7 @@ tab_changed(GtkWidget *w, GtkNotebookPage *page,
  *
  */
 gu_window_t *
-gu_win_create(gtk_ui_t *gu, prop_t *nav, int all)
+gu_win_create(gtk_ui_t *gu, int all)
 {
   gu_window_t *gw = calloc(1, sizeof(gu_window_t));
 
@@ -207,7 +186,7 @@ gu_win_create(gtk_ui_t *gu, prop_t *nav, int all)
   g_signal_connect(G_OBJECT(gw->gw_window), "window-state-event",
 		   G_CALLBACK(window_state_event), gw);
 
-  gu_tab_create(gw, nav, 1);
+  gu_tab_create(gw, 1);
 
   gtk_widget_show(gw->gw_window);
 
@@ -244,7 +223,7 @@ gu_tab_destroy(gu_tab_t *gt)
 static void
 build_tab_header(gu_tab_t *gt)
 {
-  prop_courier_t *pc = gt->gt_gw->gw_gu->gu_pc;
+  prop_courier_t *pc = glibcourier;
   GtkWidget *l, *img;
   prop_sub_t *s;
 
@@ -289,7 +268,7 @@ build_tab_header(gu_tab_t *gt)
  *
  */
 gu_tab_t *
-gu_tab_create(gu_window_t *gw, prop_t *nav, int select)
+gu_tab_create(gu_window_t *gw, int select)
 {
   gu_tab_t *gt = calloc(1, sizeof(gu_tab_t));
   prop_sub_t *s;
@@ -301,11 +280,9 @@ gu_tab_create(gu_window_t *gw, prop_t *nav, int select)
   gw->gw_current_tab = gt;
   gw->gw_ntabs++;
 
-  if(nav == NULL) {
-    gt->gt_nav = nav_spawn(); // No navigator supplied, spawn one
-  } else {
-    gt->gt_nav = prop_xref_addref(nav);
-  }
+  gt->gt_nav = nav_spawn(); // No navigator supplied, spawn one
+  if(prop_set_parent(gt->gt_nav, prop_get_global()))
+    abort();
 
   gt->gt_vbox = gtk_vbox_new(FALSE, 1);
   gtk_widget_show(gt->gt_vbox);
@@ -324,7 +301,7 @@ gu_tab_create(gu_window_t *gw, prop_t *nav, int select)
   s = prop_subscribe(0,
 		     PROP_TAG_NAME("nav", "pages"),
 		     PROP_TAG_CALLBACK, gu_nav_pages, gt,
-		     PROP_TAG_COURIER, gw->gw_gu->gu_pc,
+		     PROP_TAG_COURIER, glibcourier,
 		     PROP_TAG_NAMED_ROOT, gt->gt_nav, "nav",
 		     NULL);
 
@@ -351,33 +328,19 @@ gu_tab_create(gu_window_t *gw, prop_t *nav, int select)
 }
 
 
-
 /**
  *
  */
-static int
-gu_start(ui_t *ui, prop_t *root, int argc, char **argv, int primary)
+int gu_start(void);
+
+int
+gu_start(void)
 {
-  gtk_ui_t *gu = calloc(1, sizeof(gtk_ui_t));
-
-  XInitThreads();
-
-  hts_mutex_init(&gu_mutex);
-
-  g_thread_init(NULL);
-
-  gdk_threads_set_lock_functions(gu_enter, gu_leave);
-
-  gdk_threads_init();
-  gdk_threads_enter();
-
-  gtk_init(&argc, &argv);
-
   gu_pixbuf_init();
 
-  gu->gu_pc = prop_courier_create_thread(&gu_mutex, "GU");
+  gtk_ui_t *gu = calloc(1, sizeof(gtk_ui_t));
 
-  gu_win_create(gu, prop_create(prop_get_global(), "nav"), 1);
+  gu_win_create(gu, 1);
 
   /* Init popup controller */
   gu_popup_init(gu);
@@ -477,7 +440,7 @@ gu_tab_open(gu_tab_t *gt, const char *url)
 void
 gu_nav_open_newwin(gtk_ui_t *gu, const char *url)
 {
-  gu_window_t *gw = gu_win_create(gu, NULL, 0);
+  gu_window_t *gw = gu_win_create(gu, 0);
   gu_tab_send_event(gw->gw_current_tab,
 		    event_create_openurl(url, NULL, NULL, NULL, NULL));
 }
@@ -489,28 +452,6 @@ gu_nav_open_newwin(gtk_ui_t *gu, const char *url)
 void
 gu_nav_open_newtab(gu_window_t *gw, const char *url)
 {
-  gu_tab_t *gt = gu_tab_create(gw, NULL, 0);
+  gu_tab_t *gt = gu_tab_create(gw, 0);
   gu_tab_send_event(gt, event_create_openurl(url, NULL, NULL, NULL, NULL));
 }
-
-
-/**
- *
- */
-static void
-gu_dispatch_event(uii_t *uii, event_t *e)
-{
-  return;
-}
-
-
-
-/**
- *
- */
-ui_t gu_ui = {
-  .ui_title = "gu",
-  .ui_start = gu_start,
-  .ui_dispatch_event = gu_dispatch_event,
-  .ui_flags = UI_SINGLETON,
-};

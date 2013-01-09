@@ -20,12 +20,50 @@
 #define MEDIA_H
 
 #include <stdlib.h>
+
+#include "config.h"
+
+#if ENABLE_LIBAV
+#include <libavcodec/avcodec.h>
+
+#define MEDIA_TYPE_VIDEO      AVMEDIA_TYPE_VIDEO
+#define MEDIA_TYPE_AUDIO      AVMEDIA_TYPE_AUDIO
+#define MEDIA_TYPE_DATA       AVMEDIA_TYPE_DATA
+#define MEDIA_TYPE_SUBTITLE   AVMEDIA_TYPE_SUBTITLE
+#define MEDIA_TYPE_ATTACHMENT AVMEDIA_TYPE_ATTACHMENT
+
+#else
+
+enum codec_id {
+  CODEC_ID_AC3 = 1,
+  CODEC_ID_EAC3, 
+  CODEC_ID_AAC,
+  CODEC_ID_MP2,
+  CODEC_ID_MPEG2VIDEO,
+  CODEC_ID_H264,
+  CODEC_ID_DVB_SUBTITLE,
+  CODEC_ID_MOV_TEXT,
+  CODEC_ID_DVD_SUBTITLE,
+};
+
+#define MEDIA_TYPE_VIDEO      0
+#define MEDIA_TYPE_AUDIO      1
+#define MEDIA_TYPE_DATA       2
+#define MEDIA_TYPE_SUBTITLE   3
+#define MEDIA_TYPE_ATTACHMENT 4
+
+#endif
+
+
 #include "arch/atomic.h"
 #include "prop/prop.h"
 #include "event.h"
 #include "misc/pool.h"
 
+#define PTS_UNSET INT64_C(0x8000000000000000)
+
 void media_init(void);
+
 struct media_buf;
 struct media_queue;
 struct media_pipe;
@@ -46,13 +84,50 @@ TAILQ_HEAD(media_pipe_queue, media_pipe);
 LIST_HEAD(media_pipe_list, media_pipe);
 TAILQ_HEAD(media_track_queue, media_track);
 
+
 /**
  *
  */
-typedef struct media_format {
-  int refcount;
-  struct AVFormatContext *fctx;
-} media_format_t;
+typedef struct frame_info {
+  uint8_t *fi_data[4];
+  int fi_pitch[4];
+
+  uint32_t fi_type;
+
+  int fi_width;
+  int fi_height;
+  int64_t fi_pts;
+  int64_t fi_delta;
+  int fi_epoch;
+  int fi_duration;
+
+  int fi_dar_num;
+  int fi_dar_den;
+
+  int fi_hshift;
+  int fi_vshift;
+
+  int fi_pix_fmt;
+
+  char fi_interlaced;     // Frame delivered is interlaced 
+  char fi_tff;            // For interlaced frame, top-field-first
+  char fi_prescaled;      // Output frame is prescaled to requested size
+  char fi_drive_clock;
+
+  enum {
+    COLOR_SPACE_UNSET = 0,
+    COLOR_SPACE_BT_709,
+    COLOR_SPACE_BT_601,
+    COLOR_SPACE_SMPTE_240M,
+  } fi_color_space;
+
+} frame_info_t;
+
+
+/**
+ *
+ */
+typedef void (video_frame_deliver_t)(const frame_info_t *info, void *opaque);
 
 
 /**
@@ -60,7 +135,7 @@ typedef struct media_format {
  */
 typedef struct media_codec {
   int refcount;
-  media_format_t *fw;
+  struct media_format *fw;
   int codec_id;
   int codec_ctx_alloced; /* Set if this struct owns the allocation
 			    of codec_ctx */
@@ -87,7 +162,7 @@ typedef struct media_codec {
 typedef struct media_buf {
   int64_t mb_dts;
   int64_t mb_pts;
-  int64_t mb_time;
+  int64_t mb_delta;
 
   TAILQ_ENTRY(media_buf) mb_link;
 
@@ -95,31 +170,33 @@ typedef struct media_buf {
     MB_VIDEO,
     MB_AUDIO,
 
-    MB_FLUSH,
-    MB_FLUSH_SUBTITLES,
-    MB_END,
-
-    MB_CTRL_PAUSE,
-    MB_CTRL_PLAY,
-    MB_CTRL_EXIT,
 
     MB_DVD_CLUT,
     MB_DVD_RESET_SPU,
     MB_DVD_SPU,
-    MB_DVD_SPU2,
     MB_DVD_PCI,
-    MB_DVD_HILITE,
 
     MB_SUBTITLE,
 
-    MB_REQ_OUTPUT_SIZE,
+    MB_CTRL,
 
-    MB_BLACKOUT,
+    MB_CTRL_FLUSH,
+    MB_CTRL_PAUSE,
+    MB_CTRL_PLAY,
+    MB_CTRL_EXIT,
+    MB_CTRL_FLUSH_SUBTITLES,
+    MB_CTRL_BLACKOUT,
 
-    MB_REINITIALIZE,
+    MB_CTRL_DVD_HILITE,
+    MB_CTRL_EXT_SUBTITLE,
 
-    MB_EXT_SUBTITLE,
+    MB_CTRL_REINITIALIZE,
 
+    MB_CTRL_REQ_OUTPUT_SIZE,
+    MB_CTRL_DVD_SPU2,
+    
+    MB_CTRL_UNBLOCK,
+    
   } mb_data_type;
 
   void *mb_data;
@@ -142,12 +219,12 @@ typedef struct media_buf {
   uint8_t mb_disable_deinterlacer : 1;
   uint8_t mb_skip : 2;
   uint8_t mb_keyframe : 1;
-  uint8_t mb_send_pts : 1;
+  uint8_t mb_drive_clock : 1;
 
   uint8_t mb_stream;
 
   uint8_t mb_channels;
-  uint8_t mb_epoch;
+  int mb_epoch;
 
 } media_buf_t;
 
@@ -155,11 +232,10 @@ typedef struct media_buf {
  * Media queue
  */
 typedef struct media_queue {
-  struct media_buf_queue mq_q;
+  struct media_buf_queue mq_q_data;
+  struct media_buf_queue mq_q_ctrl;
 
   unsigned int mq_packets_current;    /* Packets currently in queue */
-  unsigned int mq_packets_threshold;  /* If we are below this threshold
-					 the queue is always granted enqueues */
 
   int mq_stream;             /* Stream id, or -1 if queue is inactive */
   int mq_stream2;            /* Complementary stream */
@@ -193,6 +269,7 @@ typedef struct media_track_mgr {
 
   prop_sub_t *mtm_node_sub;
   prop_sub_t *mtm_current_sub;
+  prop_sub_t *mtm_url_sub;
   struct media_track_queue mtm_tracks;
   struct media_track *mtm_suggested_track;
   struct media_track *mtm_current;
@@ -207,6 +284,8 @@ typedef struct media_track_mgr {
 		       anything */
 
   char *mtm_current_url;
+  char *mtm_canonical_url;
+  rstr_t *mtm_user_pref;  // Configured by user
 
 } media_track_mgr_t;
 
@@ -226,6 +305,7 @@ typedef struct media_pipe {
 #define MP_VIDEO         0x4
 
   int mp_eof;   // End of file: We don't expect to need to read more data
+  int mp_hold;  // Paused
 
   pool_t *mp_mb_pool;
 
@@ -241,15 +321,17 @@ typedef struct media_pipe {
   hts_cond_t mp_backpressure;
 
   media_queue_t mp_video, mp_audio;
+
+  void *mp_video_frame_opaque;
+  video_frame_deliver_t *mp_video_frame_deliver;
   
   hts_mutex_t mp_clock_mutex;
   int64_t mp_audio_clock;
-  int64_t mp_audio_clock_realtime;
+  int64_t mp_audio_clock_avtime;
   int mp_audio_clock_epoch;
   int mp_avdelta;           // Audio vs video delta (µs)
   int mp_svdelta;           // Subtitle vs video delta (µs)
   int mp_stats;
-  int64_t mp_pts_delta_for_subs;
 
   struct audio_decoder *mp_audio_decoder;
 
@@ -310,7 +392,10 @@ typedef struct media_pipe {
   int mp_cur_channels;
   int64_t mp_cur_chlayout;
 
-  int64_t mp_current_time;
+  int64_t mp_seek_base;
+  int64_t mp_start_time;
+  int64_t mp_duration;  // Duration of currently played (0 if unknown)
+  int mp_epoch;
 
   struct vdpau_dev *mp_vdpau_dev;
 
@@ -330,28 +415,19 @@ typedef struct media_pipe {
   struct setting *mp_setting_sub_scale;  // Subtitle scaling
   struct setting *mp_setting_sub_on_video; // Subtitle always on video
   struct setting *mp_setting_vzoom;      // Video zoom in %
+  struct setting *mp_setting_hstretch;   // Horizontal stretch
+  struct setting *mp_setting_fstretch;   // Fullscreen stretch
   struct setting *mp_setting_vdpau_deinterlace;      // Deinterlace interlaced content
 
 } media_pipe_t;
 
 struct AVFormatContext;
 struct AVCodecContext;
+struct media_format;
 
 /**
  *
  */
-media_format_t *media_format_create(struct AVFormatContext *fctx);
-
-void media_format_deref(media_format_t *fw);
-
-/**
- * Codecs
- */
-void media_codec_deref(media_codec_t *cw);
-
-media_codec_t *media_codec_ref(media_codec_t *cw);
-
-
 typedef struct media_codec_params {
   unsigned int width;
   unsigned int height;
@@ -363,10 +439,61 @@ typedef struct media_codec_params {
 } media_codec_params_t;
 
 
+/**
+ *
+ */
+typedef struct codec_def {
+  LIST_ENTRY(codec_def) link;
+  void (*init)(void);
+  int (*open)(media_codec_t *mc, int id,
+	      const media_codec_params_t *mcp,
+	      media_pipe_t *mp);
+  int prio;
+} codec_def_t;
+
+void media_register_codec(codec_def_t *cd);
+
+// Higher value of prio_ == better preference
+
+#define REGISTER_CODEC(init_, open_, prio_)			   \
+  static codec_def_t HTS_JOIN(codecdef, __LINE__) = {		   \
+    .init = init_,						   \
+    .open = open_,						   \
+    .prio = prio_						   \
+  };								   \
+  static void  __attribute__((constructor))			   \
+  HTS_JOIN(registercodecdef, __LINE__)(void)			   \
+  { media_register_codec(&HTS_JOIN(codecdef, __LINE__)); }
+
+
+/**
+ *
+ */
+typedef struct media_format {
+  int refcount;
+  struct AVFormatContext *fctx;
+} media_format_t;
+
+#if ENABLE_LIBAV
+
+media_format_t *media_format_create(struct AVFormatContext *fctx);
+
+void media_format_deref(media_format_t *fw);
+
+#endif
+
+/**
+ * Codecs
+ */
+void media_codec_deref(media_codec_t *cw);
+
+media_codec_t *media_codec_ref(media_codec_t *cw);
+
 media_codec_t *media_codec_create(int codec_id, int parser,
-				  media_format_t *fw, 
+				  struct media_format *fw, 
 				  struct AVCodecContext *ctx,
-				  media_codec_params_t *mcp, media_pipe_t *mp);
+				  const media_codec_params_t *mcp,
+                                  media_pipe_t *mp);
 
 void media_buf_free_locked(media_pipe_t *mp, media_buf_t *mb);
 
@@ -391,9 +518,6 @@ struct event *mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq,
 				media_buf_t *mb);
 void mb_enqueue_always(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb);
 
-void mb_enqueue_always_head(media_pipe_t *mp, media_queue_t *mq,
-			    media_buf_t *mb);
-
 void mp_enqueue_event(media_pipe_t *mp, struct event *e);
 struct event *mp_dequeue_event(media_pipe_t *mp);
 struct event *mp_dequeue_event_deadline(media_pipe_t *mp, int timeout);
@@ -402,16 +526,16 @@ struct event *mp_wait_for_empty_queues(media_pipe_t *mp);
 
 
 void mp_send_cmd(media_pipe_t *mp, media_queue_t *mq, int cmd);
-void mp_send_cmd_head(media_pipe_t *mp, media_queue_t *mq, int cmd);
+//void mp_send_cmd_head(media_pipe_t *mp, media_queue_t *mq, int cmd);
 void mp_send_cmd_data(media_pipe_t *mp, media_queue_t *mq, int cmd, void *d);
-void mp_send_cmd_u32_head(media_pipe_t *mp, media_queue_t *mq, int cmd, 
-			  uint32_t u);
+void mp_send_cmd_u32(media_pipe_t *mp, media_queue_t *mq, int cmd, 
+		     uint32_t u);
+
+media_buf_t *mp_deq(media_pipe_t *mp, media_queue_t *mq);
 
 void mp_flush(media_pipe_t *mp, int blackout);
 
-int mp_seek_in_queues(media_pipe_t *mp, int64_t pos);
-
-void mp_end(media_pipe_t *mp);
+void mp_bump_epoch(media_pipe_t *mp);
 
 void mp_send_cmd_u32(media_pipe_t *mp, media_queue_t *mq, int cmd, uint32_t u);
 
@@ -429,8 +553,8 @@ void media_set_metatree(media_pipe_t *mp, prop_t *src);
 
 void media_clear_metatree(media_pipe_t *mp);
 
-void mp_set_current_time(media_pipe_t *mp, int64_t mts);
-
+void mp_set_current_time(media_pipe_t *mp, int64_t ts, int epoch,
+			 int64_t delta);
 
 extern media_pipe_t *media_primary;
 
@@ -450,15 +574,10 @@ void mp_set_url(media_pipe_t *mp, const char *url);
 #define MP_BUFFER_SHALLOW 2
 #define MP_BUFFER_DEEP    3
 
-void mp_configure(media_pipe_t *mp, int caps, int buffer_mode);
+void mp_configure(media_pipe_t *mp, int caps, int buffer_mode,
+		  int64_t duration);
 
 void mp_load_ext_sub(media_pipe_t *mp, const char *url);
-
-void metadata_from_ffmpeg(char *dst, size_t dstlen, 
-			  struct AVCodec *codec, struct AVCodecContext *avctx);
-
-void mp_set_mq_meta(media_queue_t *mq, struct AVCodec *codec,
-		    struct AVCodecContext *avctx);
 
 void mq_update_stats(media_pipe_t *mp, media_queue_t *mq);
 

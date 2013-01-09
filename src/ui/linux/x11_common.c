@@ -193,8 +193,7 @@ vo_set_source(void *opaque, const char *url)
 /**
  *
  */
-static void xv_video_frame_deliver(frame_buffer_type_t type, void *frame,
-				   const frame_info_t *fi, void *opaque);
+static void xv_video_frame_deliver(const frame_info_t *fi, void *opaque);
 
 /**
  *
@@ -234,8 +233,7 @@ init_with_xv(video_output_t *vo)
 /**
  *
  */
-static void xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
-				   const frame_info_t *fi, void *opaque);
+static void xi_video_frame_deliver(const frame_info_t *fi, void *opaque);
 
 /**
  *
@@ -274,7 +272,7 @@ x11_vo_create(Display *dpy, int win, prop_courier_t *pc, prop_t *self,
 {
   XGCValues xgcv;
   video_output_t *vo;
-  vd_frame_deliver_t *deliver_fn;
+  video_frame_deliver_t *deliver_fn;
   
   if(!XShmQueryExtension(dpy)) {
     snprintf(errbuf, errlen, "No SHM Extension available");
@@ -307,7 +305,10 @@ x11_vo_create(Display *dpy, int win, prop_courier_t *pc, prop_t *self,
   vo->vo_gc = XCreateGC(vo->vo_dpy, vo->vo_win, 0, &xgcv);
 
   vo->vo_mp = mp_create("Video decoder", MP_VIDEO | MP_PRIMABLE, NULL);
-  vo->vo_vd = video_decoder_create(vo->vo_mp, deliver_fn, vo);
+  vo->vo_mp->mp_video_frame_deliver = deliver_fn;
+  vo->vo_mp->mp_video_frame_opaque = vo;
+
+  vo->vo_vd = video_decoder_create(vo->vo_mp);
   video_playback_create(vo->vo_mp);
 
   prop_link(vo->vo_mp->mp_prop_root, prop_create(self, "media"));
@@ -380,8 +381,8 @@ x11_vo_dimension(struct video_output *vo, int x, int y, int w, int h)
   vo->vo_h = h;
   vo->vo_repaint = 1;
 
-  mp_send_cmd_u32_head(vo->vo_mp, &vo->vo_mp->mp_video, MB_REQ_OUTPUT_SIZE,
-		       (w << 16) | h);
+  mp_send_cmd_u32(vo->vo_mp, &vo->vo_mp->mp_video, MB_CTRL_REQ_OUTPUT_SIZE,
+		  (w << 16) | h);
 }
 
 /**
@@ -409,8 +410,8 @@ wait_for_aclock(media_pipe_t *mp, int64_t pts, int epoch)
   }
 
   hts_mutex_lock(&mp->mp_clock_mutex);
-  rt = showtime_get_ts();
-  aclock = mp->mp_audio_clock + rt - mp->mp_audio_clock_realtime;
+  rt = showtime_get_avtime();
+  aclock = mp->mp_audio_clock + rt - mp->mp_audio_clock_avtime;
   hts_mutex_unlock(&mp->mp_clock_mutex);
 
   aclock += mp->mp_avdelta;
@@ -433,10 +434,10 @@ wait_for_aclock(media_pipe_t *mp, int64_t pts, int epoch)
  *
  */
 static void
-compute_output_dimensions(video_output_t *vo, AVRational dar,
+compute_output_dimensions(video_output_t *vo, int dar_num, int dar_den,
 			  int *w, int *h)
 {
-  float a = (float)(vo->vo_w * dar.den) / (float)(vo->vo_h * dar.num);
+  float a = (float)(vo->vo_w * dar_den) / (float)(vo->vo_h * dar_num);
 
   if(a > 1) {
     *w = vo->vo_w / a;
@@ -453,17 +454,14 @@ compute_output_dimensions(video_output_t *vo, AVRational dar,
  *
  */
 static void 
-xv_video_frame_deliver(frame_buffer_type_t type, void *frame,
-		       const frame_info_t *fi, void *opaque)
+xv_video_frame_deliver(const frame_info_t *fi, void *opaque)
 {
   video_output_t *vo = opaque;
   int syncok;
   int outw, outh;
 
-  if(type != FRAME_BUFFER_TYPE_LIBAV_FRAME)
+  if(fi->fi_type != 'YUVP')
     return;
-
-  const AVFrame *avframe = frame;
 
   if(vo->vo_w < 1 || vo->vo_h < 1 || fi == NULL)
     return;
@@ -475,7 +473,7 @@ xv_video_frame_deliver(frame_buffer_type_t type, void *frame,
 
     vo->vo_xv_image = XvShmCreateImage(vo->vo_dpy, vo->vo_xv_port,
 				       xv_format, NULL,
-				       fi->width, fi->height,
+				       fi->fi_width, fi->fi_height,
 				       &vo->vo_shm);
 
     vo->vo_shm.shmid = shmget(IPC_PRIVATE, vo->vo_xv_image->data_size, 
@@ -500,31 +498,31 @@ xv_video_frame_deliver(frame_buffer_type_t type, void *frame,
 
   int i;
   for(i = 0; i < 3; i++) {
-    int w = fi->width;
-    int h = fi->height;
+    int w = fi->fi_width;
+    int h = fi->fi_height;
 
     if(i) {
       w = w / 2;
       h = h / 2;
     }
 
-    const uint8_t *src = avframe->data[i];
+    const uint8_t *src = fi->fi_data[i];
     char *dst = vo->vo_xv_image->data + vo->vo_xv_image->offsets[i];
     int pitch = vo->vo_xv_image->pitches[i];
     
     while(h--) {
       memcpy(dst, src, w);
       dst += pitch;
-      src += avframe->linesize[i];
+      src += fi->fi_pitch[i];
     }
   }
 
-  compute_output_dimensions(vo, fi->dar, &outw, &outh);
+  compute_output_dimensions(vo, fi->fi_dar_num, fi->fi_dar_den, &outw, &outh);
 
-  syncok = wait_for_aclock(vo->vo_mp, fi->pts, fi->epoch);
+  syncok = wait_for_aclock(vo->vo_mp, fi->fi_pts, fi->fi_epoch);
 
   XvShmPutImage(vo->vo_dpy, vo->vo_xv_port, vo->vo_win, vo->vo_gc,
-		vo->vo_xv_image, 0, 0, fi->width, fi->height,
+		vo->vo_xv_image, 0, 0, fi->fi_width, fi->fi_height,
 		vo->vo_x + (vo->vo_w - outw) / 2,
 		vo->vo_y + (vo->vo_h - outh) / 2,
 		outw, outh,
@@ -534,7 +532,7 @@ xv_video_frame_deliver(frame_buffer_type_t type, void *frame,
   XSync(vo->vo_dpy, False);
 
   if(!syncok)
-    usleep(fi->duration);
+    usleep(fi->fi_duration);
 }
 #endif
 
@@ -572,8 +570,7 @@ get_pix_fmt(video_output_t *vo)
  *
  */
 static void
-xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
-		       const frame_info_t *fi, void *opaque)
+xi_video_frame_deliver(const frame_info_t *fi, void *opaque)
 {
   video_output_t *vo = opaque;
   uint8_t *dst[4] = {0,0,0,0};
@@ -581,18 +578,17 @@ xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
   int syncok;
   int outw, outh;
 
-  if(type != FRAME_BUFFER_TYPE_LIBAV_FRAME)
+  if(fi->fi_type != 'YUVP')
     return;
-
-  const AVFrame *avframe = frame;
 
   if(vo->vo_w < 1 || vo->vo_h < 1)
     return;
 
-  if(fi->prescaled) {
-    outw = fi->width; outh = fi->height;
+  if(fi->fi_prescaled) {
+    outw = fi->fi_width;
+    outh = fi->fi_height;
   } else {
-    compute_output_dimensions(vo, fi->dar, &outw, &outh);
+    compute_output_dimensions(vo, fi->fi_dar_num, fi->fi_dar_den, &outw, &outh);
   }
 
   if(vo->vo_ximage != NULL && 
@@ -650,12 +646,12 @@ xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
   if(vo->vo_pix_fmt == -1)
     return;
 
-  if(vo->vo_ximage->width          == fi->width &&
-     vo->vo_ximage->height         == fi->height &&
-     vo->vo_pix_fmt                == fi->pix_fmt &&
-     vo->vo_ximage->bytes_per_line == avframe->linesize[0]) {
+  if(vo->vo_ximage->width          == fi->fi_width &&
+     vo->vo_ximage->height         == fi->fi_height &&
+     vo->vo_pix_fmt                == fi->fi_pix_fmt &&
+     vo->vo_ximage->bytes_per_line == fi->fi_pitch[0]) {
 
-    memcpy(vo->vo_ximage->data, avframe->data[0], 
+    memcpy(vo->vo_ximage->data, fi->fi_data[0], 
 	   vo->vo_ximage->bytes_per_line * vo->vo_ximage->height);
 
   } else {
@@ -663,7 +659,8 @@ xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
     // Must do scaling and/or format conversion
 
     vo->vo_scaler = sws_getCachedContext(vo->vo_scaler,
-					 fi->width, fi->height, fi->pix_fmt,
+					 fi->fi_width, fi->fi_height,
+					 fi->fi_pix_fmt,
 					 vo->vo_ximage->width,
 					 vo->vo_ximage->height,
 					 vo->vo_pix_fmt,
@@ -672,12 +669,12 @@ xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
     dst[0] = (uint8_t *)vo->vo_ximage->data;
     dstpitch[0] = vo->vo_ximage->bytes_per_line;
     
-    sws_scale(vo->vo_scaler, (void *)avframe->data, avframe->linesize, 0,
-	      fi->height, dst, dstpitch);
+    sws_scale(vo->vo_scaler, (void *)fi->fi_data, fi->fi_pitch, 0,
+	      fi->fi_height, dst, dstpitch);
   }
 
 
-  syncok = wait_for_aclock(vo->vo_mp, fi->pts, fi->epoch);
+  syncok = wait_for_aclock(vo->vo_mp, fi->fi_pts, fi->fi_epoch);
 
   XShmPutImage(vo->vo_dpy, vo->vo_win, vo->vo_gc, vo->vo_ximage,
 	       0, 0,
@@ -690,5 +687,5 @@ xi_video_frame_deliver(frame_buffer_type_t type, void *frame,
   XSync(vo->vo_dpy, False);
 
   if(!syncok)
-    usleep(fi->duration);
+    usleep(fi->fi_duration);
 }

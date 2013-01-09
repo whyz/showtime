@@ -35,12 +35,15 @@ typedef struct render_job {
   Mtx m;
   const struct glw_backend_texture *t0;
   const struct glw_backend_texture *t1;
+  struct glw_program *up;
   struct glw_rgb rgb_mul;
   struct glw_rgb rgb_off;
   float alpha;
   float blur;
   int vertex_offset;
   int16_t num_vertices;
+  int16_t width;
+  int16_t height;
   char blendmode;
   char frontface;
   char eyespace;
@@ -68,9 +71,16 @@ static glw_program_t *
 get_program(const glw_backend_root_t *gbr,
 	    const struct glw_backend_texture *t0,
 	    const struct glw_backend_texture *t1,
-	    float blur, int flags)
+	    float blur, int flags,
+	    glw_program_t *up)
 {
   glw_program_t *gp;
+
+  if(up != NULL) {
+    if(t0 != NULL)
+      glBindTexture(gbr->gbr_primary_texture_mode, t0->tex);
+    return up;
+  }
 
   if(t0 == NULL) {
 
@@ -124,6 +134,12 @@ render_unlocked(glw_root_t *gr)
 
   const float *vertices = gbr->gbr_vertex_buffer;
 
+  glBindBuffer(GL_ARRAY_BUFFER, gbr->gbr_vbo);
+  glBufferData(GL_ARRAY_BUFFER,
+	       sizeof(float) * VERTEX_SIZE * gbr->gbr_vertex_offset,
+	       vertices, GL_STATIC_DRAW);
+
+  vertices = NULL;
   glVertexAttribPointer(0, 4, GL_FLOAT, 0, sizeof(float) * VERTEX_SIZE,
 			vertices);
       
@@ -136,7 +152,8 @@ render_unlocked(glw_root_t *gr)
   for(i = 0; i < gbr->gbr_num_render_jobs; i++, rj++) {
 
     const struct glw_backend_texture *t0 = rj->t0;
-    glw_program_t *gp = get_program(gbr, t0, rj->t1, rj->blur, rj->flags);
+    glw_program_t *gp = get_program(gbr, t0, rj->t1, rj->blur, rj->flags,
+				    rj->up);
 
     if(gp == NULL)
       continue;
@@ -150,6 +167,12 @@ render_unlocked(glw_root_t *gr)
     
     glw_program_set_uniform_color(gbr, rj->rgb_mul.r, rj->rgb_mul.g,
 				  rj->rgb_mul.b, rj->alpha);
+
+    if(gp->gp_uniform_time != -1)
+      glUniform1f(gp->gp_uniform_time, gr->gr_time);
+
+    if(gp->gp_uniform_resolution != -1)
+      glUniform2f(gp->gp_uniform_resolution, rj->width, rj->height);
 
     if(gp->gp_uniform_blur != -1 && t0 != NULL)
       glUniform3f(gp->gp_uniform_blur, rj->blur,
@@ -211,7 +234,9 @@ shader_render_delayed(struct glw_root *root,
 		      int num_vertices,
 		      const uint16_t *indices,
 		      int num_triangles,
-		      int flags)
+		      int flags,
+		      glw_program_t *p,
+		      const glw_rctx_t *rc)
 {
   glw_backend_root_t *gbr = &root->gr_be;
 
@@ -232,6 +257,10 @@ shader_render_delayed(struct glw_root *root,
     glw_mtx_copy(rj->m, m);
   }
 
+  rj->width  = rc->rc_width;
+  rj->height = rc->rc_height;
+
+  rj->up = p;
   rj->t0 = t0;
   rj->t1 = t1;
 
@@ -293,7 +322,6 @@ shader_render_delayed(struct glw_root *root,
 }
 
 
-
 /**
  * Render function using OpenGL shaders
  */
@@ -309,10 +337,12 @@ shader_render(struct glw_root *root,
 	      int num_vertices,
 	      const uint16_t *indices,
 	      int num_triangles,
-	      int flags)
+	      int flags,
+	      glw_program_t *up,
+	      const glw_rctx_t *rc)
 {
   glw_backend_root_t *gbr = &root->gr_be;
-  glw_program_t *gp = get_program(gbr, t0, t1, blur, flags);
+  glw_program_t *gp = get_program(gbr, t0, t1, blur, flags, up);
 
   if(gp == NULL)
     return;
@@ -338,6 +368,13 @@ shader_render(struct glw_root *root,
 				  1);
     break;
   }
+
+  if(gp->gp_uniform_time != -1)
+    glUniform1f(gp->gp_uniform_time, root->gr_time);
+
+  if(gp->gp_uniform_resolution != -1)
+    glUniform2f(gp->gp_uniform_resolution, rc->rc_width, rc->rc_height);
+
 
   if(gp->gp_uniform_blur != -1 && t0 != NULL)
     glUniform3f(gp->gp_uniform_blur, blur, 1.5 / t0->width, 1.5 / t0->height);
@@ -369,18 +406,15 @@ shader_render(struct glw_root *root,
 /**
  *
  */
-GLuint
-glw_compile_shader(const char *filename, int type)
+static GLuint
+glw_compile_shader(const char *path, int type, glw_root_t *gr)
 {
   char *src;
   GLint v, len;
   GLuint s;
-  char path[PATH_MAX];
   char log[4096];
   
-  snprintf(path, sizeof(path), "%s/src/ui/glw/glsl/%s", 
-	   showtime_dataroot(), filename);
-  if((src = fa_load(path, NULL, NULL, log, sizeof(log), NULL, 0,
+  if((src = fa_load(path, NULL, gr->gr_vpaths, log, sizeof(log), NULL, 0,
 		    NULL, NULL)) == NULL) {
     TRACE(TRACE_ERROR, "glw", "Unable to load shader %s -- %s",
 	  path, log);
@@ -408,8 +442,8 @@ glw_compile_shader(const char *filename, int type)
 /**
  *
  */
-glw_program_t *
-glw_make_program(glw_backend_root_t *gbr, const char *title,
+static glw_program_t *
+glw_link_program(glw_backend_root_t *gbr, const char *title,
 		 GLuint vs, GLuint fs)
 {
   char log[4096];
@@ -457,7 +491,9 @@ glw_make_program(glw_backend_root_t *gbr, const char *title,
   gp->gp_uniform_blend      = glGetUniformLocation(p, "u_blend");
   gp->gp_uniform_color_offset= glGetUniformLocation(p, "u_color_offset");
   gp->gp_uniform_blur        = glGetUniformLocation(p, "u_blur");
-  
+  gp->gp_uniform_time        = glGetUniformLocation(p, "time");
+  gp->gp_uniform_resolution  = glGetUniformLocation(p, "resolution");
+
 #ifdef DEBUG_SHADERS
   printf("Loaded %s\n", title);
   printf("  a_position     = %d\n", gp->gp_attribute_position);
@@ -504,7 +540,6 @@ glw_load_program(glw_backend_root_t *gbr, glw_program_t *gp)
   }
 
   glUseProgram(gp->gp_program);
-
   return 1;
 }
 
@@ -531,43 +566,99 @@ glw_program_set_uniform_color(glw_backend_root_t *gbr,
 }
 
 
+#define SHADERPATH(FILENAME) \
+  snprintf(path, sizeof(path), "%s/src/ui/glw/glsl/%s", \
+	   showtime_dataroot(), FILENAME);
+
+/**
+ *
+ */
+glw_program_t *
+glw_make_program(glw_root_t *gr, 
+		 const char *vertex_shader,
+		 const char *fragment_shader)
+{
+  GLuint vs, fs;
+  char path[512];
+  glw_program_t *p;
+
+
+  SHADERPATH("v1.glsl");
+  vs = glw_compile_shader(vertex_shader ?: path, GL_VERTEX_SHADER, gr);
+  if(vs == 0)
+    return NULL;
+  fs = glw_compile_shader(fragment_shader, GL_FRAGMENT_SHADER, gr);
+  if(fs == 0) {
+    glDeleteShader(vs);
+    return NULL;
+  }
+
+  p = glw_link_program(&gr->gr_be, "user shader", vs, fs);
+  glDeleteShader(vs);
+  glDeleteShader(fs);
+
+  return p;
+}
+
+
+
+/**
+ *
+ */
+void
+glw_destroy_program(struct glw_root *gr, struct glw_program *gp)
+{
+  if(gp == NULL)
+    return;
+  free(gp->gp_title);
+  glDeleteProgram(gp->gp_program);
+  free(gp);
+}
+
 
 /**
  *
  */
 int
-glw_opengl_shaders_init(glw_root_t *gr)
+glw_opengl_shaders_init(glw_root_t *gr, int delayed)
 {
   glw_backend_root_t *gbr = &gr->gr_be;
-
+  char path[512];
   GLuint vs, fs;
 
-  vs = glw_compile_shader("v1.glsl", GL_VERTEX_SHADER);
+  SHADERPATH("v1.glsl");
+  vs = glw_compile_shader(path, GL_VERTEX_SHADER, gr);
 
-  fs = glw_compile_shader("f_tex.glsl", GL_FRAGMENT_SHADER);
-  gbr->gbr_renderer_tex = glw_make_program(gbr, "Texture", vs, fs);
+  SHADERPATH("f_tex.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_renderer_tex = glw_link_program(gbr, "Texture", vs, fs);
   glDeleteShader(fs);
 
-  fs = glw_compile_shader("f_tex_stencil.glsl", GL_FRAGMENT_SHADER);
+  SHADERPATH("f_tex_stencil.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
   gbr->gbr_renderer_tex_stencil = 
-    glw_make_program(gbr, "TextureStencil", vs, fs);
+    glw_link_program(gbr, "TextureStencil", vs, fs);
   glDeleteShader(fs);
 
-  fs = glw_compile_shader("f_tex_blur.glsl", GL_FRAGMENT_SHADER);
-  gbr->gbr_renderer_tex_blur = glw_make_program(gbr, "TextureBlur", vs, fs);
+  SHADERPATH("f_tex_blur.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_renderer_tex_blur = glw_link_program(gbr, "TextureBlur", vs, fs);
   glDeleteShader(fs);
 
-  fs = glw_compile_shader("f_tex_stencil_blur.glsl", GL_FRAGMENT_SHADER);
+  SHADERPATH("f_tex_stencil_blur.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
   gbr->gbr_renderer_tex_stencil_blur =
-    glw_make_program(gbr, "TextureStencilBlur", vs, fs);
+    glw_link_program(gbr, "TextureStencilBlur", vs, fs);
   glDeleteShader(fs);
 
-  fs = glw_compile_shader("f_flat.glsl", GL_FRAGMENT_SHADER);
-  gbr->gbr_renderer_flat = glw_make_program(gbr, "Flat", vs, fs);
+  SHADERPATH("f_flat.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_renderer_flat = glw_link_program(gbr, "Flat", vs, fs);
   glDeleteShader(fs);
 
-  fs = glw_compile_shader("f_flat_stencil.glsl", GL_FRAGMENT_SHADER);
-  gbr->gbr_renderer_flat_stencil = glw_make_program(gbr, "FlatStencil", vs, fs);
+  SHADERPATH("f_flat_stencil.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_renderer_flat_stencil = glw_link_program(gbr, "FlatStencil", vs, fs);
   glDeleteShader(fs);
 
   glDeleteShader(vs);
@@ -577,34 +668,37 @@ glw_opengl_shaders_init(glw_root_t *gr)
 
   // Video renderer
 
-  vs = glw_compile_shader("yuv2rgb_v.glsl", GL_VERTEX_SHADER);
+  SHADERPATH("yuv2rgb_v.glsl");
+  vs = glw_compile_shader(path, GL_VERTEX_SHADER, gr);
 
 
-  fs = glw_compile_shader("yuv2rgb_1f_norm.glsl", GL_FRAGMENT_SHADER);
-  gbr->gbr_yuv2rgb_1f = glw_make_program(gbr, "yuv2rgb_1f_norm", vs, fs);
+  SHADERPATH("yuv2rgb_1f_norm.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_yuv2rgb_1f = glw_link_program(gbr, "yuv2rgb_1f_norm", vs, fs);
   glDeleteShader(fs);
 
-  fs = glw_compile_shader("yuv2rgb_2f_norm.glsl", GL_FRAGMENT_SHADER);
-  gbr->gbr_yuv2rgb_2f = glw_make_program(gbr, "yuv2rgb_2f_norm", vs, fs);
+  SHADERPATH("yuv2rgb_2f_norm.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_yuv2rgb_2f = glw_link_program(gbr, "yuv2rgb_2f_norm", vs, fs);
   glDeleteShader(fs);
 
   glDeleteShader(vs);
 
-  if(1) {
+  if(!delayed) {
     gr->gr_render = shader_render;
   } else {
     gr->gr_render = shader_render_delayed;
     gr->gr_be_prepare = prepare_delayed;
     gr->gr_be_render_unlocked = render_unlocked;
     gbr->gbr_delayed_rendering = 1;
-    
+    glGenBuffers(1, &gbr->gbr_vbo);
   }
 
   glEnableVertexAttribArray(0);
   glEnableVertexAttribArray(1);
   glEnableVertexAttribArray(2);
 
-  prop_set_string(prop_create(gr->gr_uii.uii_prop, "rendermode"),
+  prop_set_string(prop_create(gr->gr_prop_ui, "rendermode"),
 		  "OpenGL VP/FP shaders");
   return 0;
 }

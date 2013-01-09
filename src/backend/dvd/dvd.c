@@ -17,6 +17,8 @@
  */
 
 #include <string.h>
+#include <stdio.h>
+#include <ctype.h>
 
 #include "event.h"
 #include "media.h"
@@ -25,7 +27,7 @@
 #include "notifications.h"
 #include "showtime.h"
 #include "metadata/metadata.h"
-#include "misc/string.h"
+#include "misc/isolang.h"
 #include <libavcodec/avcodec.h>
 #include <libavutil/mathematics.h>
 
@@ -81,6 +83,8 @@ static char *make_nice_title(const char *t);
   _pts;							\
 })
 
+
+const static AVRational mpeg_tc = {1, 90000};
 
 
 static void *
@@ -146,8 +150,6 @@ typedef struct dvd_player {
 
   pci_t dp_pci;
 
-  int dp_epoch;
-
   uint32_t dp_end_ptm;  /* end ptm from last nav packet */
 
   int dp_hold;
@@ -157,6 +159,8 @@ typedef struct dvd_player {
 
   int dp_vwidth;
   int dp_vheight;
+
+  int64_t dp_time_pts_delta;
 
 } dvd_player_t;
 
@@ -207,7 +211,6 @@ dvd_video_push(dvd_player_t *dp)
     1000000LL * av_q2d(cw->codec_ctx->time_base);
   mb->mb_pts = AV_NOPTS_VALUE;
   mb->mb_dts = AV_NOPTS_VALUE;
-  mb->mb_epoch = dp->dp_epoch;
 
   mb_enqueue_always(mp, &mp->mp_video, mb);
 }
@@ -233,9 +236,18 @@ dvd_media_enqueue(dvd_player_t *dp, media_queue_t *mq, media_codec_t *cw,
   mb->mb_disable_deinterlacer = 1;
   mb->mb_dts = dts;
   mb->mb_pts = pts;
-  //  mb->mb_time = (dvdnav_get_current_time(dp->dp_dvdnav) * 1000000) / 90000;
-  mb->mb_epoch = dp->dp_epoch;
+
   
+  if(pts != AV_NOPTS_VALUE && data_type == MB_VIDEO) {
+    if(dp->dp_time_pts_delta == AV_NOPTS_VALUE) {
+      int64_t t = av_rescale_q(dvdnav_get_current_time(dp->dp_dvdnav),
+			       mpeg_tc, AV_TIME_BASE_Q);
+      dp->dp_time_pts_delta = pts - t;
+    }
+    mb->mb_drive_clock = 1;
+    mb->mb_delta = dp->dp_time_pts_delta;
+  }
+
   memcpy(mb->mb_data, data, datalen);
 
   do {
@@ -272,7 +284,6 @@ dvd_pes(dvd_player_t *dp, uint32_t sc, uint8_t *buf, int len)
   media_codec_t *cw, **cwp;
   AVCodecContext *ctx;
   enum CodecID codec_id;
-  AVRational mpeg_tc = {1, 90000};
   event_t *e;
   media_codec_params_t mcp = {0};
 
@@ -536,6 +547,19 @@ dvd_set_spu_stream(dvd_player_t *dp, const char *id)
 /**
  *
  */
+static const char *
+dvdlang(uint16_t code)
+{
+  char buf[3];
+  buf[0] = code >> 8;
+  buf[1] = code;
+  buf[2] = 0;
+  return iso_639_1_lang(buf);
+}
+
+/**
+ *
+ */
 static void
 dvd_update_streams(dvd_player_t *dp)
 {
@@ -564,7 +588,7 @@ dvd_update_streams(dvd_player_t *dp)
 	  abort();
       }
 
-      prop_set_string(prop_create(p, "title"), dvd_langcode_to_string(lang));
+      prop_set_string(prop_create(p, "title"), dvdlang(lang));
       prop_set_stringf(prop_create(p, "id"), "audio:%d", i);
 
 
@@ -618,7 +642,7 @@ dvd_update_streams(dvd_player_t *dp)
 	  abort();
       }
 
-      prop_set_string(prop_create(p, "title"), dvd_langcode_to_string(lang));
+      prop_set_string(prop_create(p, "title"), dvdlang(lang));
       prop_set_stringf(prop_create(p, "id"), "sub:%d", i);
       before = p;
     }
@@ -638,11 +662,31 @@ update_chapter(dvd_player_t *dp, media_pipe_t *mp)
   dvdnav_current_title_info(dp->dp_dvdnav, &title, &part);
   dvdnav_get_number_of_parts(dp->dp_dvdnav, title, &parts);
 
-  prop_set_int(prop_create(mp->mp_prop_root, "currenttitle"), title);
-  prop_set_int(prop_create(mp->mp_prop_metadata, "titles"), titles);
+  prop_set(mp->mp_prop_root, "currenttitle", PROP_SET_INT, title);
+  prop_set(mp->mp_prop_metadata, "titles", PROP_SET_INT, titles);
+  prop_set(mp->mp_prop_root, "currentchapter", PROP_SET_INT, part);
+  prop_set(mp->mp_prop_metadata, "chapters", PROP_SET_INT, parts);
+}
 
-  prop_set_int(prop_create(mp->mp_prop_root, "currentchapter"), part);
-  prop_set_int(prop_create(mp->mp_prop_metadata, "chapters"), parts);
+/**
+ *
+ */
+static void
+update_duration(dvd_player_t *dp, media_pipe_t *mp)
+{
+  uint64_t totdur;
+  uint64_t *times;
+  int title = 0, part = 0;
+  dvdnav_current_title_info(dp->dp_dvdnav, &title, &part);
+
+  if(dvdnav_describe_title_chapters(dp->dp_dvdnav, title, &times, &totdur)) {
+    totdur = av_rescale_q(totdur, mpeg_tc, AV_TIME_BASE_Q);
+    prop_set(mp->mp_prop_metadata, "duration", PROP_SET_INT,
+	     totdur / 1000000LL);
+    free(times);
+  } else {
+    prop_set_void(prop_create(mp->mp_prop_metadata, "duration"));
+  }
 }
 
 
@@ -673,10 +717,9 @@ dvd_play(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
  restart:
   dp = calloc(1, sizeof(dvd_player_t));
 
-  dp->dp_epoch = 1;
-
   dp->dp_mp = mp;
-  
+  dp->dp_time_pts_delta = AV_NOPTS_VALUE;
+
   mp->mp_video.mq_stream = 0;
   mp->mp_audio.mq_stream = 0;
 
@@ -698,9 +741,9 @@ dvd_play(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
   mp_become_primary(mp);
 
   mp_configure(mp, MP_PLAY_CAPS_PAUSE | MP_PLAY_CAPS_EJECT,
-	       MP_BUFFER_SHALLOW); /* Might wanna use deep buffering
-				      but it requires some modification
-				      to buffer draining code */
+	       MP_BUFFER_SHALLOW, 0); /* Might wanna use deep buffering
+					 but it requires some modification
+					 to buffer draining code */
 
   mp_set_playstatus_by_hold(mp, dp->dp_hold, NULL);
 
@@ -770,15 +813,19 @@ dvd_play(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
       dvd_set_spu_stream(dp, "auto");
       dp->dp_aspect_override = dvdnav_get_video_aspect(dp->dp_dvdnav) ? 2 : 1;
       dvdnav_get_video_res(dp->dp_dvdnav, &dp->dp_vwidth, &dp->dp_vheight);
-      dp->dp_epoch++;
+      mp_bump_epoch(mp);
+      dp->dp_time_pts_delta = AV_NOPTS_VALUE;
       dvd_update_streams(dp);
+      update_duration(dp, mp);
       break;
 
     case DVDNAV_NAV_PACKET:
       pci = malloc(sizeof(pci_t));
       memcpy(pci, dvdnav_get_current_nav_pci(dp->dp_dvdnav), sizeof(pci_t));
-      if(dp->dp_end_ptm != pci->pci_gi.vobu_s_ptm)
-	dp->dp_epoch++; // Discontinuity
+      if(dp->dp_end_ptm != pci->pci_gi.vobu_s_ptm) {
+	dp->dp_time_pts_delta = AV_NOPTS_VALUE;
+	mp_bump_epoch(mp);
+      }
       dp->dp_end_ptm = pci->pci_gi.vobu_e_ptm;
 
       update_chapter(dp, mp);
@@ -788,7 +835,7 @@ dvd_play(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
 
     case DVDNAV_HIGHLIGHT:
       hevent = (dvdnav_highlight_event_t *)block;
-      mp_send_cmd_u32_head(mp, &mp->mp_video, MB_DVD_HILITE, hevent->buttonN);
+      mp_send_cmd_u32(mp, &mp->mp_video, MB_CTRL_DVD_HILITE, hevent->buttonN);
       break;
       
     case DVDNAV_CELL_CHANGE:
@@ -868,19 +915,6 @@ dvd_process_event(dvd_player_t *dp, event_t *e)
     if(!strncmp(est->id, "sub:", strlen("sub:")))
       dvd_set_spu_stream(dp, est->id + strlen("sub:"));
 
-  } else if(!dvd_in_menu(dp) && 
-     (event_is_action(e, ACTION_PLAYPAUSE) ||
-      event_is_action(e, ACTION_PLAY) ||
-      event_is_action(e, ACTION_PAUSE))) {
-
-    mp_become_primary(mp);
-    dp->dp_hold = action_update_hold_by_event(dp->dp_hold, e);
-    mp_send_cmd_head(mp, &mp->mp_video, 
-		     dp->dp_hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-    mp_send_cmd_head(mp, &mp->mp_audio, 
-		     dp->dp_hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-    mp_set_playstatus_by_hold(mp, dp->dp_hold, NULL);
-
   } else if(event_is_action(e, ACTION_ACTIVATE)) {
 
     dvdnav_button_activate(dp->dp_dvdnav, pci);
@@ -914,14 +948,13 @@ dvd_process_event(dvd_player_t *dp, event_t *e)
     dvdnav_button_select_and_activate(dp->dp_dvdnav, pci, e->e_payload[0]);
 
   } else if(event_is_action(e, ACTION_SKIP_BACKWARD)) {
-
-    dvdnav_prev_pg_search(dp->dp_dvdnav);
+    
     mp_flush(mp, 1);
+    dvdnav_prev_pg_search(dp->dp_dvdnav);
 
   } else if(event_is_action(e, ACTION_SKIP_FORWARD)) {
-
-    dvdnav_next_pg_search(dp->dp_dvdnav);
     mp_flush(mp, 1);
+    dvdnav_next_pg_search(dp->dp_dvdnav);
 
   } else if(event_is_action(e, ACTION_STOP)) {
     mp_set_playstatus_stop(mp);

@@ -38,7 +38,9 @@
 #include "ui/linux/x11_common.h"
 #include "ui/linux/nvidia.h"
 #include "settings.h"
+#include "navigator.h"
 
+#include "glw_settings.h"
 #if WITH_VALGRIND
 #include <valgrind/callgrind.h>
 #endif
@@ -46,6 +48,8 @@
 #if ENABLE_VDPAU
 #include "video/vdpau.h"
 #endif
+
+//#define WITH_RECORDER
 
 #include "glw_rec.h"
 
@@ -67,8 +71,8 @@ typedef struct glw_x11 {
 
   int is_fullscreen;
   int want_fullscreen;
-  setting_t *fullscreen_setting;
 
+  setting_t *settings_mouse_btn;
   int map_mouse_wheel_to_keys;
 
   Colormap colormap;
@@ -107,29 +111,15 @@ typedef struct glw_x11 {
   // Available video modes (see: ui/ui.h)
   int vmodes;
 
-  int stop;
-
   // Recording support
+#ifdef WITH_RECORDER
   const char *record_file;
   glw_rec_t *recorder;
+#endif
 
 } glw_x11_t;
 
 #define AUTOHIDE_TIMEOUT 100 // XXX: in frames.. bad
-
-static void glw_x11_dispatch_event(uii_t *uii, event_t *e);
-
-
-/**
- * Switch displaymode, we just set a variable and let mainloop switch
- * later on
- */
-static void
-gx11_set_fullscreen(void *opaque, int value)
-{
-  glw_x11_t *gx11 = opaque;
-  gx11->want_fullscreen = value;
-}
 
 
 /**
@@ -426,7 +416,9 @@ window_shutdown(glw_x11_t *gx11)
     XUngrabPointer(gx11->display, CurrentTime);
     XUngrabKeyboard(gx11->display, CurrentTime);
   }
+  glw_lock(&gx11->gr);
   glw_flush(&gx11->gr);
+  glw_unlock(&gx11->gr);
   window_close(gx11);
 }
 
@@ -537,7 +529,7 @@ probe_wm(glw_x11_t *gx11)
 	wm_name,
 	gx11->wm_flags & GX11_WM_CAN_FULLSCREEN ? ", can fullscreen" : "");
 
-  prop_set_string(prop_create(gx11->gr.gr_uii.uii_prop, "windowmanager"),
+  prop_set_string(prop_create(gx11->gr.gr_prop_ui, "windowmanager"),
 		  wm_name);
 
   XFree(prop_return);
@@ -744,8 +736,8 @@ static const struct {
   { XK_Left,         ShiftMask | ControlMask,   ACTION_SKIP_BACKWARD},
   { XK_Right,        ShiftMask | ControlMask,   ACTION_SKIP_FORWARD},
   
-  { XK_Prior,        0,            ACTION_PAGE_UP},
-  { XK_Next,         0,            ACTION_PAGE_DOWN},
+  { XK_Prior,        0,            ACTION_PAGE_UP, ACTION_PREV_CHANNEL},
+  { XK_Next,         0,            ACTION_PAGE_DOWN, ACTION_NEXT_CHANNEL},
 
   { XK_Home,         0,           ACTION_TOP},
   { XK_End,          0,           ACTION_BOTTOM},
@@ -756,7 +748,7 @@ static const struct {
   { XK_F4,           Mod1Mask,    ACTION_QUIT},
 
   { XF86XK_AudioPause,    0,    ACTION_PLAYPAUSE},
-  { XF86XK_AudioPlay,     0,    ACTION_PLAY},
+  { XF86XK_AudioPlay,     0,    ACTION_PLAYPAUSE},
   { XF86XK_AudioStop,     0,    ACTION_STOP},
   { XF86XK_Eject,         0,    ACTION_EJECT},
   { XF86XK_AudioRecord,   0,    ACTION_RECORD},
@@ -812,7 +804,7 @@ gl_keypress(glw_x11_t *gx11, XEvent *event)
       buf[n] = '\0';
       e = event_create_int(EVENT_UNICODE, wc);
 
-      glw_x11_dispatch_event(&gx11->gr.gr_uii, e);
+      glw_inject_event(&gx11->gr, e);
       s += n;
       len -= n;
       something = 1;
@@ -867,7 +859,7 @@ gl_keypress(glw_x11_t *gx11, XEvent *event)
       
       if(keysym2action[i].XK == keysym &&
 	 keysym2action[i].modifier == state) {
-	
+
 	av[0] = keysym2action[i].action1;
 	av[1] = keysym2action[i].action2;
 	av[2] = keysym2action[i].action3;
@@ -912,7 +904,7 @@ gl_keypress(glw_x11_t *gx11, XEvent *event)
     e = event_create_str(EVENT_KEYDESC, buf);
   }
   if(e != NULL) {
-    glw_x11_dispatch_event(&gx11->gr.gr_uii, e);
+    glw_inject_event(&gx11->gr, e);
     return 1;
   }
   return 0;
@@ -924,7 +916,7 @@ gl_keypress(glw_x11_t *gx11, XEvent *event)
 static void
 update_gpu_info(glw_x11_t *gx11)
 {
-  prop_t *gpu = prop_create(gx11->gr.gr_uii.uii_prop, "gpu");
+  prop_t *gpu = prop_create(gx11->gr.gr_prop_ui, "gpu");
   prop_set_string(prop_create(gpu, "vendor"),
 		      (const char *)glGetString(GL_VENDOR));
 
@@ -973,21 +965,21 @@ glw_x11_mainloop(glw_x11_t *gx11)
   XEvent event;
   int w, h;
   glw_pointer_event_t gpe = {0};
-  event_t *e;
   struct timespec tp;
   int64_t start;
   int frame = 0;
   int pending_screensaver_kill = 0;
   void *framecopy = NULL;
+#ifdef WITH_RECORDER
   int rec_do_frame = 0;
-
+#endif
   clock_gettime(CLOCK_MONOTONIC, &tp);
   start = (int64_t)tp.tv_sec * 1000000LL + tp.tv_nsec / 1000;
 
   prop_subscribe(0,
 		 PROP_TAG_NAME("ui","fullwindow"),
 		 PROP_TAG_CALLBACK_INT, glw_x11_in_fullwindow, gx11,
-		 PROP_TAG_ROOT, gx11->gr.gr_uii.uii_prop,
+		 PROP_TAG_ROOT, gx11->gr.gr_prop_ui,
 		 NULL);
 
   if(!gx11->wm_flags || gx11->no_screensaver)
@@ -997,7 +989,7 @@ glw_x11_mainloop(glw_x11_t *gx11)
   glw_set_fullscreen(&gx11->gr, gx11->is_fullscreen);
 
 
-
+#ifdef WITH_RECORDER
   if(gx11->record_file) {
     gx11->recorder = glw_rec_init(gx11->record_file, 
 				  gx11->gr.gr_width,
@@ -1007,9 +999,9 @@ glw_x11_mainloop(glw_x11_t *gx11)
 
     framecopy = malloc(gx11->gr.gr_width * gx11->gr.gr_height * 4);
   }
+#endif
 
-
-  while(!gx11->stop) {
+  while(!gx11->gr.gr_stop) {
 
     if(gx11->fullwindow)
       autohide_cursor(gx11);
@@ -1070,8 +1062,10 @@ glw_x11_mainloop(glw_x11_t *gx11)
 	w = event.xconfigure.width;
 	h = event.xconfigure.height;
 	glViewport(0, 0, w, h);
+	glw_lock(&gx11->gr);
 	gx11->gr.gr_width  = w;
 	gx11->gr.gr_height = h;
+	glw_unlock(&gx11->gr);
 	break;
 
 
@@ -1125,8 +1119,7 @@ glw_x11_mainloop(glw_x11_t *gx11)
 	  gpe.type = GLW_POINTER_LEFT_PRESS;
 	  break;
 	case 2:
-	  e = event_create_action(ACTION_MENU);
-	  glw_x11_dispatch_event(&gx11->gr.gr_uii, e);
+	  glw_inject_event(&gx11->gr, event_create_action(ACTION_MENU));
 	  continue;
 	case 3:
 	  /* Right click */
@@ -1135,8 +1128,7 @@ glw_x11_mainloop(glw_x11_t *gx11)
 	case 4:
 	  /* Scroll up */
 	  if(gx11->map_mouse_wheel_to_keys) {
-	    glw_x11_dispatch_event(&gx11->gr.gr_uii,
-				   event_create_action(ACTION_UP));
+	    glw_inject_event(&gx11->gr, event_create_action(ACTION_UP));
 	    continue;
 	  } else {
 	    gpe.type = GLW_POINTER_SCROLL;
@@ -1146,8 +1138,7 @@ glw_x11_mainloop(glw_x11_t *gx11)
 	case 5:
 	  /* Scroll down */
 	  if(gx11->map_mouse_wheel_to_keys) {
-	    glw_x11_dispatch_event(&gx11->gr.gr_uii,
-				   event_create_action(ACTION_DOWN));
+	    glw_inject_event(&gx11->gr, event_create_action(ACTION_DOWN));
 	    continue;
 	    
 	  } else {
@@ -1205,6 +1196,7 @@ glw_x11_mainloop(glw_x11_t *gx11)
       nvidia_frame(gx11->nvidia);
 #endif
 
+#ifdef WITH_RECORDER
     if(rec_do_frame == 0) {
       if(framecopy != NULL) {
 	glReadPixels(0, 0, gx11->gr.gr_width,  gx11->gr.gr_height,
@@ -1213,11 +1205,13 @@ glw_x11_mainloop(glw_x11_t *gx11)
       }
     }
     rec_do_frame = !rec_do_frame;
+#endif
   }
 
+#ifdef WITH_RECORDER
   if(gx11->recorder)
     glw_rec_stop(gx11->recorder);
-
+#endif
   free(framecopy);
 
   if(gx11->sss != NULL)
@@ -1233,65 +1227,42 @@ glw_x11_mainloop(glw_x11_t *gx11)
 /**
  *
  */
-static int
-glw_x11_start(ui_t *ui, prop_t *root, int argc, char *argv[], int primary)
+static void
+eventsink(void *opaque, prop_event_t event, ...)
+{
+  glw_x11_t *gx11 = opaque;
+  va_list ap;
+  event_t *e;
+  va_start(ap, event);
+
+  switch(event) {
+  case PROP_EXT_EVENT:
+    e = va_arg(ap, event_t *);
+    if(event_is_action(e, ACTION_FULLSCREEN_TOGGLE))
+      gx11->want_fullscreen = !gx11->want_fullscreen;
+    break;
+
+  default:
+    break;
+  }
+  va_end(ap);
+}
+
+/**
+ *
+ */
+
+int glw_x11_start(void);
+
+int
+glw_x11_start(void)
 {
   glw_x11_t *gx11 = calloc(1, sizeof(glw_x11_t));
-  char confname[PATH_MAX];
-  const char *theme_path = NULL;
-  const char *displayname_title  = NULL;
-  int force_fs = 0;
 
-  gx11->gr.gr_uii.uii_prop = root;
+  gx11->gr.gr_prop_ui = prop_create_root("ui");
+  gx11->gr.gr_prop_nav = nav_spawn();
 
   gx11->displayname_real = getenv("DISPLAY");
-  snprintf(confname, sizeof(confname), "glw/x11/default");
-
-  /* Parse options */
-
-  argv++;
-  argc--;
-
-  while(argc > 0) {
-    if(!strcmp(argv[0], "--display") && argc > 1) {
-      gx11->displayname_real = argv[1];
-      snprintf(confname, sizeof(confname), "glw/x11/%s", argv[1]);
-      displayname_title  = argv[1];
-      argc -= 2; argv += 2;
-      continue;
-    } else if(!strcmp(argv[0], "--theme") && argc > 1) {
-      theme_path = argv[1];
-      argc -= 2; argv += 2;
-      continue;
-    } else if(!strcmp(argv[0], "--force-no-vsync")) {
-      gx11->force_no_vsync = 1;
-      argc -= 1; argv += 1;
-      continue;
-    } else if(!strcmp(argv[0], "--record") && argc > 1) {
-      gx11->record_file = argv[1];
-      gx11->fixed_window_size = 1;
-      argc -= 2; argv += 2;
-      continue;
-    } else if(!strcmp(argv[0], "--width") && argc > 1) {
-      gx11->req_width = atoi(argv[1]);
-      argc -= 2; argv += 2;
-      continue;
-    } else if(!strcmp(argv[0], "--height") && argc > 1) {
-      gx11->req_height = atoi(argv[1]);
-      argc -= 2; argv += 2;
-      continue;
-    } else if(!strcmp(argv[0], "--fullscreen")) {
-      force_fs = 1;
-      argc -= 1; argv += 1;
-      continue;
-    } else if(!strcmp(argv[0], "--no-screensaver")) {
-      gx11->no_screensaver = 1;
-      argc -= 1; argv += 1;
-      continue;
-    } else {
-      break;
-    }
-  }
 
   // This may aid some vsync problems with nVidia drivers
   if(!gx11->force_no_vsync)
@@ -1303,7 +1274,7 @@ glw_x11_start(ui_t *ui, prop_t *root, int argc, char *argv[], int primary)
 
   glw_root_t *gr = &gx11->gr;
   
-  if(glw_init(gr, theme_path, ui, primary, confname, displayname_title))
+  if(glw_init(gr))
     return 1;
 
 #ifdef CONFIG_NVCTRL
@@ -1313,72 +1284,42 @@ glw_x11_start(ui_t *ui, prop_t *root, int argc, char *argv[], int primary)
 			     gr->gr_courier);
 #endif
 
-  settings_create_bool(gr->gr_settings, "map_mouse_wheel_to_keys",
-		       _p("Map mouse wheel to up/down"),
-		       0, gr->gr_settings_store,
-		       gx11_set_wheel_mapping, gx11, 
-		       SETTINGS_INITIAL_UPDATE, gr->gr_courier,
-		       glw_settings_save, gr);
+  gx11->settings_mouse_btn =
+    settings_create_bool(glw_settings.gs_settings, "map_mouse_wheel_to_keys",
+			 _p("Map mouse wheel to up/down"),
+			 0, glw_settings.gs_settings_store,
+			 gx11_set_wheel_mapping, gx11, 
+			 SETTINGS_INITIAL_UPDATE, gr->gr_courier,
+			 glw_settings_save, gr);
 
-  if(gx11->wm_flags) {
-    gx11->fullscreen_setting = 
-      settings_create_bool(gr->gr_settings, "fullscreen",
-			   _p("Fullscreen mode"), 0, gr->gr_settings_store,
-			   gx11_set_fullscreen, gx11, 
-			   SETTINGS_INITIAL_UPDATE, gr->gr_courier,
-			   glw_settings_save, gr);
-  }
+  prop_sub_t *evsub =
+    prop_subscribe(0,
+		   PROP_TAG_CALLBACK, eventsink, gx11,
+		   PROP_TAG_NAME("ui", "eventSink"),
+		   PROP_TAG_ROOT, gr->gr_prop_ui,
+		   PROP_TAG_COURIER, gr->gr_courier,
+		   NULL);
 
-  gx11->want_fullscreen |= force_fs;
+
+  gx11->want_fullscreen |= !!gconf.fullscreen;
 
   update_gpu_info(gx11);
+  glw_lock(gr);
   glw_load_universe(gr);
+  glw_unlock(gr);
+
   glw_x11_mainloop(gx11);
+
+  glw_lock(gr);
   glw_unload_universe(gr);
+  glw_unlock(gr);
   glw_reap(gr);
   glw_reap(gr);
+
+  setting_destroy(gx11->settings_mouse_btn);
+
+  prop_unsubscribe(evsub);
+
   glw_fini(gr);
   return 0;
 }
-
-
-/**
- *
- */
-static void
-glw_x11_dispatch_event(uii_t *uii, event_t *e)
-{
-  glw_x11_t *gx11 = (glw_x11_t *)uii;
-
-  /* Take care of any X11 specific events first */
-  
-  if(event_is_action(e, ACTION_FULLSCREEN_TOGGLE)) {
-    settings_toggle_bool(gx11->fullscreen_setting);
-  } else {
-    /* Pass it on to GLW */
-    glw_dispatch_event(uii, e);
-  }
-  event_release(e);
-}
-
-
-/**
- *
- */
-static void
-glw_x11_stop(uii_t *uii)
-{
-  glw_x11_t *gx11 = (glw_x11_t *)uii;
-  gx11->stop = 1;
-}
-
-
-/**
- *
- */
-ui_t glw_ui = {
-  .ui_title = "glw",
-  .ui_start = glw_x11_start,
-  .ui_dispatch_event = glw_x11_dispatch_event,
-  .ui_stop = glw_x11_stop,
-};

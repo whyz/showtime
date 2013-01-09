@@ -29,8 +29,9 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#include <sqlite3.h>
+
 #include "showtime.h"
-#include "ext/sqlite/sqlite3.h"
 #include "arch/atomic.h"
 #include "misc/sha.h"
 #if 0
@@ -204,7 +205,7 @@ vfs_open(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *id, int flags,
   if(zName == NULL) {
     v = atomic_add(&tmpfiletally, 1);
     snprintf(tmpfile, sizeof(tmpfile), "%s/sqlite.tmp.%d",
-	     showtime_cache_path, v);
+	     gconf.cache_path, v);
     zName = tmpfile;
   }
 

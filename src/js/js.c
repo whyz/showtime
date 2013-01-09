@@ -1,6 +1,8 @@
 /*
  *  Showtime mediacenter
  *  Copyright (C) 2007-2009 Andreas Öman
+ *  Copyright (C) 2011-2012 Fábio Ferreira
+ *  Copyright (C) 2012 Henrik Andersson
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -25,10 +27,12 @@
 #include "js.h"
 
 #include "backend/backend.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "fileaccess/fileaccess.h"
 #include "keyring.h"
 #include "notifications.h"
+#include "networking/net.h"
+#include "ui/webpopup.h"
 
 prop_courier_t *js_global_pc;
 JSContext *js_global_cx;
@@ -37,6 +41,7 @@ prop_sub_t *js_event_sub;
 static JSRuntime *runtime;
 static JSObject *showtimeobj;
 static JSObject *RichText;
+static JSObject *Link;
 struct js_plugin_list js_plugins;
 
 static JSClass global_class = {
@@ -92,11 +97,12 @@ static JSBool
 js_trace(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
 {
   const char *str;
+  const char *id = "JS";
 
-  if (!JS_ConvertArguments(cx, argc, argv, "s", &str))
+  if (!JS_ConvertArguments(cx, argc, argv, "s/s", &str, &id))
     return JS_FALSE;
 
-  TRACE(TRACE_DEBUG, "JS", "%s", str);
+  TRACE(TRACE_DEBUG, id, "%s", str);
   *rval = JSVAL_VOID;  /* return undefined */
   return JS_TRUE;
 }
@@ -243,6 +249,27 @@ js_prop_set_from_jsval(JSContext *cx, prop_t *p, jsval value)
 
     prop_set_string_ex(p, NULL, JS_GetStringBytes(JS_ValueToString(cx, v2)),
 		       PROP_STR_RICH);
+    JS_LeaveLocalRootScope(cx);
+  } else if(JS_HasInstance(cx, Link, value, &b) && b) {
+    JSObject *o = JSVAL_TO_OBJECT(value);
+    jsval v1;
+    jsval v2;
+
+    if(!JS_EnterLocalRootScope(cx))
+      return;
+
+    if(!JS_GetProperty(cx, o, "title", &v1)) {
+      JS_LeaveLocalRootScope(cx);
+      return;
+    }
+    if(!JS_GetProperty(cx, o, "url", &v2)) {
+      JS_LeaveLocalRootScope(cx);
+      return;
+    }
+
+    prop_set_link(p,
+		  JS_GetStringBytes(JS_ValueToString(cx, v1)),
+		  JS_GetStringBytes(JS_ValueToString(cx, v2)));
     JS_LeaveLocalRootScope(cx);
   } else if(JSVAL_IS_STRING(value)) {
     js_prop_from_str(cx, p, value);
@@ -394,10 +421,19 @@ js_message(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
   r = message_popup(message, 
 		    (ok     ? MESSAGE_POPUP_OK : 0) |
 		    (cancel ? MESSAGE_POPUP_CANCEL : 0) | 
-		    MESSAGE_POPUP_RICH_TEXT);
+		    MESSAGE_POPUP_RICH_TEXT, NULL);
 
-
-  *rval = BOOLEAN_TO_JSVAL(r == MESSAGE_POPUP_OK);
+  switch(r) {
+  case MESSAGE_POPUP_OK:
+    *rval = BOOLEAN_TO_JSVAL(JS_TRUE);
+    break;
+  case MESSAGE_POPUP_CANCEL:
+    *rval = BOOLEAN_TO_JSVAL(JS_FALSE);
+    break;
+  default:
+    *rval = INT_TO_JSVAL(r);
+    break;
+  }
   return JS_TRUE;
 }
 
@@ -546,6 +582,102 @@ js_notify(JSContext *cx, JSObject *obj,
 /**
  *
  */
+static JSBool 
+js_sysipaddr(JSContext *cx, JSObject *obj,
+	     uintN argc, jsval *argv, jsval *rval)
+{
+  netif_t *ni = net_get_interfaces();
+  if(ni) {
+    char buf[32];
+    uint32_t myaddr = ni[0].ipv4;
+    free(ni);
+    snprintf(buf, sizeof(buf), "%d.%d.%d.%d",
+	     (uint8_t)(myaddr >> 24),
+	     (uint8_t)(myaddr >> 16),
+	     (uint8_t)(myaddr >> 8),
+	     (uint8_t)(myaddr));
+
+    *rval = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, buf));
+  } else {
+    *rval = JSVAL_VOID;
+  } 
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
+js_webpopup(JSContext *cx, JSObject *obj,
+            uintN argc, jsval *argv, jsval *rval)
+{
+  const char *url;
+  const char *title;
+  const char *trap;
+
+  if(!JS_ConvertArguments(cx, argc, argv, "sss", &url, &title, &trap))
+    return JS_FALSE;
+
+  JSObject *robj = JS_NewObject(cx, NULL, NULL, NULL);
+  *rval = OBJECT_TO_JSVAL(robj);
+
+#if ENABLE_WEBPOPUP
+  jsrefcount s = JS_SuspendRequest(cx);
+  webpopup_result_t *wr = webpopup_create(url, title, trap);
+  JS_ResumeRequest(cx, s);
+  
+
+  const char *t;
+  switch(wr->wr_resultcode) {
+  case WEBPOPUP_TRAPPED_URL:
+    t = "trapped";
+    break;
+  case WEBPOPUP_CLOSED_BY_USER:
+    t = "userclose";
+    break;
+  case WEBPOPUP_LOAD_ERROR:
+    t = "neterror";
+    break;
+  }
+
+  jsval val;
+
+  val = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, t));
+  JS_SetProperty(cx, robj, "result", &val);
+
+
+  if(wr->wr_trapped.url != NULL) {
+    val = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, wr->wr_trapped.url));
+    JS_SetProperty(cx, robj, "trappedUrl", &val);
+  }
+  
+  JSObject *hdrs = JS_NewObject(cx, NULL, NULL, NULL);
+  http_header_t *hh;
+  LIST_FOREACH(hh, &wr->wr_trapped.qargs, hh_link) {
+    jsval val = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, hh->hh_value));
+    JS_SetProperty(cx, hdrs, hh->hh_key, &val);
+  }
+  
+  val = OBJECT_TO_JSVAL(hdrs);
+  JS_SetProperty(cx, robj, "args", &val);
+
+  webpopup_result_free(wr);
+#else
+  jsval val;
+
+  val = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, "unsupported"));
+  JS_SetProperty(cx, robj, "result", &val);
+#endif
+  return JS_TRUE;
+}
+
+
+
+
+/**
+ *
+ */
 static JSFunctionSpec showtime_functions[] = {
     JS_FS("trace",            js_trace,    1, 0, 0),
     JS_FS("print",            js_print,    1, 0, 0),
@@ -568,6 +700,8 @@ static JSFunctionSpec showtime_functions[] = {
     JS_FS("textDialog",       js_textDialog, 3, 0, 0),
     JS_FS("entityDecode",     js_decodeEntety, 1, 0, 0),
     JS_FS("notify",           js_notify, 2, 0, 0),
+    JS_FS("systemIpAddress",  js_sysipaddr, 0, 0, 0),
+    JS_FS("webpopup",         js_webpopup, 3, 0, 0),
     JS_FS_END
 };
 
@@ -596,6 +730,28 @@ js_RichText(JSContext *cx, JSObject *obj,
   jsval v = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, str));
 
   JS_SetProperty(cx, obj, "text", &v);
+
+  *rval = JSVAL_VOID;
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
+js_Link(JSContext *cx, JSObject *obj,
+	uintN argc, jsval *argv, jsval *rval)
+{
+  const char *title, *url;
+
+  if (!JS_ConvertArguments(cx, argc, argv, "ss", &title, &url))
+    return JS_FALSE;
+  jsval v1 = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, title));
+  jsval v2 = STRING_TO_JSVAL(JS_NewStringCopyZ(cx, url));
+
+  JS_SetProperty(cx, obj, "title", &v1);
+  JS_SetProperty(cx, obj, "url", &v2);
 
   *rval = JSVAL_VOID;
   return JS_TRUE;
@@ -635,6 +791,7 @@ js_plugin_unload0(JSContext *cx, js_plugin_t *jsp)
   js_service_flush_from_plugin(cx, jsp);
   js_setting_group_flush_from_plugin(cx, jsp);
   js_event_destroy_handlers(cx, &jsp->jsp_event_handlers);
+  js_subscription_flush_from_list(cx, &jsp->jsp_subscriptions);
 }
 
 /**
@@ -727,6 +884,10 @@ static JSFunctionSpec plugin_functions[] = {
     JS_FS("createService",    js_createService, 4, 0, 0),
     JS_FS("getAuthCredentials",  js_getAuthCredentials, 3, 0, 0),
     JS_FS("onEvent",             js_onEvent, 2, 0, 0),
+    JS_FS("cacheGet",         js_cache_get, 2, 0, 0),
+    JS_FS("cachePut",         js_cache_put, 4, 0, 0),
+    JS_FS("getDescriptor",    js_get_descriptor, 0, 0, 0),
+    JS_FS("subscribe",        js_subscribe_global, 2, 0, 0),
     JS_FS_END
 };
 
@@ -909,6 +1070,9 @@ js_init(void)
 {
   JSContext *cx;
   jsval val;
+  JSFunction *fn;
+
+  js_page_init();
 
   JS_SetCStringsAreUTF8();
 
@@ -928,9 +1092,11 @@ js_init(void)
   JS_SetProperty(cx, showtimeobj, "currentVersionString", &val);
 
 
-  JSFunction *fn = JS_DefineFunction(cx, showtimeobj, "RichText",
-				     js_RichText, 1, 0);
+  fn = JS_DefineFunction(cx, showtimeobj, "RichText", js_RichText, 1, 0);
   RichText = JS_GetFunctionObject(fn);
+
+  fn = JS_DefineFunction(cx, showtimeobj, "Link", js_Link, 2, 0);
+  Link = JS_GetFunctionObject(fn);
 	     
   JS_AddNamedRoot(cx, &showtimeobj, "showtime");
 
@@ -959,13 +1125,9 @@ static void
 js_fini(void)
 {
   js_plugin_t *jsp, *n;
-  JSContext *cx = js_global_cx;
+  JSContext *cx;
 
-  //  prop_unsubscribe(js_event_sub);
-
-  prop_courier_destroy(js_global_pc);
-
-  JS_SetContextThread(cx);
+  cx = js_newctx(NULL);
   JS_BeginRequest(cx);
 
   for(jsp = LIST_FIRST(&js_plugins); jsp != NULL; jsp = n) {
@@ -977,6 +1139,15 @@ js_fini(void)
 
   JS_EndRequest(cx);
   JS_GC(cx);
+  JS_DestroyContext(cx);
+
+
+  prop_unsubscribe(js_event_sub);
+
+  prop_courier_destroy(js_global_pc);
+
+  cx = js_global_cx;
+  JS_SetContextThread(cx);
   JS_DestroyContext(cx);
 
   JS_DestroyRuntime(runtime);

@@ -85,14 +85,19 @@ typedef enum {
 } prop_str_type_t;
 
 
+struct prop_sub;
+
 
 typedef void (prop_callback_t)(void *opaque, prop_event_t event, ...);
+typedef void (prop_callback_ui_t)(void *opaque, int user_int, 
+				  prop_event_t event, ...);
 typedef void (prop_callback_string_t)(void *opaque, const char *str);
 typedef void (prop_callback_rstr_t)(void *opaque, rstr_t *rstr);
 typedef void (prop_callback_int_t)(void *opaque, int value);
 typedef void (prop_callback_float_t)(void *opaque, float value);
+typedef void (prop_callback_event_t)(void *opaque, event_t *e);
+typedef void (prop_callback_destroyed_t)(void *opaque, struct prop_sub *s);
 
-struct prop_sub;
 typedef void (prop_trampoline_t)(struct prop_sub *s, prop_event_t event, ...);
 
 typedef void (prop_lockmgr_t)(void *ptr, int lock);
@@ -127,6 +132,7 @@ void prop_init(void);
 #define PROP_SUB_IGNORE_VOID          0x200
 #define PROP_SUB_TRACK_DESTROY_EXP    0x400
 #define PROP_SUB_SINGLETON            0x800
+#define PROP_SUB_USER_INT             0x1000
 // Remember that flags field is uint16_t in prop_i.h so don't go above 0x8000
 
 
@@ -134,10 +140,13 @@ enum {
   PROP_TAG_END = 0,
   PROP_TAG_NAME_VECTOR,
   PROP_TAG_CALLBACK,
+  PROP_TAG_CALLBACK_USER_INT,
   PROP_TAG_CALLBACK_STRING,
   PROP_TAG_CALLBACK_RSTR,
   PROP_TAG_CALLBACK_INT,
   PROP_TAG_CALLBACK_FLOAT,
+  PROP_TAG_CALLBACK_EVENT,
+  PROP_TAG_CALLBACK_DESTROYED,
   PROP_TAG_SET_INT,
   PROP_TAG_SET_FLOAT,
   PROP_TAG_COURIER,
@@ -157,7 +166,7 @@ void prop_unsubscribe(prop_sub_t *s);
 
 prop_t *prop_create_ex(prop_t *parent, const char *name,
 		       prop_sub_t *skipme, int noalloc, int incref)
-     __attribute__ ((malloc)) __attribute__((nonnull (1)));
+     __attribute__ ((malloc));
 
 #define prop_create(parent, name) \
   prop_create_ex(parent, name, NULL, __builtin_constant_p(name), 0)
@@ -175,6 +184,8 @@ void prop_destroy(prop_t *p);
 
 void prop_destroy_by_name(prop_t *parent, const char *name);
 
+void prop_destroy_first(prop_t *p);
+
 prop_t *prop_follow(prop_t *p);
 
 int prop_compare(const prop_t *a, const prop_t *b);
@@ -183,9 +194,14 @@ void prop_move(prop_t *p, prop_t *before);
 
 void prop_req_move(prop_t *p, prop_t *before);
 
-void prop_set_ex(prop_sub_t *skipme, prop_t *p, ...);
+void prop_setv_ex(prop_sub_t *skipme, prop_t *p, ...);
 
-#define prop_set(p...) prop_set_ex(NULL, p)
+#define prop_setv(p...) prop_setv_ex(NULL, p)
+
+void prop_set_ex(prop_t *p, const char *name, int noalloc, ...);
+
+#define prop_set(p, name, type...) \
+  prop_set_ex(p, name, __builtin_constant_p(name), type)
 
 void prop_set_string_ex(prop_t *p, prop_sub_t *skipme, const char *str,
 			prop_str_type_t type);
@@ -350,6 +366,8 @@ void prop_courier_wait_and_dispatch(prop_courier_t *pc);
 
 void prop_courier_poll(prop_courier_t *pc);
 
+int prop_courier_check(prop_courier_t *pc);
+
 void prop_courier_destroy(prop_courier_t *pc);
 
 void prop_notify_dispatch(struct prop_notify_queue *q);
@@ -389,6 +407,13 @@ void prop_want_more_childs(prop_sub_t *s);
 
 void prop_have_more_childs(prop_t *p);
 
+void prop_mark_childs(prop_t *p);
+
+void prop_unmark(prop_t *p);
+
+int prop_is_marked(prop_t *p);
+
+void prop_destroy_marked_childs(prop_t *p);
 
 /**
  * Property tags

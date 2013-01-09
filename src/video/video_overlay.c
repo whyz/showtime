@@ -20,7 +20,7 @@
 #include "video_decoder.h"
 #include "text/text.h"
 #include "misc/pixmap.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "video_overlay.h"
 #include "video_settings.h"
 #include "dvdspu.h"
@@ -34,6 +34,7 @@ video_overlay_enqueue(video_decoder_t *vd, video_overlay_t *vo)
   hts_mutex_unlock(&vd->vd_overlay_mutex);
 }
 
+#if ENABLE_LIBAV
 
 /**
  * Decode subtitles from LAVC
@@ -62,55 +63,56 @@ video_subtitles_lavc(video_decoder_t *vd, media_buf_t *mb,
     video_overlay_enqueue(vd, vo);
   } else {
 
-  for(i = 0; i < sub.num_rects; i++) {
-    AVSubtitleRect *r = sub.rects[i];
+    for(i = 0; i < sub.num_rects; i++) {
+      AVSubtitleRect *r = sub.rects[i];
 
-    switch(r->type) {
+      switch(r->type) {
 
-    case SUBTITLE_BITMAP:
-      vo = calloc(1, sizeof(video_overlay_t));
+      case SUBTITLE_BITMAP:
+	vo = calloc(1, sizeof(video_overlay_t));
 
-      vo->vo_start = mb->mb_pts + sub.start_display_time * 1000;
-      vo->vo_stop  = mb->mb_pts + sub.end_display_time * 1000;
+	vo->vo_start = mb->mb_pts + sub.start_display_time * 1000;
+	vo->vo_stop  = mb->mb_pts + sub.end_display_time * 1000;
 		  
-      vo->vo_x = r->x;
-      vo->vo_y = r->y;
+	vo->vo_x = r->x;
+	vo->vo_y = r->y;
 
-      vo->vo_pixmap = pixmap_create(r->w, r->h, PIXMAP_BGR32, 1);
+	vo->vo_pixmap = pixmap_create(r->w, r->h, PIXMAP_BGR32, 0);
 
-      if(vo->vo_pixmap == NULL) {
-	free(vo);
+	if(vo->vo_pixmap == NULL) {
+	  free(vo);
+	  break;
+	}
+
+	const uint8_t *src = r->pict.data[0];
+	const uint32_t *clut = (uint32_t *)r->pict.data[1];
+      
+	for(y = 0; y < r->h; y++) {
+	  uint32_t *dst = (uint32_t *)(vo->vo_pixmap->pm_pixels + 
+				       y * vo->vo_pixmap->pm_linesize);
+	  for(x = 0; x < r->w; x++)
+	    *dst++ = clut[src[x]];
+
+	  src += r->pict.linesize[0];
+	}
+	video_overlay_enqueue(vd, vo);
+	break;
+
+      case SUBTITLE_ASS:
+	sub_ass_render(vd, r->ass,
+		       ctx->subtitle_header, ctx->subtitle_header_size,
+		       mb->mb_font_context);
+	break;
+
+      default:
 	break;
       }
-
-      const uint8_t *src = r->pict.data[0];
-      const uint32_t *clut = (uint32_t *)r->pict.data[1];
-      uint32_t *dst = (uint32_t *)vo->vo_pixmap->pm_pixels;
-      
-      for(y = 0; y < r->h; y++) {
-	for(x = 0; x < r->w; x++) {
-	  *dst++ = clut[src[x]];
-	}
-	src += r->pict.linesize[0];
-      }
-      video_overlay_enqueue(vd, vo);
-      break;
-
-    case SUBTITLE_ASS:
-      sub_ass_render(vd, r->ass,
-		     ctx->subtitle_header, ctx->subtitle_header_size,
-		     mb->mb_font_context);
-      break;
-
-    default:
-      break;
     }
-  }
   }
   avsubtitle_free(&sub);
 }
 
-
+#endif
 
 /**
  *
@@ -150,7 +152,7 @@ video_overlay_render_cleartext(const char *txt, int64_t start, int64_t stop,
     vo->vo_padding_left = -1;  // auto padding
   }
 
-  if(stop == AV_NOPTS_VALUE) {
+  if(stop == PTS_UNSET) {
     stop = start + calculate_subtitle_duration(txt_len) * 1000000;
     vo->vo_stop_estimated = 1;
   }
@@ -198,18 +200,22 @@ video_overlay_decode(video_decoder_t *vd, media_buf_t *mb)
     vo = video_overlay_render_cleartext(str, mb->mb_pts,
 					mb->mb_duration ?
 					mb->mb_pts + mb->mb_duration :
-					AV_NOPTS_VALUE, 1,
+					PTS_UNSET, 1,
 					mb->mb_font_context);
 
     if(vo != NULL)
       video_overlay_enqueue(vd, vo);
-    
+
+    free(str);
+
   } else {
       
     if(mc->decode) 
       mc->decode(mc, vd, NULL, mb, 0);
+#if ENABLE_LIBAV
     else
       video_subtitles_lavc(vd, mb, mc->codec_ctx);
+#endif
   }
 }
 
@@ -275,20 +281,3 @@ video_overlay_flush(video_decoder_t *vd, int send)
   vo->vo_type = VO_FLUSH;
   video_overlay_enqueue(vd, vo);
 }
-
-
-/**
- *
- */
-int
-video_overlay_codec_create(media_codec_t *mc, enum CodecID id,
-			   AVCodecContext *ctx, media_pipe_t *mp)
-{
-  switch(id) {
-  case CODEC_ID_DVD_SUBTITLE:
-    return dvdspu_codec_create(mc, id, ctx, mp);
-  default:
-    return 1;
-  }
-}
-

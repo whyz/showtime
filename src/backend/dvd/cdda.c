@@ -318,7 +318,7 @@ canhandle(const char *url)
  *
  */
 static int
-openpage(prop_t *page, const char *url)
+openpage(prop_t *page, const char *url, int sync)
 {
   int track;
   char device[32];
@@ -406,7 +406,7 @@ playaudio(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
   TRACE(TRACE_DEBUG, "AudioCD", "Starting playback of track %d", track);
 
   mp_configure(mp, MP_PLAY_CAPS_SEEK | MP_PLAY_CAPS_PAUSE | 
-	       MP_PLAY_CAPS_EJECT, MP_BUFFER_NONE);
+	       MP_PLAY_CAPS_EJECT, MP_BUFFER_NONE, 0);
   mp_become_primary(mp);
   mq = &mp->mp_audio;
 
@@ -426,7 +426,8 @@ playaudio(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
       
       mb->mb_channels = 2;
       mb->mb_rate = 44100;
-      mb->mb_time = (lsn - track_first) * 1000000LL / CDIO_CD_FRAMES_PER_SEC;
+      mb->mb_pts = (lsn - track_first) * 1000000LL / CDIO_CD_FRAMES_PER_SEC;
+      mb->mb_drive_clock = 1;
 
       if(cdio_cddap_read(cdda, mb->mb_data, lsn, 2) != 2)
 	memset(mb->mb_data, 0, mb->mb_size);
@@ -448,40 +449,6 @@ playaudio(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
       lsn = cdseek(mp, &mb, track_first, track_last,
 		   track_first + ets->ts * CDIO_CD_FRAMES_PER_SEC /1000000LL);
       
-    } else if(event_is_action(e, ACTION_SEEK_FAST_BACKWARD)) {
-
-      lsn = cdseek(mp, &mb, track_first, track_last,
-		   lsn - CDIO_CD_FRAMES_PER_SEC * 60);
-
-    } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
-
-      lsn = cdseek(mp, &mb, track_first, track_last,
-		   lsn - CDIO_CD_FRAMES_PER_SEC * 15);
-
-    } else if(event_is_action(e, ACTION_SEEK_FAST_FORWARD)) {
-
-      lsn = cdseek(mp, &mb, track_first, track_last,
-		   lsn + CDIO_CD_FRAMES_PER_SEC * 60);
-
-    } else if(event_is_action(e, ACTION_SEEK_FORWARD)) {
-
-      lsn = cdseek(mp, &mb, track_first, track_last,
-		   lsn + CDIO_CD_FRAMES_PER_SEC * 15);
-
-    } else if(event_is_action(e, ACTION_PLAYPAUSE) ||
-	      event_is_action(e, ACTION_PLAY) ||
-	      event_is_action(e, ACTION_PAUSE)) {
-
-      hold = action_update_hold_by_event(hold, e);
-      mp_send_cmd_head(mp, mq, hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-      mp_set_playstatus_by_hold(mp, hold, NULL);
-
-    } else if(event_is_type(e, EVENT_INTERNAL_PAUSE)) {
-
-      hold = 1;
-      mp_send_cmd_head(mp, mq, MB_CTRL_PAUSE);
-      mp_set_playstatus_by_hold(mp, hold, e->e_payload);
-
     } else if(event_is_action(e, ACTION_SKIP_BACKWARD) ||
 	      event_is_action(e, ACTION_SKIP_FORWARD) ||
 	      event_is_action(e, ACTION_STOP)) {

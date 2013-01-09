@@ -37,14 +37,14 @@
 #include "fa_libav.h"
 #include "backend/dvd/dvd.h"
 #include "notifications.h"
-#include "api/opensubtitles.h"
 #include "htsmsg/htsmsg_xml.h"
 #include "backend/backend.h"
 #include "misc/isolang.h"
 #include "text/text.h"
 #include "video/video_settings.h"
-#include "video/vobsub.h"
-
+#include "video/video_playback.h"
+#include "video/sub_scanner.h"
+#include "api/opensubtitles.h"
 
 typedef struct seek_item {
   prop_t *si_prop;
@@ -74,182 +74,6 @@ static void attachment_load(struct attachment_list *alist,
 
 static void attachment_unload_all(struct attachment_list *alist);
 
-
-
-static event_t *playlist_play(fa_handle_t *fh, media_pipe_t *mp, int primary,
-			      int flags, char *errbuf, size_t errlen);
-
-
-/**
- *
- */
-typedef struct sub_load {
-  int sl_beflags;
-  prop_t *sl_p;
-  const char *sl_url;
-  int sl_stop;
-  int sl_opensub_hash_valid;
-  uint64_t sl_opensub_hash;
-  uint64_t sl_fsize;
-
-} sub_load_t;
-
-
-/**
- *
- */
-static int
-fs_sub_match(const char *video, const char *sub)
-{
-  sub = strrchr(sub, '/');
-  if(sub == NULL)
-    return 0;
-  sub++;
-
-  int vl = strlen(video);
-  int sl = strlen(sub);
-
-  if(sl >= vl && sub[vl] == '.' && !strncasecmp(sub, video, vl))
-    return 1;
-
-  char *x = strrchr(sub, '.');
-  if(x != NULL) {
-    size_t off = x - sub;
-    if(vl > off) {
-      if((video[off] == '.' || video[off] == ' ') && 
-	 !strncasecmp(sub, video, off))
-	return 1;
-    }
-  }
-  return 0;
-}
-
-
-/**
- *
- */
-static void
-fs_sub_scan_dir(prop_t *prop, const char *url, const char *video,
-		int *stop)
-{
-  char *postfix;
-  fa_dir_t *fd;
-  fa_dir_entry_t *fde;
-  char errbuf[256];
-
-  TRACE(TRACE_DEBUG, "Video", "Scanning for subs in %s for %s", url, video);
-
-  if((fd = fa_scandir(url, errbuf, sizeof(errbuf))) == NULL) {
-    TRACE(TRACE_DEBUG, "Video", "Unable to scan %s for subtitles: %s",
-	  url, errbuf);
-    return;
-  }
-
-  TAILQ_FOREACH(fde, &fd->fd_entries, fde_link) {
-    if(*stop)
-      break;
-
-    if(fde->fde_type == CONTENT_DIR &&
-       !strcasecmp(rstr_get(fde->fde_filename), "subs")) {
-      fs_sub_scan_dir(prop, rstr_get(fde->fde_url), video, stop);
-      continue;
-    }
-    const char *filename = rstr_get(fde->fde_filename);
-    postfix = strrchr(filename, '.');
-    if(postfix == NULL)
-      continue;
-
-    if(!strcasecmp(postfix, ".srt")) {
-      const char *lang = NULL;
-      if(postfix - filename > 4 && postfix[-4] == '.') {
-	char b[4];
-	memcpy(b, postfix - 3, 3);
-	b[3] = 0;
-	lang = isolang_iso2lang(b);
-      }
-
-      int score = fs_sub_match(video, rstr_get(fde->fde_url));
-      TRACE(TRACE_DEBUG, "Video", "SRT %s score=%d", 
-	    rstr_get(fde->fde_url), score); 
-
-      if(score == 0 && !subtitle_settings.include_all_subs)
-	continue;
-
-      mp_add_track(prop, rstr_get(fde->fde_filename), rstr_get(fde->fde_url),
-		   "SRT", NULL, lang, NULL, _p("External file"), score);
-    }
-
-    
-    if(!strcasecmp(postfix, ".ass") || !strcasecmp(postfix, ".ssa")) {
-      const char *lang = NULL;
-      if(postfix - filename > 4 && postfix[-4] == '.') {
-	char b[4];
-	memcpy(b, postfix - 3, 3);
-	b[3] = 0;
-	lang = isolang_iso2lang(b);
-      }
-
-      int score = fs_sub_match(video, rstr_get(fde->fde_url));
-      TRACE(TRACE_DEBUG, "Video", "SSA/ASS %s score=%d",
-	    rstr_get(fde->fde_url), score); 
-
-      if(score == 0 && !subtitle_settings.include_all_subs)
-	continue;
-
-      mp_add_track(prop, rstr_get(fde->fde_filename), rstr_get(fde->fde_url),
-		   "ASS / SSA", NULL, lang, NULL, _p("External file"), score);
-    }
-
-    if(!strcasecmp(postfix, ".idx")) {
-      int score = fs_sub_match(video, rstr_get(fde->fde_url));
-      TRACE(TRACE_DEBUG, "Video", "VOBSUB %s score=%d", 
-	    rstr_get(fde->fde_url), score); 
-
-      if(score == 0 && !subtitle_settings.include_all_subs)
-	continue;
-
-      vobsub_probe(rstr_get(fde->fde_url), rstr_get(fde->fde_filename),
-		   score, prop, NULL);
-    }
-  }
-  fa_dir_free(fd);
-}
-
-
-/**
- *
- */
-static void *
-sub_loader(void *aux)
-{
-  sub_load_t *sl = aux;
-
-  if(!(sl->sl_beflags & BACKEND_VIDEO_NO_FS_SCAN)) {
-    char parent[URL_MAX];
-    char *fname = mystrdupa(sl->sl_url);
-
-    fname = strrchr(fname, '/') ?: fname;
-    fname++;
-    char *dot = strrchr(fname, '.');
-    if(dot)
-      *dot = 0;
-
-    fa_parent(parent, sizeof(parent), sl->sl_url);
-    fs_sub_scan_dir(sl->sl_p, parent, fname, &sl->sl_stop);
-  }
-
-  if(sl->sl_stop)
-    return NULL;
-
-  if(sl->sl_opensub_hash_valid && sl->sl_fsize != -1)
-    opensub_load_subtitles(sl->sl_p,
-			   opensub_build_query(NULL, sl->sl_opensub_hash,
-					       sl->sl_fsize, NULL, NULL));
-
-  return NULL;
-}
-
-
 /**
  *
  */
@@ -271,33 +95,97 @@ rescale(AVFormatContext *fctx, int64_t ts, int si)
 /**
  *
  */
-static int64_t
+static void
 video_seek(AVFormatContext *fctx, media_pipe_t *mp, media_buf_t **mbp,
 	   int64_t pos, const char *txt)
 {
-  pos = FFMAX(fctx->start_time, FFMIN(fctx->start_time + fctx->duration, pos));
+  pos = FFMAX(0, FFMIN(fctx->duration, pos)) + fctx->start_time;
 
-  TRACE(TRACE_DEBUG, "Video", "seek %s to %.2f", txt, 
-	(pos - fctx->start_time) / 1000000.0);
+  TRACE(TRACE_DEBUG, "Video", "seek %s to %.2f (%"PRId64" - %"PRId64")", txt, 
+	(pos - fctx->start_time) / 1000000.0,
+	pos, fctx->start_time);
 
-  if(mp_seek_in_queues(mp, pos)) {
-    av_seek_frame(fctx, -1, pos, AVSEEK_FLAG_BACKWARD);
-
-    mp->mp_video.mq_seektarget = pos;
-    mp->mp_audio.mq_seektarget = pos;
-
-    mp_flush(mp, 0);
-    
-    if(*mbp != NULL && *mbp != MB_SPECIAL_EOF)
-      media_buf_free_unlocked(mp, *mbp);
-    *mbp = NULL;
+  if(av_seek_frame(fctx, -1, pos, AVSEEK_FLAG_BACKWARD)) {
+    TRACE(TRACE_ERROR, "Video", "Seek failed");
   }
 
-  prop_set_float(prop_create(mp->mp_prop_root, "seektime"), 
-		 (pos - fctx->start_time) / 1000000.0);
+  mp->mp_video.mq_seektarget = pos;
+  mp->mp_audio.mq_seektarget = pos;
 
-  return pos;
+  mp_flush(mp, 0);
+  
+  if(*mbp != NULL && *mbp != MB_SPECIAL_EOF)
+    media_buf_free_unlocked(mp, *mbp);
+  *mbp = NULL;
+
+  pos -= fctx->start_time;
+
+  prop_set_float(prop_create(mp->mp_prop_root, "seektime"), pos / 1000000.0);
 }
+
+
+/**
+ *
+ */
+static void
+select_audio_track(media_pipe_t *mp, AVFormatContext *fctx, const char *id)
+{
+  TRACE(TRACE_DEBUG, "Video", "Selecting audio track %s", id);
+
+  if(!strcmp(id, "audio:off")) {
+    prop_set_string(mp->mp_prop_audio_track_current, id);
+    mp->mp_audio.mq_stream = -1;
+    
+  } else if(!strncmp(id, "libav:", strlen("libav:"))) {
+    unsigned int idx = atoi(id + strlen("libav:"));
+    if(idx < fctx->nb_streams) {
+      AVCodecContext *ctx = fctx->streams[idx]->codec;
+      if(ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
+	mp->mp_audio.mq_stream = idx;
+	    prop_set_string(mp->mp_prop_audio_track_current, id);
+      }
+    }
+  }
+
+}
+
+
+/**
+ *
+ */
+static void
+select_subtitle_track(media_pipe_t *mp, AVFormatContext *fctx, const char *id)
+{
+  TRACE(TRACE_DEBUG, "Video", "Selecting subtitle track %s",
+	id);
+
+  mp_send_cmd(mp, &mp->mp_video, MB_CTRL_FLUSH_SUBTITLES);
+
+  if(!strcmp(id, "sub:off")) {
+    prop_set_string(mp->mp_prop_subtitle_track_current, id);
+    mp->mp_video.mq_stream2 = -1;
+
+    mp_load_ext_sub(mp, NULL);
+
+  } else if(!strncmp(id, "libav:", strlen("libav:"))) {
+    unsigned int idx = atoi(id + strlen("libav:"));
+    if(idx < fctx->nb_streams) {
+      AVCodecContext *ctx = fctx->streams[idx]->codec;
+      if(ctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+	mp_load_ext_sub(mp, NULL);
+	mp->mp_video.mq_stream2 = idx;
+	prop_set_string(mp->mp_prop_subtitle_track_current, id);
+      }
+    }
+  } else  {
+
+    mp->mp_video.mq_stream2 = -1;
+    prop_set_string(mp->mp_prop_subtitle_track_current, id);
+
+    mp_load_ext_sub(mp, id);
+  }
+}
+
 
 
 /**
@@ -309,7 +197,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 		  char *errbuf, size_t errlen,
 		  const char *canonical_url,
 		  int freetype_context,
-		  seek_index_t *sidx)
+		  seek_index_t *sidx, int cwvec_size)
 {
   media_buf_t *mb = NULL;
   media_queue_t *mq = NULL;
@@ -318,11 +206,10 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
   event_t *e;
   event_ts_t *ets;
   int64_t ts;
-  int64_t seekbase = 0;
 
-  int hold = 0, epoch = 1;
   int restartpos_last = -1;
 
+  mp->mp_seek_base = 0;
   mp->mp_video.mq_seektarget = AV_NOPTS_VALUE;
   mp->mp_audio.mq_seektarget = AV_NOPTS_VALUE;
   mp_set_playstatus_by_hold(mp, 0, NULL);
@@ -331,8 +218,10 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
      (video_settings.resume_mode == VIDEO_RESUME_YES &&
       !(flags & BACKEND_VIDEO_START_FROM_BEGINNING))) {
     int64_t start = video_get_restartpos(canonical_url) * 1000;
-    if(start)
-      seekbase = video_seek(fctx, mp, &mb, start, "restart position");
+    if(start) {
+      mp->mp_seek_base = start;
+      video_seek(fctx, mp, &mb, start, "restart position");
+    }
   }
 
   while(1) {
@@ -348,12 +237,18 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 	continue;
 
       if(r) {
+	char buf[512];
+	if(av_strerror(r, buf, sizeof(buf)))
+	  snprintf(buf, sizeof(buf), "Error %d", r);
+	TRACE(TRACE_DEBUG, "Video", "Playback reached EOF: %s", buf);
 	mb = MB_SPECIAL_EOF;
 	mp->mp_eof = 1;
 	continue;
       }
 
       si = pkt.stream_index;
+      if(si >= cwvec_size)
+	goto bad;
 
       if(si == mp->mp_video.mq_stream) {
 	/* Current video stream */
@@ -362,12 +257,11 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 	mq = &mp->mp_video;
 
 	if(fctx->streams[si]->avg_frame_rate.num) {
-	  mb->mb_duration = 1000000 * fctx->streams[si]->avg_frame_rate.den /
+	  mb->mb_duration = 1000000LL * fctx->streams[si]->avg_frame_rate.den /
 	    fctx->streams[si]->avg_frame_rate.num;
 	} else {
 	  mb->mb_duration = rescale(fctx, pkt.duration, si);
 	}
-	mb->mb_send_pts = 1;
 
       } else if(fctx->streams[si]->codec->codec_type == AVMEDIA_TYPE_AUDIO) {
 
@@ -389,11 +283,11 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 
       } else {
 	/* Check event queue ? */
+      bad:
 	av_free_packet(&pkt);
 	continue;
       }
 
-      mb->mb_epoch    = epoch;
       mb->mb_pts      = rescale(fctx, pkt.pts, si);
       mb->mb_dts      = rescale(fctx, pkt.dts, si);
 
@@ -412,10 +306,10 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 
       mb->mb_stream = pkt.stream_index;
 
-      if(mb->mb_pts != AV_NOPTS_VALUE && mb->mb_data_type == MB_AUDIO)
-	mb->mb_time = mb->mb_pts - fctx->start_time;
-      else
-	mb->mb_time = AV_NOPTS_VALUE;
+      if(mb->mb_data_type == MB_VIDEO) {
+	mb->mb_drive_clock = 1;
+	mb->mb_delta = fctx->start_time;
+      }
 
       mb->mb_keyframe = !!(pkt.flags & AV_PKT_FLAG_KEY);
     }
@@ -439,31 +333,14 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
       continue;
     }
 
-    if(event_is_action(e, ACTION_PLAYPAUSE) ||
-       event_is_action(e, ACTION_PLAY) ||
-       event_is_action(e, ACTION_PAUSE)) {
-
-      hold = action_update_hold_by_event(hold, e);
-      mp_send_cmd_head(mp, &mp->mp_video, hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-      mp_send_cmd_head(mp, &mp->mp_audio, hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-      mp_set_playstatus_by_hold(mp, hold, NULL);
-      
-    } else if(event_is_type(e, EVENT_INTERNAL_PAUSE)) {
-
-      hold = 1;
-      mp_send_cmd_head(mp, mq, MB_CTRL_PAUSE);
-      mp_set_playstatus_by_hold(mp, hold, e->e_payload);
-
-    } else if(event_is_type(e, EVENT_CURRENT_PTS)) {
+    if(event_is_type(e, EVENT_CURRENT_TIME)) {
 
       ets = (event_ts_t *)e;
-      seekbase = ets->ts;
-
-      int sec = seekbase / 1000000;
+      int sec = ets->ts / 1000000;
 
       if(sec != restartpos_last) {
 	restartpos_last = sec;
-	metadb_set_video_restartpos(canonical_url, seekbase / 1000);
+	metadb_set_video_restartpos(canonical_url, ets->ts / 1000);
 
 	if(sidx != NULL && sidx->si_nitems) {
 	  int i, j = 0;
@@ -481,88 +358,19 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 
     } else if(event_is_type(e, EVENT_SEEK)) {
 
-      epoch++;
       ets = (event_ts_t *)e;
-      
-      ts = ets->ts + fctx->start_time;
-
-      if(ts < fctx->start_time)
-	ts = fctx->start_time;
-
-      seekbase = video_seek(fctx, mp, &mb, ts, "direct");
-
-    } else if(event_is_action(e, ACTION_SEEK_FAST_BACKWARD)) {
-
-      seekbase = video_seek(fctx, mp, &mb, seekbase - 60000000, "-60s");
-
-    } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
-
-      seekbase = video_seek(fctx, mp, &mb, seekbase - 15000000, "-15s");
-
-    } else if(event_is_action(e, ACTION_SEEK_FORWARD)) {
-
-      seekbase = video_seek(fctx, mp, &mb, seekbase + 15000000, "+15s");
-
-    } else if(event_is_action(e, ACTION_SEEK_FAST_FORWARD)) {
-
-      seekbase = video_seek(fctx, mp, &mb, seekbase + 60000000, "+60s");
+      video_seek(fctx, mp, &mb, ets->ts, "direct");
 
     } else if(event_is_action(e, ACTION_STOP)) {
       mp_set_playstatus_stop(mp);
 
     } else if(event_is_type(e, EVENT_SELECT_SUBTITLE_TRACK)) {
       event_select_track_t *est = (event_select_track_t *)e;
-
-      TRACE(TRACE_DEBUG, "Video", "Selecting subtitle track %s",
-	    est->id);
-
-      mp_send_cmd_head(mp, &mp->mp_video, MB_FLUSH_SUBTITLES);
-
-      if(!strcmp(est->id, "sub:off")) {
-	prop_set_string(mp->mp_prop_subtitle_track_current, est->id);
-	mp->mp_video.mq_stream2 = -1;
-
-	mp_load_ext_sub(mp, NULL);
-
-      } else if(!strncmp(est->id, "libav:", strlen("libav:"))) {
-	unsigned int idx = atoi(est->id + strlen("libav:"));
-	if(idx < fctx->nb_streams) {
-	  AVCodecContext *ctx = fctx->streams[idx]->codec;
-	  if(ctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
-	    mp_load_ext_sub(mp, NULL);
-	    mp->mp_video.mq_stream2 = idx;
-	    prop_set_string(mp->mp_prop_subtitle_track_current, est->id);
-	  }
-	}
-      } else  {
-
-	mp->mp_video.mq_stream2 = -1;
-	prop_set_string(mp->mp_prop_subtitle_track_current, est->id);
-
-	mp_load_ext_sub(mp, est->id);
-      }
-
+      select_subtitle_track(mp, fctx, est->id);
 
     } else if(event_is_type(e, EVENT_SELECT_AUDIO_TRACK)) {
       event_select_track_t *est = (event_select_track_t *)e;
-
-      TRACE(TRACE_DEBUG, "Video", "Selecting audio track %s",
-	    est->id);
-
-      if(!strcmp(est->id, "audio:off")) {
-	prop_set_string(mp->mp_prop_audio_track_current, est->id);
-	mp->mp_audio.mq_stream = -1;
-
-      } else if(!strncmp(est->id, "libav:", strlen("libav:"))) {
-	unsigned int idx = atoi(est->id + strlen("libav:"));
-	if(idx < fctx->nb_streams) {
-	  AVCodecContext *ctx = fctx->streams[idx]->codec;
-	  if(ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-	    mp->mp_audio.mq_stream = idx;
-	    prop_set_string(mp->mp_prop_audio_track_current, est->id);
-	  }
-	}
-      }
+      select_audio_track(mp, fctx, est->id);
 
     } else if(event_is_action(e, ACTION_SKIP_FORWARD)) {
       // TODO: chapter support
@@ -570,9 +378,9 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
     } else if(event_is_action(e, ACTION_SKIP_BACKWARD)) {
 
       // TODO: chapter support
-      if(seekbase < MP_SKIP_LIMIT)
+      if(mp->mp_seek_base < MP_SKIP_LIMIT)
 	break;
-      seekbase = video_seek(fctx, mp, &mb, 0, "skip back");
+      video_seek(fctx, mp, &mb, 0, "skip back");
     } else if(event_is_type(e, EVENT_EXIT) ||
 	      event_is_type(e, EVENT_PLAY_URL)) {
       break;
@@ -585,7 +393,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 
   // Compute stop position (in percentage of video length)
 
-  int spp = (seekbase - fctx->start_time) * 100 / fctx->duration;
+  int spp = mp->mp_seek_base * 100 / fctx->duration;
 
   if(spp >= video_settings.played_threshold) {
     metadb_set_video_restartpos(canonical_url, -1);
@@ -665,27 +473,11 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 		  int flags, int priority,
 		  char *errbuf, size_t errlen,
 		  const char *mimetype,
-		  const char *canonical_url)
+		  const char *canonical_url,
+		  video_queue_t *vq,
+                  struct vsource_list *vsl)
 {
-  AVFormatContext *fctx;
-  AVCodecContext *ctx;
-  media_format_t *fw;
-  int i;
-  media_codec_t **cwvec;
-  event_t *e;
-  uint8_t buf[64];
-
-  uint64_t hash;
-  int64_t fsize;
-
-  hts_thread_t sub_tid = 0;
-  sub_load_t sl;
-
-  int freetype_context = freetype_get_context();
-
-  struct attachment_list alist;
-  LIST_INIT(&alist);
-
+  rstr_t *title = NULL;
   if(mimetype == NULL) {
     struct fa_stat fs;
 
@@ -715,23 +507,18 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
   if(fh == NULL)
     return NULL;
 
-  if(fa_read(fh, buf, sizeof(buf)) == sizeof(buf)) {
-    if(!memcmp(buf, "<showtimeplaylist", strlen("<showtimeplaylist"))) {
-      return playlist_play(fh, mp, flags, priority, errbuf, errlen);
-    }
-  }
-
-  
   if(flags & BACKEND_VIDEO_SET_TITLE) {
     char tmp[1024];
     fa_url_get_last_component(tmp, sizeof(tmp), canonical_url);
     char *x = strrchr(tmp, '.');
     if(x)
       *x = 0;
-    prop_set_string(prop_create(mp->mp_prop_metadata, "title"), tmp);
+    title = rstr_alloc(tmp);
+
+    prop_set(mp->mp_prop_metadata, "title", PROP_SET_RSTRING, title);
   }
 
-  int seek_is_fast = fa_seek_is_fast(fh);
+  const int seek_is_fast = fa_seek_is_fast(fh);
 
   if(seek_is_fast && mimetype == NULL) {
     if(fa_probe_iso(NULL, fh) == 0) {
@@ -745,80 +532,162 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 #endif
     }
   }
+  
 
-  if(seek_is_fast)
-    sl.sl_opensub_hash_valid = !opensub_compute_hash(fh, &hash);
-  else
-    sl.sl_opensub_hash_valid = 0;
+  // See if this is an HLS multi-variant playlist
 
-  if(!sl.sl_opensub_hash_valid)
+  if(fa_seek(fh, 0, SEEK_SET) == 0) {
+    char buf[1024];
+    int l = fa_read(fh, buf, sizeof(buf) - 1);
+    if(l > 10) {
+      buf[l] = 0;
+      if(mystrbegins(buf, "#EXTM3U") && strstr(buf, "#EXT-X-STREAM-INF:")) {
+        htsbuf_queue_t hq;
+        htsbuf_queue_init(&hq, 0);
+        htsbuf_append(&hq, buf, l);
+        if(l == sizeof(buf) - 1 && fa_read_to_htsbuf(&hq, fh, 100000)) {
+          htsbuf_queue_flush(&hq);
+          snprintf(errbuf, errlen, "Unable to read HLS playlist file");
+        }
+        fa_close(fh);
+        char *hlslist = htsbuf_to_string(&hq);
+        vsource_add_hls(vsl, hlslist, url);
+        free(hlslist);
+        return event_create_type(EVENT_REOPEN);
+      }
+    }
+  }
+
+  event_t *e = be_file_playvideo_fh(url, mp, flags, priority,
+				    errbuf, errlen, mimetype,
+				    canonical_url, vq, fh, title);
+  rstr_release(title);
+  return e;
+}
+
+/**
+ *
+ */
+event_t *
+be_file_playvideo_fh(const char *url, media_pipe_t *mp,
+                     int flags, int priority,
+                     char *errbuf, size_t errlen,
+                     const char *mimetype,
+                     const char *canonical_url,
+                     video_queue_t *vq,
+                     fa_handle_t *fh,
+		     rstr_t *title)
+{
+  const int seek_is_fast = fa_seek_is_fast(fh);
+  
+  int opensub_hash_valid = 0;
+  uint64_t hash;
+
+  if(seek_is_fast && !(flags & BACKEND_VIDEO_NO_OPENSUB_HASH))
+    opensub_hash_valid = !opensub_compute_hash(fh, &hash);
+
+  if(!opensub_hash_valid)
     TRACE(TRACE_DEBUG, "Video", "Unable to compute opensub hash");
 
   AVIOContext *avio = fa_libav_reopen(fh);
-  fsize = avio_size(avio);
+  int64_t fsize = avio_size(avio);
 
+  AVFormatContext *fctx;
   if((fctx = fa_libav_open_format(avio, url, errbuf, errlen,
 				  mimetype)) == NULL) {
     fa_libav_close(avio);
     return NULL;
   }
-
+#if 0
   if(!strcmp(fctx->iformat->name, "avi"))
     fctx->flags |= AVFMT_FLAG_GENPTS;
-
+#endif
   TRACE(TRACE_DEBUG, "Video", "Starting playback of %s (%s)",
 	url, fctx->iformat->name);
-
-  mp_reinit_streams(mp);
 
   /**
    * Update property metadata
    */
-  metadata_t *md = fa_metadata_from_fctx(fctx, url);
+  metadata_t *md = fa_metadata_from_fctx(fctx);
   if(md != NULL) {
     metadata_to_proptree(md, mp->mp_prop_metadata, 0);
     metadata_destroy(md);
   }
 
+  // We're gonna change/release it further down so claim a reference
+  title = rstr_dup(title);
+  rstr_t *imdbid = NULL;
   /**
-   * Subtitles fr
+   * Overwrite with data from database if we have something which
+   * is not dsid == 1 (the file itself)
    */
+  int season = -1;
+  int episode = -1;
+  md = metadata_get_video_data(url);
+  if(md != NULL && md->md_dsid != 1) {
+    metadata_to_proptree(md, mp->mp_prop_metadata, 0);
 
-  sl.sl_beflags = flags;
-  sl.sl_p = mp->mp_prop_subtitle_tracks;
-  sl.sl_url = url;
-  sl.sl_stop = 0;
-  sl.sl_opensub_hash = hash;
-  sl.sl_fsize = fsize;
+    // Some hard coded stuff for subtitle scanner
 
-  hts_thread_create_joinable("subloader", &sub_tid,
-			     sub_loader, &sl, THREAD_PRIO_LOW);
+    if(md->md_parent &&
+       md->md_parent->md_type == METADATA_TYPE_SEASON &&
+       md->md_parent->md_parent && 
+       md->md_parent->md_parent->md_type == METADATA_TYPE_SERIES) {
 
+      episode = md->md_idx;
+      season = md->md_parent->md_idx;
+      if(md->md_parent->md_parent->md_title != NULL)
+	rstr_set(&title, md->md_parent->md_parent->md_title);
+
+    } else {
+
+      if(md->md_title)
+	rstr_set(&title, md->md_title);
+      if(md->md_imdb_id)
+	rstr_set(&imdbid, md->md_imdb_id);
+    }
+
+    metadata_destroy(md);
+  }
 
   /**
-   * Query opensubtitles.org
+   * Create subtitle scanner
    */
+  sub_scanner_t *ss =
+    sub_scanner_create(url, flags, title, mp->mp_prop_subtitle_tracks,
+		       opensub_hash_valid, hash, fsize, imdbid,
+		       season, episode);
+
+  rstr_release(title);
+  rstr_release(imdbid);
 
   /**
    * Init codec contexts
    */
-  cwvec = alloca(fctx->nb_streams * sizeof(void *));
+  media_codec_t **cwvec = alloca(fctx->nb_streams * sizeof(void *));
   memset(cwvec, 0, sizeof(void *) * fctx->nb_streams);
   
+  int cwvec_size = fctx->nb_streams;
+
   mp->mp_audio.mq_stream = -1;
   mp->mp_video.mq_stream = -1;
   mp->mp_video.mq_stream2 = -1;
 
-  fw = media_format_create(fctx);
+  media_format_t *fw = media_format_create(fctx);
 
 
   // Scan all streams and select defaults
+  int freetype_context = freetype_get_context();
+  struct attachment_list alist;
+  int i;
+  LIST_INIT(&alist);
+
 
   for(i = 0; i < fctx->nb_streams; i++) {
     char str[256];
     media_codec_params_t mcp = {0};
 
-    ctx = fctx->streams[i]->codec;
+    AVCodecContext *ctx = fctx->streams[i]->codec;
 
     avcodec_string(str, sizeof(str), ctx, 0);
     TRACE(TRACE_DEBUG, "Video", " Stream #%d: %s", i, str);
@@ -851,6 +720,9 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     if(ctx->codec_type == AVMEDIA_TYPE_VIDEO && mp->mp_video.mq_stream != -1)
       continue;
 
+    mcp.extradata      = ctx->extradata;
+    mcp.extradata_size = ctx->extradata_size;
+
     cwvec[i] = media_codec_create(ctx->codec_id, 0, fw, ctx, &mcp, mp);
 
     if(cwvec[i] != NULL) {
@@ -873,11 +745,11 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     }
   }
 
-  mp->mp_pts_delta_for_subs = fctx->start_time;
+  mp->mp_start_time = fctx->start_time;
 
   // Start it
   mp_configure(mp, (seek_is_fast ? MP_PLAY_CAPS_SEEK : 0) | MP_PLAY_CAPS_PAUSE,
-	       MP_BUFFER_DEEP);
+	       MP_BUFFER_DEEP, fctx->duration);
 
   if(!(flags & BACKEND_VIDEO_NO_AUDIO))
     mp_become_primary(mp);
@@ -888,20 +760,20 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 
   metadb_register_play(canonical_url, 0, CONTENT_VIDEO);
 
+  event_t *e;
   e = video_player_loop(fctx, cwvec, mp, flags, errbuf, errlen, canonical_url,
-			freetype_context, si);
+			freetype_context, si, cwvec_size);
 
   seek_index_destroy(si);
 
   TRACE(TRACE_DEBUG, "Video", "Stopped playback of %s", url);
 
-
-  mp->mp_pts_delta_for_subs = 0;
+  mp->mp_start_time = 0;
 
   mp_flush(mp, 0);
   mp_shutdown(mp);
 
-  for(i = 0; i < fctx->nb_streams; i++)
+  for(i = 0; i < cwvec_size; i++)
     if(cwvec[i] != NULL)
       media_codec_deref(cwvec[i]);
 
@@ -909,77 +781,10 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 
   media_format_deref(fw);
 
-  sl.sl_stop = 1;
-  if(sub_tid)
-    hts_thread_join(&sub_tid);
-  TRACE(TRACE_DEBUG, "Video", "Subtitle scanner joined");
-  
+  sub_scanner_destroy(ss);
   return e;
 }
 
-
-/**
- *
- */
-static event_t *
-playlist_play(fa_handle_t *fh, media_pipe_t *mp, int flags,
-	      int priority, char *errbuf, size_t errlen)
-{
-  void *mem;
-  htsmsg_t *xml, *urls, *c;
-  event_t *e;
-  const char *s, *url;
-  int loop;
-  htsmsg_field_t *f;
-  int played_something;
-
-  mem = fa_load_and_close(fh, NULL);
-
-  if((xml = htsmsg_xml_deserialize(mem, errbuf, errlen)) == NULL)
-    return NULL;
-
-  s = htsmsg_get_str_multi(xml, "tags", "showtimeplaylist",
-			   "attrib", "loop", NULL);
-  loop = s != NULL && atoi(s);
-
-  urls = htsmsg_get_map_multi(xml, "tags", "showtimeplaylist", "tags", NULL);
-
-  if(urls == NULL) {
-    htsmsg_destroy(xml);
-    snprintf(errbuf, errlen, "No <url> tags in playlist");
-    return NULL;
-  }
-
-  do {
-    played_something = 0;
-
-    HTSMSG_FOREACH(f, urls) {
-      if(strcmp(f->hmf_name, "url") ||
-	 (c = htsmsg_get_map_by_field(f)) == NULL)
-	continue;
-      int flags2 = flags;
-
-      s = htsmsg_get_str_multi(c, "attrib", "noaudio", NULL);
-
-      if(s && atoi(s))
-	flags2 |= BACKEND_VIDEO_NO_AUDIO;
-
-      url = htsmsg_get_str(c, "cdata");
-      if(url == NULL)
-	continue;
-      e = backend_play_video(url, mp, flags2, priority, errbuf, errlen, NULL,
-			     url);
-      if(!event_is_type(e, EVENT_EOF)) {
-	htsmsg_destroy(xml);
-	return e;
-      }
-      played_something = 1;
-    }
-  } while(played_something && loop);
-  
-  htsmsg_destroy(xml);
-  return event_create_type(EVENT_EOF);
-}
 
 
 /**

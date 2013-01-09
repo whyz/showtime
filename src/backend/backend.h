@@ -26,6 +26,8 @@ struct media_pipe;
 struct navigator;
 struct event;
 struct image_meta;
+struct vsource_list;
+typedef struct video_queue video_queue_t;
 
 typedef int (be_load_cb_t)(void *opaque, int loaded, int total);
 
@@ -49,6 +51,7 @@ typedef enum {
 #define BACKEND_VIDEO_SET_TITLE   0x8
 #define BACKEND_VIDEO_START_FROM_BEGINNING 0x10
 #define BACKEND_VIDEO_RESUME      0x20
+#define BACKEND_VIDEO_NO_OPENSUB_HASH     0x40
 
 /**
  *
@@ -66,14 +69,16 @@ typedef struct backend {
 
   int (*be_canhandle)(const char *ur);
 
-  int (*be_open)(prop_t *page, const char *url);
+  int (*be_open)(prop_t *page, const char *url, int sync);
 
   struct event *(*be_play_video)(const char *url,
 				 struct media_pipe *mp,
 				 int flags, int priority,
 				 char *errbuf, size_t errlen,
 				 const char *mimetype,
-				 const char *canonical_url);
+				 const char *canonical_url,
+				 video_queue_t *vq,
+                                 struct vsource_list *vsl);
 
   struct event *(*be_play_audio)(const char *url, struct media_pipe *mp,
 				 char *errbuf, size_t errlen, int paused,
@@ -104,14 +109,16 @@ void backend_init(void);
 
 void backend_fini(void);
 
-int backend_open(struct prop *page, const char *url)
+int backend_open(struct prop *page, const char *url, int sync)
      __attribute__ ((warn_unused_result));
 
 struct event *backend_play_video(const char *url, struct media_pipe *mp,
 				 int flags, int priority,
 				 char *errbuf, size_t errlen,
 				 const char *mimetype,
-				 const char *canonical_url)
+				 const char *canonical_url,
+				 video_queue_t *vq,
+                                 struct vsource_list *vsl)
   __attribute__ ((warn_unused_result));
 
 
@@ -138,7 +145,7 @@ backend_probe_result_t backend_probe(const char *url,
 
 void backend_register(backend_t *be);
 
-int backend_open_video(prop_t *page, const char *url);
+int backend_open_video(prop_t *page, const char *url, int sync);
 
 int backend_resolve_item(const char *url, prop_t *item)
      __attribute__ ((warn_unused_result));

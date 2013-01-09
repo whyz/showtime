@@ -15,13 +15,15 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
+#include <stdio.h>
 #include <limits.h>
+
+#include <libavutil/mem.h>
 
 #include "showtime.h"
 #include "fileaccess/fileaccess.h"
 #include "vobsub.h"
-#include "misc/string.h"
+#include "misc/isolang.h"
 #include "media.h"
 #include "htsmsg/htsmsg_json.h"
 #include "ext_subtitles.h"
@@ -106,7 +108,7 @@ vobsub_probe(const char *url, const char *filename,
       while(*p == ' ')
 	p++;
       if(strlen(p) >= 2) {
-	const char *lang = dvd_langcode_to_string(p[0] << 8 | p[1]);
+	const char *lang = iso_639_1_lang(p);
 
 	htsmsg_t *m = htsmsg_create_map();
 	htsmsg_add_str(m, "idx", url);
@@ -234,7 +236,7 @@ demux_pes(const vobsub_t *vs, media_pipe_t *mp,
 	  uint32_t sc, const uint8_t *buf, int len, int64_t pts)
 {
   uint8_t flags, hlen, x;
-  int64_t dts = AV_NOPTS_VALUE;
+  int64_t dts = PTS_UNSET;
 
   x     = getu8(buf, len);
   flags = getu8(buf, len);
@@ -286,7 +288,7 @@ demux_pes(const vobsub_t *vs, media_pipe_t *mp,
 				pts, dts, 0);
     if(outlen) {
       media_buf_t *mb = media_buf_alloc_unlocked(mp, outlen + 18*4);
-      mb->mb_data_type = MB_DVD_SPU2;
+      mb->mb_data_type = MB_CTRL_DVD_SPU2;
       mb->mb_dts = dts;
       mb->mb_pts = pts;
       uint32_t *d = mb->mb_data;
@@ -294,10 +296,10 @@ demux_pes(const vobsub_t *vs, media_pipe_t *mp,
       d[17] = vs->vs_height;
       memcpy(mb->mb_data, vs->vs_clut, 16 * 4);
       memcpy(mb->mb_data + 18*4, outbuf, outlen);
-      mb_enqueue_always_head(mp, &mp->mp_video, mb);
+      mb_enqueue_always(mp, &mp->mp_video, mb);
     }
-    pts = AV_NOPTS_VALUE;
-    dts = AV_NOPTS_VALUE;
+    pts = PTS_UNSET;
+    dts = PTS_UNSET;
     buf += rlen;
     len -= rlen;
   }
@@ -488,10 +490,10 @@ static int64_t
 vobsub_get_ts(const char *buf)
 {
   if(strlen(buf) < 12)
-    return AV_NOPTS_VALUE;
+    return PTS_UNSET;
 
   if(buf[2] != ':' || buf[5] != ':' || buf[8] != ':')
-    return AV_NOPTS_VALUE;
+    return PTS_UNSET;
 
   return 1000LL * (
     (buf[ 0] - '0') * 36000000LL +
@@ -525,9 +527,6 @@ vobsub_dtor(ext_subtitles_t *es)
   av_parser_close(vs->vs_parser);
   av_free(vs->vs_ctx);
   fa_close(vs->vs_sub);
-
-  
-
 }
 
 
@@ -564,7 +563,7 @@ vobsub_load(const char *json, char *errbuf, size_t errlen,
   vobsub_t *vs = calloc(1, sizeof(vobsub_t));
 
   vs->vs_parser = av_parser_init(CODEC_ID_DVD_SUBTITLE);
-  vs->vs_ctx = avcodec_alloc_context();
+  vs->vs_ctx = avcodec_alloc_context3(NULL);
 
   if((vs->vs_sub = fa_open(subfile, errbuf, errlen)) == NULL) {
     free(buf);

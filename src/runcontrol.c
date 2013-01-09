@@ -113,7 +113,8 @@ init_autostandby(void)
   if(store == NULL)
     store = htsmsg_create_map();
 
-  settings_create_int(settings_general, "autostandby", _p("Automatic standby"), 
+  settings_create_int(gconf.settings_general,
+		      "autostandby", _p("Automatic standby"), 
 		      0, store, 0, 60, 5, set_autostandby, NULL,
 		      SETTINGS_INITIAL_UPDATE, " min", NULL,
 		      runcontrol_save_settings, NULL);
@@ -147,6 +148,13 @@ do_open_shell(void *opaque, prop_event_t event, ...)
   showtime_shutdown(SHOWTIME_EXIT_SHELL);
 }
 
+
+static void
+do_exit(void *opaque, prop_event_t event, ...)
+{
+  showtime_shutdown(0);
+}
+
 /**
  *
  */
@@ -155,34 +163,42 @@ runcontrol_init(void)
 {
   prop_t *rc;
   
-  if(!(showtime_can_standby ||
-       showtime_can_poweroff ||
-       showtime_can_logout ||
-       showtime_can_open_shell))
-    return;
-
-  settings_create_divider(settings_general, 
-			  _p("Starting and stopping Showtime"));
-
   rc = prop_create(prop_get_global(), "runcontrol");
 
-  prop_set_int(prop_create(rc, "canStandby"),   !!showtime_can_standby);
-  prop_set_int(prop_create(rc, "canPowerOff"),  !!showtime_can_poweroff);
-  prop_set_int(prop_create(rc, "canLogout"),    !!showtime_can_logout);
-  prop_set_int(prop_create(rc, "canOpenShell"), !!showtime_can_open_shell);
+  prop_set_int(prop_create(rc, "canStandby"),   !!gconf.can_standby);
+  prop_set_int(prop_create(rc, "canPowerOff"),  !!gconf.can_poweroff);
+  prop_set_int(prop_create(rc, "canLogout"),    !!gconf.can_logout);
+  prop_set_int(prop_create(rc, "canOpenShell"), !!gconf.can_open_shell);
+  prop_set_int(prop_create(rc, "canRestart"),   !!gconf.can_restart);
+  prop_set_int(prop_create(rc, "canExit"),       !gconf.can_not_exit);
 
-  if(showtime_can_standby)
+  if(!(gconf.can_standby ||
+       gconf.can_poweroff ||
+       gconf.can_logout ||
+       gconf.can_open_shell ||
+       gconf.can_restart ||
+       !gconf.can_not_exit))
+    return;
+
+  settings_create_separator(gconf.settings_general, 
+			  _p("Starting and stopping Showtime"));
+
+  if(gconf.can_standby)
     init_autostandby();
 
-  if(showtime_can_poweroff)
-    settings_create_action(settings_general, _p("Power off system"),
-			   do_power_off, NULL, NULL);
+  if(gconf.can_poweroff)
+    settings_create_action(gconf.settings_general, _p("Power off system"),
+			   do_power_off, NULL, 0, NULL);
 
-  if(showtime_can_logout)
-    settings_create_action(settings_general, _p("Logout"),
-			   do_logout, NULL, NULL);
+  if(gconf.can_logout)
+    settings_create_action(gconf.settings_general, _p("Logout"),
+			   do_logout, NULL, 0, NULL);
 
-  if(showtime_can_open_shell)
-    settings_create_action(settings_general, _p("Open shell"),
-			   do_open_shell, NULL, NULL);
+  if(gconf.can_open_shell)
+    settings_create_action(gconf.settings_general, _p("Open shell"),
+			   do_open_shell, NULL, 0, NULL);
+
+  if(!gconf.can_not_exit)
+    settings_create_action(gconf.settings_general, _p("Exit Showtime"),
+			   do_exit, NULL, 0, NULL);
 }

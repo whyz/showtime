@@ -30,20 +30,24 @@
 #include <gme/gme.h>
 #endif
 
-#include <libavutil/avstring.h>
-#include <libavformat/avio.h>
-#include <libavformat/avformat.h>
 
 #include "showtime.h"
 #include "fileaccess.h"
 #include "fa_probe.h"
-#include "fa_libav.h"
 #include "navigator.h"
 #include "media.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "misc/isolang.h"
 #include "misc/jpeg.h"
 #include "htsmsg/htsmsg_json.h"
+
+#if ENABLE_LIBAV
+#include <libavutil/avstring.h>
+#include <libavformat/avio.h>
+#include <libavformat/avformat.h>
+#include "fa_libav.h"
+#include "libav.h"
+#endif
 
 /**
  *
@@ -82,21 +86,23 @@ codecname(enum CodecID id)
 static const uint8_t pngsig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
 static const uint8_t isosig[8] = {0x1, 0x43, 0x44, 0x30, 0x30, 0x31, 0x1, 0x0};
 static const uint8_t gifsig[6] = {'G', 'I', 'F', '8', '9', 'a'};
+static const uint8_t ttfsig[5] = {0,1,0,0,0};
+static const uint8_t otfsig[4] = {'O', 'T', 'T', 'O'};
 
 
 /**
  *
  */
 static rstr_t *
-ffmpeg_metadata_rstr(AVMetadata *m, const char *key)
+ffmpeg_metadata_rstr(AVDictionary *m, const char *key)
 {
-  AVMetadataTag *tag;
+  AVDictionaryEntry *tag;
   int len;
   rstr_t *ret;
   const char *str;
   char *d;
 
-  if((tag = av_metadata_get(m, key, NULL, AV_METADATA_IGNORE_SUFFIX)) == NULL)
+  if((tag = av_dict_get(m, key, NULL, AV_DICT_IGNORE_SUFFIX)) == NULL)
     return NULL;
 
   if(!utf8_verify(tag->value))
@@ -126,11 +132,11 @@ ffmpeg_metadata_rstr(AVMetadata *m, const char *key)
  *
  */
 static int
-ffmpeg_metadata_int(AVMetadata *m, const char *key, int def)
+ffmpeg_metadata_int(AVDictionary *m, const char *key, int def)
 {
-  AVMetadataTag *tag;
+  AVDictionaryEntry *tag;
 
-  if((tag = av_metadata_get(m, key, NULL, AV_METADATA_IGNORE_SUFFIX)) == NULL)
+  if((tag = av_dict_get(m, key, NULL, AV_DICT_IGNORE_SUFFIX)) == NULL)
     return def;
 
   return tag->value && tag->value[0] >= '0' && tag->value[0] <= '9' ?
@@ -170,7 +176,7 @@ fa_probe_playlist(metadata_t *md, const char *url, uint8_t *pb, size_t pbsize)
  * Probe SPC files
  */
 static void
-fa_probe_spc(metadata_t *md, uint8_t *pb)
+fa_probe_spc(metadata_t *md, const uint8_t *pb, const char *filename)
 {
   char buf[33];
   buf[32] = 0;
@@ -191,6 +197,7 @@ fa_probe_spc(metadata_t *md, uint8_t *pb)
   buf[3] = 0;
 
   md->md_duration = atoi(buf);
+  md->md_track = filename ? atoi(filename) : 0;
 }
 
 
@@ -234,14 +241,15 @@ jpeginfo_reader(void *handle, void *buf, off_t offset, size_t size)
 
 
 static void
-fa_probe_exif(metadata_t *md, const char *url, uint8_t *pb, fa_handle_t *fh)
+fa_probe_exif(metadata_t *md, const char *url, uint8_t *pb, fa_handle_t *fh,
+              int buflen)
 {
   jpeginfo_t ji;
 
   if(jpeg_info(&ji, jpeginfo_reader, fh, 
 	       JPEG_INFO_DIMENSIONS | JPEG_INFO_ORIENTATION |
 	       JPEG_INFO_METADATA,
-	       pb, 256, NULL, 0))
+	       pb, buflen, NULL, 0))
     return;
   
   md->md_time = ji.ji_time;
@@ -257,28 +265,33 @@ fa_probe_exif(metadata_t *md, const char *url, uint8_t *pb, fa_handle_t *fh)
  * pb is guaranteed to point to at least 256 bytes of valid data
  */
 static int
-fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh)
+fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh,
+		const char *filename)
 {
   uint16_t flags;
-  uint8_t buf[256];
+  uint8_t buf[1025];
 
-  if(fa_read(fh, buf, sizeof(buf)) != sizeof(buf))
+  int l = fa_read(fh, buf, sizeof(buf) - 1);
+  if(l < 8)
     return 0;
+  
+  buf[l] = 0;
 
-  if(!memcmp(buf, "SNES-SPC700 Sound File Data", 27)) {
-    fa_probe_spc(md, buf);
+  if(l >= 256 && !memcmp(buf, "SNES-SPC700 Sound File Data", 27)) {
+    fa_probe_spc(md, buf, filename);
     md->md_contenttype = CONTENT_AUDIO;
     return 1;
   }
 
-  if(!memcmp(buf, "PSID", 4) || !memcmp(buf, "RSID", 4)) {
+  if(l >= 256 && (!memcmp(buf, "PSID", 4) || !memcmp(buf, "RSID", 4))) {
     fa_probe_psid(md, buf); 
     md->md_contenttype = CONTENT_ALBUM;
     metdata_set_redirect(md, "sidfile://%s/", url);
     return 1;
   }
 
-  if(buf[0] == 'R'  && buf[1] == 'a'  && buf[2] == 'r' && buf[3] == '!' &&
+  if(l >= 16 && 
+     buf[0] == 'R'  && buf[1] == 'a'  && buf[2] == 'r' && buf[3] == '!' &&
      buf[4] == 0x1a && buf[5] == 0x07 && buf[6] == 0x0 && buf[9] == 0x73) {
 
     flags = buf[10] | buf[11] << 8;
@@ -330,17 +343,12 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh)
   }
 #endif
 
-  if((buf[6] == 'J' && buf[7] == 'F' && buf[8] == 'I' && buf[9] == 'F') ||
-     (buf[6] == 'E' && buf[7] == 'x' && buf[8] == 'i' && buf[9] == 'f')) {
+  if(l > 16 &&
+     ((buf[6] == 'J' && buf[7] == 'F' && buf[8] == 'I' && buf[9] == 'F') ||
+      (buf[6] == 'E' && buf[7] == 'x' && buf[8] == 'i' && buf[9] == 'f'))) {
     /* JPEG image */
     md->md_contenttype = CONTENT_IMAGE;
-    fa_probe_exif(md, url, buf, fh); // Try to get more info
-    return 1;
-  }
-
-  if(!memcmp(buf, "<showtimeplaylist", strlen("<showtimeplaylist"))) {
-    /* Ugly playlist thing (see fa_video.c) */
-    md->md_contenttype = CONTENT_VIDEO;
+    fa_probe_exif(md, url, buf, fh, l); // Try to get more info
     return 1;
   }
 
@@ -361,6 +369,20 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh)
     return 1;
   }
 
+  if(!memcmp(buf, ttfsig, sizeof(ttfsig)) ||
+     !memcmp(buf, otfsig, sizeof(otfsig))) {
+    /* TTF or OTF */
+    md->md_contenttype = CONTENT_FONT;
+    return 1;
+  }
+
+  if(l > 16 && mystrbegins((const char *)buf, "#EXTM3U") &&
+     (strstr((const char *)buf, "#EXT-X-STREAM-INF:") ||
+      strstr((const char *)buf, "#EXT-X-TARGETDURATION:") ||
+      strstr((const char *)buf, "#EXT-X-MEDIA-SEQUENCE:"))) {
+    md->md_contenttype = CONTENT_VIDEO;
+    return 1;
+  }
   return 0;
 }
 
@@ -500,7 +522,8 @@ gme_probe(metadata_t *md, const char *url, fa_handle_t *fh)
  *
  */
 static void
-fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx, const char *url)
+fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx,
+		  const char *filename)
 {
   int i;
   char tmp1[1024];
@@ -517,14 +540,32 @@ fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx, const char *url)
   if(fctx->duration != AV_NOPTS_VALUE)
     md->md_duration = (float)fctx->duration / 1000000;
 
+  for(i = 0; i < fctx->nb_streams; i++) {
+    AVStream *stream = fctx->streams[i];
+    AVCodecContext *avctx = stream->codec;
 
-  if(fctx->nb_streams == 1 && 
-     fctx->streams[0]->codec->codec_type == AVMEDIA_TYPE_AUDIO) {
+    if(avctx->codec_type == AVMEDIA_TYPE_AUDIO)
+      has_audio = 1;
+
+    if(avctx->codec_type == AVMEDIA_TYPE_VIDEO &&
+       !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC))
+      has_video = 1;
+  }
+
+  if(has_audio && !has_video) {
     md->md_contenttype = CONTENT_AUDIO;
 
     md->md_title = ffmpeg_metadata_rstr(fctx->metadata, "title");
-    md->md_track = ffmpeg_metadata_int(fctx->metadata, "track", 0);
-  } else {
+    md->md_track = ffmpeg_metadata_int(fctx->metadata, "track",
+				       filename ? atoi(filename) : 0);
+
+    return;
+  }
+
+  has_audio = 0;
+  has_video = 0;
+
+  if(1) {
 
     int atrack = 0;
     int strack = 0;
@@ -536,8 +577,12 @@ fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx, const char *url)
       AVStream *stream = fctx->streams[i];
       AVCodecContext *avctx = stream->codec;
       AVCodec *codec = avcodec_find_decoder(avctx->codec_id);
-      AVMetadataTag *lang, *title;
+      AVDictionaryEntry *lang, *title;
       int tn;
+      char str[256];
+
+      avcodec_string(str, sizeof(str), avctx, 0);
+      TRACE(TRACE_DEBUG, "Probe", " Stream #%d: %s", i, str);
 
       switch(avctx->codec_type) {
       case AVMEDIA_TYPE_VIDEO:
@@ -562,11 +607,11 @@ fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx, const char *url)
 	metadata_from_ffmpeg(tmp1, sizeof(tmp1), codec, avctx);
       }
 
-      lang = av_metadata_get(stream->metadata, "language", NULL,
-			     AV_METADATA_IGNORE_SUFFIX);
+      lang = av_dict_get(stream->metadata, "language", NULL,
+                         AV_DICT_IGNORE_SUFFIX);
 
-      title = av_metadata_get(stream->metadata, "title", NULL,
-			      AV_METADATA_IGNORE_SUFFIX);
+      title = av_dict_get(stream->metadata, "title", NULL,
+                          AV_DICT_IGNORE_SUFFIX);
 
       metadata_add_stream(md, codecname(avctx->codec_id),
 			  avctx->codec_type, i,
@@ -591,7 +636,8 @@ fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx, const char *url)
  *
  */
 metadata_t *
-fa_probe_metadata(const char *url, char *errbuf, size_t errsize)
+fa_probe_metadata(const char *url, char *errbuf, size_t errsize,
+		  const char *filename)
 {
   AVFormatContext *fctx;
 
@@ -609,7 +655,7 @@ fa_probe_metadata(const char *url, char *errbuf, size_t errsize)
 
   fa_seek(fh, 0, SEEK_SET);
 
-  if(fa_probe_header(md, url, fh)) {
+  if(fa_probe_header(md, url, fh, filename)) {
     fa_close(fh);
     return md;
   }
@@ -622,7 +668,7 @@ fa_probe_metadata(const char *url, char *errbuf, size_t errsize)
     return NULL;
   }
 
-  fa_lavf_load_meta(md, fctx, url);
+  fa_lavf_load_meta(md, fctx, filename);
   fa_libav_close_format(fctx);
   return md;
 }
@@ -632,10 +678,11 @@ fa_probe_metadata(const char *url, char *errbuf, size_t errsize)
  *
  */
 metadata_t *
-fa_metadata_from_fctx(AVFormatContext *fctx, const char *url)
+fa_metadata_from_fctx(AVFormatContext *fctx)
 {
   metadata_t *md = metadata_create();
-  fa_lavf_load_meta(md, fctx, url);
+  
+  fa_lavf_load_meta(md, fctx, NULL);
   return md;
 }
 

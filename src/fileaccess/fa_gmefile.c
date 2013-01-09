@@ -37,7 +37,7 @@
 #include "fa_proto.h"
 #include "fa_audio.h"
 #include "fa_libav.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "media.h"
 
 /**
@@ -168,21 +168,6 @@ seekflush(media_pipe_t *mp, media_buf_t **mbp)
 /**
  *
  */
-static void
-deltaseek(media_pipe_t *mp, media_buf_t **mbp, Music_Emu *emu, int delta)
-{
-  int pos = gme_tell(emu) + delta;
-  if(pos < 0)
-    pos = 0;
-
-  gme_seek(emu, pos);
-  seekflush(mp, mbp);
-}
-
-
-/**
- *
- */
 static event_t *
 fa_gme_playfile_internal(media_pipe_t *mp, void *buf, size_t size,
 			 char *errbuf, size_t errlen, int hold, int track,
@@ -204,10 +189,9 @@ fa_gme_playfile_internal(media_pipe_t *mp, void *buf, size_t size,
 
   gme_start_track(emu, track);
 
-  mp_set_playstatus_by_hold(mp, hold, NULL);
   mp->mp_audio.mq_stream = 0;
   mp_configure(mp, MP_PLAY_CAPS_PAUSE | MP_PLAY_CAPS_SEEK,
-	       MP_BUFFER_SHALLOW);
+	       MP_BUFFER_SHALLOW, 0);
   mp_become_primary(mp);
   
 
@@ -223,9 +207,10 @@ fa_gme_playfile_internal(media_pipe_t *mp, void *buf, size_t size,
       mb->mb_data_type = MB_AUDIO;
       mb->mb_channels = 2;
       mb->mb_rate = sample_rate;
-      mb->mb_time = gme_tell(emu) * 1000;
+      mb->mb_pts = gme_tell(emu) * 1000;
+      mb->mb_drive_clock = 1;
 
-      if(!registered_play && mb->mb_time > METADB_AUDIO_PLAY_THRESHOLD) {
+      if(!registered_play && mb->mb_pts > METADB_AUDIO_PLAY_THRESHOLD) {
 	registered_play = 1;
 	metadb_register_play(url, 1, CONTENT_AUDIO);
       }
@@ -248,36 +233,6 @@ fa_gme_playfile_internal(media_pipe_t *mp, void *buf, size_t size,
       gme_seek(emu, ets->ts / 1000);
       seekflush(mp, &mb);
       
-    } else if(event_is_action(e, ACTION_SEEK_FAST_BACKWARD)) {
-
-      deltaseek(mp, &mb, emu, -60000);
-
-    } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
-
-      deltaseek(mp, &mb, emu, -15000);
-
-    } else if(event_is_action(e, ACTION_SEEK_FAST_FORWARD)) {
-
-      deltaseek(mp, &mb, emu, 60000);
-
-    } else if(event_is_action(e, ACTION_SEEK_FORWARD)) {
-
-      deltaseek(mp, &mb, emu, 15000);
-
-    } else if(event_is_action(e, ACTION_PLAYPAUSE) ||
-	      event_is_action(e, ACTION_PLAY) ||
-	      event_is_action(e, ACTION_PAUSE)) {
-
-      hold = action_update_hold_by_event(hold, e);
-      mp_send_cmd_head(mp, mq, hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-      mp_set_playstatus_by_hold(mp, hold, NULL);
-
-    } else if(event_is_type(e, EVENT_INTERNAL_PAUSE)) {
-
-      hold = 1;
-      mp_send_cmd_head(mp, mq, MB_CTRL_PAUSE);
-      mp_set_playstatus_by_hold(mp, hold, e->e_payload);
-
     } else if(event_is_action(e, ACTION_SKIP_BACKWARD) ||
 	      event_is_action(e, ACTION_SKIP_FORWARD) ||
 	      event_is_action(e, ACTION_STOP)) {
@@ -292,11 +247,6 @@ fa_gme_playfile_internal(media_pipe_t *mp, void *buf, size_t size,
   if(mb != NULL)
     media_buf_free_unlocked(mp, mb);
 
-  if(hold) { 
-    // If we were paused, release playback again.
-    mp_send_cmd(mp, mq, MB_CTRL_PLAY);
-    mp_set_playstatus_by_hold(mp, 0, NULL);
-  }
   return e;
 }
 

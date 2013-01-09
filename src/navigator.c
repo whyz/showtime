@@ -32,7 +32,7 @@
 #include "service.h"
 #include "settings.h"
 #include "notifications.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "db/kvstore.h"
 
 TAILQ_HEAD(nav_page_queue, nav_page);
@@ -94,6 +94,7 @@ typedef struct nav_page {
   int np_direct_close;
 
   prop_sub_t *np_close_sub;
+  prop_sub_t *np_eventsink_sub;
 
   prop_sub_t *np_direct_close_sub;
 
@@ -137,10 +138,14 @@ typedef struct navigator {
 
 } navigator_t;
 
-static void nav_eventsink(void *opaque, prop_event_t event, ...);
+static void nav_eventsink(void *opaque, event_t *e);
 
 static void nav_dtor_tracker(void *opaque, prop_event_t event, ...);
 
+static void nav_open0(navigator_t *nav, const char *url, const char *view,
+		      prop_t *origin, prop_t *model, const char *how);
+
+static void page_redirect(nav_page_t *np, const char *url);
 
 /**
  *
@@ -201,7 +206,7 @@ nav_create(prop_t *prop)
   nav->nav_eventsink = 
     prop_subscribe(0,
 		   PROP_TAG_NAME("nav", "eventsink"),
-		   PROP_TAG_CALLBACK, nav_eventsink, nav,
+		   PROP_TAG_CALLBACK_EVENT, nav_eventsink, nav,
 		   PROP_TAG_COURIER, nav_courier,
 		   PROP_TAG_ROOT, nav->nav_prop_root,
 		   NULL);
@@ -212,6 +217,20 @@ nav_create(prop_t *prop)
 		   PROP_TAG_COURIER, nav_courier,
 		   PROP_TAG_ROOT, nav->nav_prop_root,
 		   NULL);
+
+  nav_open0(nav, NAV_HOME, NULL, NULL, NULL, NULL);
+
+  static int initial_opened = 0;
+
+  if(atomic_add(&initial_opened, 1) == 0 && gconf.initial_url != NULL) {
+
+    hts_mutex_lock(&gconf.state_mutex);
+    while(gconf.state_plugins_loaded == 0)
+      hts_cond_wait(&gconf.state_cond, &gconf.state_mutex);
+    hts_mutex_unlock(&gconf.state_mutex);
+    
+    nav_open0(nav, gconf.initial_url, gconf.initial_view, NULL, NULL, NULL);
+  }
 
   return nav;
 }
@@ -235,7 +254,6 @@ nav_init(void)
 {
   nav_courier = prop_courier_create_thread(NULL, "navigator");
   bookmarks_init();
-  nav_create(prop_create(prop_get_global(), "nav"));
 }
 
 
@@ -278,16 +296,26 @@ nav_remove_from_history(navigator_t *nav, nav_page_t *np)
  *
  */
 static void
-nav_close(nav_page_t *np, int with_prop)
+page_unsub(nav_page_t *np)
 {
-  navigator_t *nav = np->np_nav;
-
-  prop_ref_dec(np->np_opened_from);
   prop_unsubscribe(np->np_close_sub);
   prop_unsubscribe(np->np_direct_close_sub);
   prop_unsubscribe(np->np_bookmarked_sub);
   prop_unsubscribe(np->np_title_sub);
   prop_unsubscribe(np->np_icon_sub);
+  prop_unsubscribe(np->np_eventsink_sub);
+}
+
+
+/**
+ *
+ */
+static void
+nav_close(nav_page_t *np, int with_prop)
+{
+  navigator_t *nav = np->np_nav;
+
+  page_unsub(np);
 
   if(nav->nav_page_current == np)
     nav->nav_page_current = NULL;
@@ -301,6 +329,7 @@ nav_close(nav_page_t *np, int with_prop)
     prop_destroy(np->np_prop_root);
     nav_update_cango(nav);
   }
+  prop_ref_dec(np->np_opened_from);
   free(np->np_url);
   free(np);
 }
@@ -443,6 +472,19 @@ nav_page_title_set(void *opaque, rstr_t *str)
  *
  */
 static void
+page_eventsink(void *opaque, event_t *e)
+{
+  nav_page_t *np = opaque;
+  if(event_is_type(e, EVENT_REDIRECT)) {
+    page_redirect(np, e->e_payload);
+  }
+}
+
+
+/**
+ *
+ */
+static void
 nav_page_icon_set(void *opaque, rstr_t *str)
 {
   nav_page_t *np = opaque;
@@ -474,7 +516,8 @@ nav_page_setup_prop(navigator_t *nav, nav_page_t *np, const char *view,
   // XXX Change this into event-style subscription
   np->np_close_sub = 
     prop_subscribe(0,
-		   PROP_TAG_ROOT, prop_create(np->np_prop_root, "close"),
+		   PROP_TAG_ROOT, np->np_prop_root,
+		   PROP_TAG_NAME("page", "close"),
 		   PROP_TAG_CALLBACK_INT, nav_page_close_set, np,
 		   PROP_TAG_COURIER, nav_courier,
 		   NULL);
@@ -483,8 +526,17 @@ nav_page_setup_prop(navigator_t *nav, nav_page_t *np, const char *view,
 
   np->np_direct_close_sub = 
     prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE,
-		   PROP_TAG_ROOT, prop_create(np->np_prop_root, "directClose"),
+		   PROP_TAG_ROOT, np->np_prop_root,
+		   PROP_TAG_NAME("page", "directClose"),
 		   PROP_TAG_CALLBACK_INT, nav_page_direct_close_set, np,
+		   PROP_TAG_COURIER, nav_courier,
+		   NULL);
+
+  np->np_eventsink_sub = 
+    prop_subscribe(0,
+		   PROP_TAG_ROOT, np->np_prop_root,
+		   PROP_TAG_NAME("page", "eventSink"),
+		   PROP_TAG_CALLBACK_EVENT, page_eventsink, np,
 		   PROP_TAG_COURIER, nav_courier,
 		   NULL);
 
@@ -537,7 +589,8 @@ nav_open0(navigator_t *nav, const char *url, const char *view, prop_t *origin,
   nav_page_setup_prop(nav, np, view, how);
 
   nav_insert_page(nav, np, origin);
-  if(backend_open(np->np_prop_root, url))
+
+  if(backend_open(np->np_prop_root, url, 0))
     nav_open_errorf(np->np_prop_root, _("No handler for URL"));
 }
 
@@ -601,11 +654,7 @@ nav_reload_current(navigator_t *nav)
 
   TRACE(TRACE_INFO, "navigator", "Reloading %s", np->np_url);
 
-  prop_unsubscribe(np->np_close_sub);
-  prop_unsubscribe(np->np_direct_close_sub);
-  prop_unsubscribe(np->np_bookmarked_sub);
-  prop_unsubscribe(np->np_title_sub);
-  prop_unsubscribe(np->np_icon_sub);
+  page_unsub(np);
 
   prop_destroy(np->np_prop_root);
   nav_page_setup_prop(nav, np, NULL, "continue");
@@ -617,7 +666,7 @@ nav_reload_current(navigator_t *nav)
 
   nav_select(nav, np, NULL);
     
-  if(backend_open(np->np_prop_root, np->np_url))
+  if(backend_open(np->np_prop_root, np->np_url, 0))
     nav_open_errorf(np->np_prop_root, _("No handler for URL"));
 }
 
@@ -626,20 +675,43 @@ nav_reload_current(navigator_t *nav)
  *
  */
 static void
-nav_eventsink(void *opaque, prop_event_t event, ...)
+page_redirect(nav_page_t *np, const char *url)
+{
+  navigator_t *nav = np->np_nav;
+
+  TRACE(TRACE_DEBUG, "navigator", "Following redirect to %s", url);
+  prop_t *p = np->np_prop_root;
+
+  page_unsub(np);
+  prop_destroy_childs(np->np_prop_root);
+  mystrset(&np->np_url, url);
+
+  nav_page_setup_prop(nav, np, NULL, NULL);
+
+  if(prop_set_parent_ex(np->np_prop_root, nav->nav_prop_pages,
+                        p, NULL)) {
+    /* nav->nav_prop_pages is a zombie, this is an error */
+    abort();
+  }
+
+  if(nav->nav_page_current == np)
+    nav_select(nav, np, NULL);
+  prop_destroy(p);
+
+  if(backend_open(np->np_prop_root, url, 0))
+    nav_open_errorf(np->np_prop_root, _("No handler for URL"));
+}
+
+
+/**
+ *
+ */
+static void
+nav_eventsink(void *opaque, event_t *e)
 {
   navigator_t *nav = opaque;
-  event_t *e;
   event_openurl_t *ou;
 
-  va_list ap;
-  va_start(ap, event);
-
-  if(event != PROP_EXT_EVENT)
-    return;
-
-  e = va_arg(ap, event_t *);
-  
   if(event_is_action(e, ACTION_NAV_BACK)) {
     nav_back(nav);
 
@@ -648,6 +720,9 @@ nav_eventsink(void *opaque, prop_event_t event, ...)
 
   } else if(event_is_action(e, ACTION_HOME)) {
     nav_open0(nav, NAV_HOME, NULL, NULL, NULL, NULL);
+
+  } else if(event_is_action(e, ACTION_PLAYQUEUE)) {
+    nav_open0(nav, "playqueue:", NULL, NULL, NULL, NULL);
 
   } else if(event_is_action(e, ACTION_RELOAD_DATA)) {
     nav_reload_current(nav);
@@ -688,11 +763,12 @@ nav_dtor_tracker(void *opaque, prop_event_t event, ...)
 int
 nav_open_error(prop_t *root, const char *msg)
 {
-  prop_t *model = prop_create(root, "model");
-  prop_set_string(prop_create(model, "type"), "openerror");
-  prop_set_int(prop_create(model, "loading"), 0);
-  prop_set_string(prop_create(model, "error"), msg);
-  prop_set_int(prop_create(root, "directClose"), 1);
+  prop_t *model = prop_create_r(root, "model");
+  prop_set(model, "type", PROP_SET_STRING, "openerror");
+  prop_set(model, "loading", PROP_SET_INT, 0);
+  prop_set(model, "error", PROP_SET_STRING, msg);
+  prop_set(root, "directClose", PROP_SET_INT, 1);
+  prop_ref_dec(model);
   return 0;
 }
 
@@ -756,7 +832,6 @@ bookmark_destroyed(void *opaque, prop_event_t event, ...)
   if(event != PROP_DESTROYED)
     return;
 
-  (void)va_arg(ap, prop_t *);
   s = va_arg(ap, prop_sub_t *);
 
   prop_unsubscribe(bm->bm_title_sub);
@@ -894,6 +969,9 @@ static void
 bookmark_add(const char *title, const char *url, const char *type,
 	     const char *icon, const char *id)
 {
+  if(title == NULL || url == NULL)
+    return;
+
   bookmark_t *bm = calloc(1, sizeof(bookmark_t));
 
   LIST_INSERT_HEAD(&bookmarks, bm, bm_link);
@@ -976,7 +1054,7 @@ bookmark_add(const char *title, const char *url, const char *type,
 		       service_get_statustxt_prop(bm->bm_service));
 
   bm->bm_delete = 
-    settings_create_action(m, _p("Delete"), bm_delete, bm, nav_courier);
+    settings_create_action(m, _p("Delete"), bm_delete, bm, 0, nav_courier);
 
   if(prop_set_parent(p, bookmark_nodes))
     abort();
@@ -1032,7 +1110,8 @@ bookmarks_init(void)
   htsmsg_t *m;
 
   bookmark_root = settings_add_dir(NULL, _p("Bookmarks"),
-				   "bookmark", NULL, NULL,
+				   "bookmark", NULL,
+				   _p("Add and remove items on homepage"),
 				   "settings:bookmarks");
 
   bookmark_nodes = prop_create(bookmark_root, "nodes");
@@ -1045,17 +1124,18 @@ bookmarks_init(void)
 		 NULL);
   
   if((m = htsmsg_store_load("bookmarks")) != NULL) {
-
     htsmsg_t *n = htsmsg_get_map(m, "nodes");
-    HTSMSG_FOREACH(f, n) {
-      htsmsg_t *o;
-      if((o = htsmsg_get_map_by_field(f)) == NULL)
-	continue;
-      htsmsg_t *p;
-      if((p = htsmsg_get_map(m, "model")) != NULL)
-	o = p;
+    if(n != NULL) {
+      HTSMSG_FOREACH(f, n) {
+	htsmsg_t *o;
+	if((o = htsmsg_get_map_by_field(f)) == NULL)
+	  continue;
+	htsmsg_t *p;
+	if((p = htsmsg_get_map(o, "model")) != NULL)
+	  o = p;
 
-      bookmark_load(o);
+	bookmark_load(o);
+      }
     }
     htsmsg_destroy(m);
     bookmarks_save();

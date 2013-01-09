@@ -57,6 +57,8 @@ struct prop_courier {
   void (*pc_prologue)(void);
   void (*pc_epilogue)(void);
 
+  int pc_refcount;
+
 };
 
 
@@ -172,6 +174,10 @@ struct prop {
 
 #define PROP_REF_TRACED            0x40
 
+  /**
+   * For mark and sweep
+   */
+#define PROP_MARKED                0x80
 
 
   /**
@@ -238,12 +244,6 @@ struct prop {
 struct prop_sub {
 
   /**
-   * Refcount. Not protected by mutex. Modification needs to be issued
-   * using atomic ops.
-   */
-  int hps_refcount;
-
-  /**
    * Callback. May never be changed. Not protected by mutex
    */
   void *hps_callback;
@@ -277,6 +277,13 @@ struct prop_sub {
   prop_lockmgr_t *hps_lockmgr;
 
   /**
+   * Refcount. Not protected by mutex. Modification needs to be issued
+   * using atomic ops.
+   */
+  int hps_refcount;
+
+
+  /**
    * Set when a subscription is destroyed. Protected by hps_lock.
    * In other words. It's impossible to destroy a subscription
    * if no lock is specified.
@@ -293,6 +300,11 @@ struct prop_sub {
    * Flags as passed to prop_subscribe(). May never be changed
    */
   uint16_t hps_flags;
+
+  /**
+   * Extra value for use by caller
+   */
+  int hps_user_int;
 
   /**
    * Linkage to property. Protected by global mutex
@@ -327,6 +339,9 @@ void prop_unparent0(prop_t *p, prop_sub_t *skipme);
 int prop_destroy0(prop_t *p);
 
 void prop_unsubscribe0(prop_sub_t *s);
+
+void prop_notify_child2(prop_t *child, prop_t *parent, prop_t *sibling,
+			prop_event_t event, prop_sub_t *skipme, int flags);
 
 void prop_notify_childv(prop_vec_t *childv, prop_t *parent, prop_event_t event,
 			prop_sub_t *skipme, prop_t *p2);

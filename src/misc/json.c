@@ -21,7 +21,7 @@
 #include <limits.h>
 #include <stdio.h>
 #include "json.h"
-#include "string.h"
+#include "str.h"
 #include "dbl.h"
 
 #define NOT_THIS_TYPE ((void *)-1)
@@ -279,6 +279,9 @@ static const char *
 json_parse_double(const char *s, double *dp)
 {
   const char *ep;
+  while(*s > 0 && *s < 33)
+    s++;
+
   double d = my_str2double(s, &ep);
 
   if(ep == s)
@@ -296,7 +299,11 @@ static char *
 json_parse_integer(const char *s, long *lp)
 {
   char *ep;
+  while(*s > 0 && *s < 33)
+    s++;
   const char *s2 = s;
+  if(*s2 == '-')
+    s2++;
   while(*s2 >= '0' && *s2 <= '9')
     s2++;
 

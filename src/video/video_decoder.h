@@ -19,8 +19,6 @@
 #ifndef VIDEO_DECODER_H
 #define VIDEO_DECODER_H
 
-#include <libavcodec/avcodec.h>
-
 #include "media.h"
 #include "misc/avgtime.h"
 #include "misc/kalman.h"
@@ -35,53 +33,15 @@ TAILQ_HEAD(video_overlay_queue, video_overlay);
 #define VIDEO_DECODER_REORDER_SIZE 16
 #define VIDEO_DECODER_REORDER_MASK (VIDEO_DECODER_REORDER_SIZE-1)
 
-struct AVCodecContext;
+struct AVCodecontext;
 struct AVFrame;
 struct video_decoder;
 struct pixmap;
-
-typedef enum {
-  FRAME_BUFFER_TYPE_BLACKOUT,
-  FRAME_BUFFER_TYPE_LIBAV_FRAME,
-  FRAME_BUFFER_TYPE_RSX_MEMORY,
-} frame_buffer_type_t;
-
-
-typedef struct frame_info {
-  int width;
-  int height;
-  int pix_fmt;
-  int64_t pts;
-  int epoch;
-  int duration;
-
-  AVRational dar;
-
-  char interlaced;     // Frame delivered is interlaced 
-  char tff;            // For interlaced frame, top-field-first
-  char prescaled;      // Output frame is prescaled to requested size
-  
-  enum AVColorSpace color_space;
-  enum AVColorRange color_range;
-
-
-} frame_info_t;
-
-
-/**
- *
- */
-typedef void (vd_frame_deliver_t)(frame_buffer_type_t type, void *frame,
-				  const frame_info_t *info, void *opaque);
 
 /**
  *
  */
 typedef struct video_decoder {
-
-  void *vd_opaque;
-
-  vd_frame_deliver_t *vd_frame_deliver;
 
   hts_thread_t vd_decoder_thread;
 
@@ -102,7 +62,7 @@ typedef struct video_decoder {
   int vd_prevpts_cnt;
   int vd_estimated_duration;
 
-  AVFrame *vd_frame;
+  struct AVFrame *vd_frame;
 
   /* Clock (audio - video sync, etc) related members */
 
@@ -169,9 +129,7 @@ typedef struct video_decoder {
   struct media_buf vd_reorder[VIDEO_DECODER_REORDER_SIZE];
 } video_decoder_t;
 
-video_decoder_t *video_decoder_create(media_pipe_t *mp, 
-				      vd_frame_deliver_t *frame_delivery,
-				      void *opaque);
+video_decoder_t *video_decoder_create(media_pipe_t *mp);
 
 void video_decoder_stop(video_decoder_t *gv);
 
@@ -179,20 +137,16 @@ void video_decoder_destroy(video_decoder_t *gv);
 
 void video_deliver_frame_avctx(video_decoder_t *vd,
 			       media_pipe_t *mp, media_queue_t *mq,
-			       AVCodecContext *ctx, AVFrame *frame,
+			       struct AVCodecContext *ctx,
+                               struct AVFrame *frame,
 			       const media_buf_t *mb, int decode_time);
 
-void video_deliver_frame(video_decoder_t *vd,
-			 frame_buffer_type_t type, void *frame,
-			 const frame_info_t *info,
-			 int send_pts);
+void video_deliver_frame(video_decoder_t *vd, const frame_info_t *info);
 
 void video_decoder_set_accelerator(video_decoder_t *vd,
 				   void (*stopfn)(void *opaque),
 				   void (*blackoutfn)(void *opaque),
 				   void *opaque);
-
-void video_decoder_scan_ext_sub(video_decoder_t *vd, int64_t pts);
 
 #endif /* VIDEO_DECODER_H */
 

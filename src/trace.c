@@ -31,57 +31,22 @@ static prop_t *log_root;
 static int entries;
 
 TAILQ_HEAD(trace_entry_queue, trace_entry);
-
-struct trace_entry_queue traces;
-
-typedef struct trace_entry {
-  TAILQ_ENTRY(trace_entry) link;
-  prop_t *p;
-} trace_entry_t;
-
-extern int trace_level;
-
-static int trace_initialized;
-static int log_fd;
-static int64_t log_start_ts;
-
-/**
- *
- */
-static void
-trace_prop(int l, const char *pfx, const char *msg, const char *sev)
-{
-  trace_entry_t *te = malloc(sizeof(trace_entry_t));
-  te->p = prop_create_root(NULL);
-
-  prop_set_string(prop_create(te->p, "prefix"), pfx);
-  prop_set_string(prop_create(te->p, "message"), msg);
-  prop_set_string(prop_create(te->p, "severity"), sev);
-
-  TAILQ_INSERT_TAIL(&traces, te, link);
-
-
-  if(prop_set_parent(te->p, log_root))
-    abort();
-
-  entries++;
-
-  if(entries > 50) {
-    te = TAILQ_FIRST(&traces);
-    TAILQ_REMOVE(&traces, te, link);
-    prop_destroy(te->p);
-    free(te);
-    entries--;
-  }
-}
-
 SIMPLEQ_HEAD(tracetmp_queue, tracetmp);
+
+
 
 typedef struct tracetmp {
   SIMPLEQ_ENTRY(tracetmp) link;
   const char *s1;
   const char *s2;
 } tracetmp_t;
+
+
+extern int trace_level;
+
+static int trace_initialized;
+static int log_fd;
+static int64_t log_start_ts;
 
 
 
@@ -123,13 +88,14 @@ tracev(int flags, int level, const char *subsys, const char *fmt, va_list ap)
   l = strlen(buf2);
 
   while((s = strsep(&p, "\n")) != NULL) {
-    if(level <= trace_level)
+    if(level <= gconf.trace_level)
       trace_arch(level, buf2, s);
     if(!(flags & TRACE_NO_PROP) && level != TRACE_EMERG) {
       tt = alloca(sizeof(tracetmp_t));
       tt->s1 = mystrdupa(buf2);
       tt->s2 = mystrdupa(s);
       SIMPLEQ_INSERT_TAIL(&q, tt, link);
+      entries++;
     }
     if(log_fd != -1) {
       int ts = (showtime_get_ts() - log_start_ts) / 1000LL;
@@ -151,9 +117,33 @@ tracev(int flags, int level, const char *subsys, const char *fmt, va_list ap)
   }
 
 
+  int zapcnt = 0;
+  if(entries > 50) {
+    zapcnt = entries - 50;
+    entries = 50;
+  }
+
   hts_mutex_unlock(&trace_mutex);
-  SIMPLEQ_FOREACH(tt, &q, link)
-    trace_prop(level, tt->s1, tt->s2, leveltxt);
+
+  rstr_t *rlev = rstr_alloc(leveltxt);
+
+  SIMPLEQ_FOREACH(tt, &q, link) {
+    prop_t *p = prop_create_root(NULL);
+
+    prop_set_string(prop_create(p, "prefix"), tt->s1);
+    prop_set_string(prop_create(p, "message"), tt->s2);
+    prop_set_rstring(prop_create(p, "severity"), rlev);
+    
+    if(prop_set_parent(p, log_root))
+      abort();
+  }
+
+  rstr_release(rlev);
+
+  while(zapcnt > 0) {
+    prop_destroy_first(log_root);
+    zapcnt--;
+  }
 }
 
 
@@ -224,21 +214,24 @@ trace_init(void)
   char p1[PATH_MAX], p2[PATH_MAX];
   int i;
 
-  snprintf(p1, sizeof(p1), "%s/log", showtime_cache_path);
+  if(!gconf.trace_level)
+    gconf.trace_level = TRACE_INFO;
+
+  snprintf(p1, sizeof(p1), "%s/log", gconf.cache_path);
   mkdir(p1, 0777);
 
   // Rotate logfiles
 
-  snprintf(p1, sizeof(p1), "%s/log/showtime.log.5", showtime_cache_path);
+  snprintf(p1, sizeof(p1), "%s/log/showtime.log.5", gconf.cache_path);
   unlink(p1);
 
   for(i = 4; i >= 0; i--) {
-    snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", showtime_cache_path,i);
-    snprintf(p2, sizeof(p2), "%s/log/showtime.log.%d", showtime_cache_path,i+1);
+    snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", gconf.cache_path,i);
+    snprintf(p2, sizeof(p2), "%s/log/showtime.log.%d", gconf.cache_path,i+1);
     rename(p1, p2);
   }
   
-  snprintf(p1, sizeof(p1), "%s/log/showtime.log.0", showtime_cache_path);
+  snprintf(p1, sizeof(p1), "%s/log/showtime.log.0", gconf.cache_path);
   log_fd = open(p1, O_CREAT | O_TRUNC | O_WRONLY, 0644);
   static const char logstartmark[] = "--MARK-- START\n";
   if(write(log_fd, logstartmark, strlen(logstartmark)) !=
@@ -247,7 +240,6 @@ trace_init(void)
     log_fd = -1;
   }
   log_start_ts = showtime_get_ts();
-  TAILQ_INIT(&traces);
   log_root = prop_create(prop_get_global(), "logbuffer");
   hts_mutex_init(&trace_mutex);
   trace_initialized = 1;

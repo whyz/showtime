@@ -2,52 +2,79 @@ language: Portuguese
 native: Português
 maintainer: andreus sebes
 #
-# ./glwthemes/mono/commandmenu/cmd_root.view
+# ./glwskins/default/cmdmenu.view
 #
-id: Audio settings
-msg: Configurações de áudio
+id: Add current page to bookmarks
+msg: Adicionar página atual aos favoritos
 
-id: Languages
-msg: Idiomas
+id: Open settings
+msg: Abrir configurações
 
-id: Settings
-msg: Configurações
-
-id: Subtitle settings
-msg: Configurações de legendas
-
-id: Video settings
-msg: Configurações de vídeo
+id: Remove current page from bookmarks
+msg: Remover página atual dos favoritos
 
 #
-# ./glwthemes/mono/directoryviews/infobox/audio.view
+# ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
-id: Added by: %s
-msg: Adicionado por: %s
+id: Exit Showtime
+msg: Sair do Showtime
 
-id: Played %d times
-msg[0]: Reproduzido %d vezes
-msg[1]: Reproduzidos %d vezes
+id: Go to Home screen
+msg: Ir para a página inicial
+
+id: Navigation
+msg: Navegação
+
+id: Open Settings
+msg: Abrir Configurações
+
+id: Playqueue
+msg: Lista de reprodução
+
+id: Power off
+msg: Desligar
+
+id: Reload current page
+msg: Recarregar página atual
+
+id: Suspend
+msg: Suspender
+
+id: System
+msg: Sistema
 
 #
-# ./glwthemes/mono/directoryviews/list2/center_directory.view
+# ./glwskins/default/cmdmenu/cmdmenu_dir.view
 #
-id: %d entries
-msg[0]: %d entrada
-msg[1]: %d entradas
+id: Add '%s' to home screen
+msg: Adicionar '%s' à página inicial
+
+id: Remove '%s' from home screen
+msg: Remover '%s' da página inicial
 
 #
-# ./glwthemes/mono/directoryviews/list2/center_playlist.view
+# ./glwskins/default/cmdmenu/cmdmenu_item.view
 #
-id: %d tracks
-msg[0]: %d faixa
-msg[1]: %d faixas
+id: Continue from %s
+msg: Continuar a partir de %s
 
-#
-# ./glwthemes/mono/directoryviews/list2/options_audio.view
-#
+id: Continue playback here
+msg: Continuar reprodução aqui
+
 id: Delete
 msg: Eliminar
+
+id: Mark as seen
+msg: Marcar como visto
+
+id: Mark as unseen
+msg: Marcar como não visto
+
+id: Play from beginning
+msg: Reproduzir do início
+
+id: Play until end of list
+msg: Reproduzir até ao fim da lista
 
 id: Queue
 msg: Lista de espera
@@ -59,31 +86,49 @@ id: Unstar
 msg: Remover voto
 
 #
-# ./glwthemes/mono/include/buttons.view
+# ./glwskins/default/cmdmenu/cmdmenu_video.view
 #
-id: Off
-msg: Deslig.
+id: Audio
+msg: Áudio 
 
-id: On
-msg: Ligado
+id: Audio settings
+msg: Configurações de áudio
+
+id: Audio tracks
+msg: Faixas de áudio
+
+id: Seek by time
+msg: Procurar por tempo
+
+id: Settings
+msg: Configurações
+
+id: Subtitle settings
+msg: Configurações de legendas
+
+id: Subtitle tracks
+msg: Faixas de legendas
+
+id: Subtitles
+msg: Legendas
+
+id: Video
+msg: Vídeo
+
+id: Video menu
+msg: Menu de vídeo
+
+id: Video settings
+msg: Configurações de vídeo
 
 #
-# ./glwthemes/mono/include/infobox.view
+# ./glwskins/default/log.view
 #
-id: Enqueue
-msg: Adicionar à lista
+id: System log
+msg: Log de sistema
 
 #
-# ./glwthemes/mono/include/popup.view
-#
-id: Cancel
-msg: Cancelar
-
-id: OK
-msg: OK
-
-#
-# ./glwthemes/mono/pages/about.view
+# ./glwskins/default/pages/about.view
 #
 id: Allocated by application: %d kB
 msg: Alocada pela aplicação: %d kB
@@ -101,7 +146,7 @@ id: Display info
 msg: Informações de visualização
 
 id: Framerate: %.2f Hz
-msg: Taxa de quadros: %.2f Hz
+msg: Framerate: %.2f Hz
 
 id: Free chunks: %d
 msg: Chunks livres: %d
@@ -137,67 +182,238 @@ id: Windowmanager: %s
 msg: Gestor de janelas: %s
 
 #
-# ./glwthemes/mono/pages/about_top.view
+# ./glwskins/default/pages/directory.view
 #
-id: About
-msg: Sobre
+id: Album
+msg: Álbum
+
+id: Artist
+msg: Artista
+
+id: Custom
+msg: Personalizado
+
+id: Images
+msg: Imagens
+
+id: List
+msg: Lista
+
+id: Slideshow
+msg: Slideshow
+
+id: Tvchannels
+msg: Canais de TV
+
+id: View
+msg: Vista
 
 #
-# ./glwthemes/mono/pages/home_top.view
+# ./glwskins/default/pages/discovered.view
 #
-id: Home
-msg: Início
+id: Discovered resources on local network
+msg: Recursos descobertos na rede local
 
 #
-# ./glwthemes/mono/pages/openerror.view
+# ./glwskins/default/pages/home.view
+#
+id: Tiled
+msg: Azulejos
+
+#
+# ./glwskins/default/pages/home_clist.view
+#
+id: About Showtime
+msg: Acerca do Showtime
+
+id: Dismiss
+msg: Anular
+
+id: Plugins
+msg: Plugins
+
+#
+# ./glwskins/default/pages/iteminfo/image.view
+#
+id: Camera: 
+msg: Camera:
+
+id: Date: 
+msg: Data:
+
+#
+# ./glwskins/default/pages/iteminfo/plugin.view
+#
+id: Author: 
+msg: Autor:
+
+id: Available version: 
+msg: Versão disponível
+
+id: Installed version: 
+msg: Versão instalada
+
+id: Showtime %s or newer is required
+msg: É necessária a versão %s do Showtime ou uma versão mais recente
+
+#
+# ./glwskins/default/pages/iteminfo/video.view
+#
+id: Duration:
+msg: Duração:
+
+id: File date:
+msg: Data do ficheiro:
+
+id: Genre:
+msg: Género:
+
+id: Metadata from
+msg: Metadados de
+
+id: Rating:
+msg: Avaliação:
+
+id: Year:
+msg: Ano:
+
+#
+# ./glwskins/default/pages/listitems/add.view
+#
+id: Add new entry
+msg: Adicionar nova entrada
+
+#
+# ./glwskins/default/pages/listitems/bool.view
+#
+id: No
+msg: Não
+
+id: Yes
+msg: Sim
+
+#
+# ./glwskins/default/pages/listitems/font.view
+#
+id: Condensed
+msg: Condensado
+
+id: Main
+msg: Principal
+
+id: Subs
+msg: Subs
+
+#
+# ./glwskins/default/pages/listitems/plugin.view
+#
+id: Install
+msg: Instalar
+
+id: Uninstall
+msg: Desinstalar
+
+id: Upgrade
+msg: Atualizar
+
+#
+# ./glwskins/default/pages/openerror.view
 #
 id: Unable to open resource
 msg: Não foi possível abrir o recurso
 
 #
-# ./glwthemes/mono/pages/openerror_top.view
-#
-id: Page load error
-msg: Erro ao carregar página
-
-#
-# ./glwthemes/mono/pages/playqueue_top.view
-#
-id: Playqueue
-msg: Lista de reprodução
-
-#
-# ./glwthemes/mono/pages/video.view
-#
-id: Playback status
-msg: Estado da reprodução
-
-id: Unable to start video playback
-msg: Não foi possível iniciar a reprodução do vídeo
-
-#
-# ./glwthemes/mono/playdecks/dvd.view
-#
-id: Chapter %d / %d
-msg: Capítulo %d / %d
-
-id: Title %d / %d
-msg: Título %d / %d
-
-#
-# ./glwthemes/mono/playdecks/tracks.view
+# ./glwskins/default/pages/playqueue.view
 #
 id: Track %d / %d
 msg: Faixa %d / %d
 
 #
-# ./glwthemes/mono/playdecks/video.view
+# ./glwskins/default/pages/slideshow.view
+#
+id: Paused
+msg: Em pausa
+
+#
+# ./glwskins/default/pages/upgrade.view
+#
+id: An error occured during download
+msg: Um erro aconteceu durante o download
+
+id: Available version:
+msg: Versão disponível
+
+id: Changelog for %s releases
+msg: Log de alterações para as releases %s
+
+id: Check for updates now
+msg: Procurar por atualizações agora
+
+id: Checking for updates...
+msg: A procurar por atualizações...
+
+id: Current version:
+msg: Versão atual:
+
+id: Download and install...
+msg: Efetuar download e instalar...
+
+id: Downloading...
+msg: A efetuar download...
+
+id: Installing...
+msg: A instalar...
+
+id: New version %s is available for download
+msg: Uma nova versão %s está disponível para download
+
+id: No upgrade available
+msg: Não existem atualizações disponíveis
+
+id: Restarting Showtime in %d seconds...
+msg: A reiniciar o Showtime em %s segundos
+
+id: Retry...
+msg: Tentar novamente...
+
+id: Showtime is up to date
+msg: O Showtime está atualizado
+
+id: Stable
+msg: Estável
+
+id: Testing
+msg: Testes
+
+id: Unable to query for new version
+msg: Não foi possível procurar uma nova versão
+
+#
+# ./glwskins/default/pages/video.view
 #
 id: CPU is too slow to decode this video
 msg: O CPU é muito lento para descodificar este vídeo
 
+id: Playback status
+msg: Estado da reprodução
+
 #
-# ./glwthemes/mono/popups/auth.view
+# ./glwskins/default/pages/wideinfo/video.view
+#
+id: Seen:
+msg: Visto:
+
+#
+# ./glwskins/default/playdecks/dvd.view
+#
+id: Chapter: %d
+msg: Capítulo: %d
+
+id: Title: %d
+msg: Título: %d
+
+#
+# ./glwskins/default/popups/auth.view
 #
 id: Domain
 msg: Domínio
@@ -212,49 +428,34 @@ id: Username
 msg: Nome do utilizador
 
 #
-# ./glwthemes/mono/screensaver.view
+# ./glwskins/default/popups/common.view
+#
+id: Cancel
+msg: Cancelar
+
+id: OK
+msg: OK
+
+#
+# ./glwskins/default/screensaver.view
 #
 id: No media loaded
 msg: Nenhum media carregado
 
 #
-# ./glwthemes/mono/sysinfo.view
+# ./glwskins/default/sysinfo.view
 #
-id: Audio output
-msg: Saída de áudio
-
-id: CPUs
-msg: CPUs
-
-id: GPU & Display
-msg: GPU & Visualização
-
-id: GPU Core temperature: %d / %d °
-msg: Temperatura do núcleo do GPU: %d / %d °
+id: Memory usage:
+msg: Uso de memória:
 
 #
-# ./glwthemes/mono/universe.view
+# ./glwskins/default/universe.view
 #
-id: Adjust background tint based on daytime
-msg: Ajustar a tonalidade do fundo dependendo da altura do dia
-
-id: Alternate list layout
-msg: Disposição em lista alternativo
-
 id: Audio muted
 msg: Sem áudio
 
-id: Fancy UI animations
-msg: Animações do IU
-
 id: Master volume: %d dB
 msg: Volume principal: %d dB
-
-id: Multilingual 'No media loaded'
-msg: 'Nenhum media carregado' multilíngue
-
-id: Top bar navigation buttons
-msg: Botões de navegação na barra superior
 
 #
 # ./src/api/opensubtitles.c
@@ -266,7 +467,16 @@ id: Use opensubtitles.org
 msg: Utilizar o opensubtitles.org
 
 #
-# ./src/arch/arch_ps3.c
+# ./src/api/tmdb.c
+#
+id: Language (ISO 639-1 code)
+msg: Idioma (código ISO 639-1)
+
+id: Use original title
+msg: Usar título original
+
+#
+# ./src/arch/ps3/ps3_main.c
 #
 id: System is low on memory (%d kB RAM available)
 msg: O sistema está com pouca memória (%d kB RAM disponível)
@@ -274,6 +484,9 @@ msg: O sistema está com pouca memória (%d kB RAM disponível)
 #
 # ./src/audio/audio.c
 #
+id: Audio output
+msg: Saída de áudio
+
 id: Audio/Video sync delay
 msg: Atraso de sincronização de áudio/vídeo
 
@@ -284,10 +497,10 @@ id: Force stereo downmix
 msg: Forçar stereo downmix
 
 id: Phantom LFE
-msg: LFE fantasma
+msg: Fantasma LFE
 
 id: Phantom center
-msg: Center fantasma
+msg: Fantasma center
 
 id: Select audio output device and related configurations
 msg: Selecionar o dispositivo de saída de áudio e configurações relacionadas
@@ -340,11 +553,17 @@ msg: Resultado da pesquisa por: %s
 #
 # ./src/backend/spotify/spotify.c
 #
+id: Albums
+msg: Álbuns
+
 id: Automatic login when Showtime starts
 msg: Login automático quando o Showtime iniciar
 
 id: Collaborative
 msg: Colaborativo
+
+id: Compilations
+msg: Compilações
 
 id: Enable Spotify
 msg: Ativar Spotify
@@ -382,6 +601,9 @@ msg: Relogin (trocar utilizador)
 id: Search result
 msg: Resultado da pesquisa
 
+id: Singles
+msg: Singles
+
 id: Spotify friends
 msg: Amigos do Spotify
 
@@ -401,10 +623,13 @@ id: Starred
 msg: Estrelado
 
 #
-# ./src/bookmarks.c
+# ./src/blobcache_file.c
 #
-id: Bookmarks
-msg: Bookmarks
+id: Cache cleared
+msg: Cache limpa
+
+id: Clear cached files
+msg: Limpar ficheiros de cache
 
 #
 # ./src/fileaccess/fa_backend.c
@@ -420,6 +645,39 @@ msg: Não foi possível abrir o ficheiro: %s
 #
 id: Search using Unix locatedb
 msg: Procurar utilizando o locatedb do Unix
+
+#
+# ./src/fileaccess/fa_nativesmb.c
+#
+id: Access denied
+msg: Acesso não permitido
+
+id: Account restricted
+msg: Conta restringida
+
+id: Bad network share name
+msg: Problemas no nome da partilha de rede
+
+id: Logon failure
+msg: Falha no login
+
+#
+# ./src/fileaccess/fa_scanner.c
+#
+id: Date
+msg: Data
+
+id: Filename
+msg: Nome de ficheiro
+
+id: Show only supported files
+msg: Mostrar apenas ficheiros suportados
+
+id: Sort folders first
+msg: Ordenar pastas primeiro
+
+id: Sort on
+msg: Ordenar por
 
 #
 # ./src/fileaccess/fa_spotlight.c
@@ -441,6 +699,9 @@ msg: Idioma
 
 id: Language codes should be configured as three character ISO codes, example (eng, swe, fra)
 msg: Os códigos de idioma devem ser configurados com códigos ISO de 3 caracteres (ex: eng, fra, por)
+
+id: Languages
+msg: Idiomas
 
 id: Preferred languages
 msg: Idiomas preferidos
@@ -488,6 +749,15 @@ id: Keymapper
 msg: Mapeamento do teclado
 
 #
+# ./src/keyring.c
+#
+id: Forget remembered passwords
+msg: Esquecer passwords guardadas
+
+id: Rembered passwords erased
+msg: Passwords guardadas apagadas
+
+#
 # ./src/media.c
 #
 id: Align subtitles on video frame
@@ -508,29 +778,212 @@ msg: Zoom de vídeo
 #
 # ./src/metadata/metadata.c
 #
+id: Automatic
+msg: Automático
+
+id: Custom search query
+msg: Chave de pesquisa personalizada
+
+id: Custom title
+msg: Título personalizado
+
 id: Embedded in file
 msg: Embebido no ficheiro
+
+id: Enabled
+msg: Ativo
+
+id: IMDb ID
+msg: ID do IMDb
+
+id: Metadata
+msg: Metadados
+
+id: Metadata configuration and provider settings
+msg: Configuração de metadados e de fornecedores de dados
+
+id: Metadata loaded from '%s' using %s
+msg: Metadados carregados de '%s' utilizando %s
+
+id: Metadata search
+msg: Pesquisa de metadados
+
+id: Metadata source
+msg: Fonte dos metadados
+
+id: Movie
+msg: Filme
+
+id: No data found
+msg: Não foram encontrados dados
+
+id: None
+msg: Nenhum
+
+id: Providers for Music
+msg: Fornecedores de dados de Música
+
+id: Providers for Video
+msg: Fornecedores de vídeo
+
+id: Refresh metadata
+msg: Atualizar metadados
 
 id: Track %d
 msg: Faixa %d
 
+id: custom IMDb ID
+msg: ID do IMDb personalizado
+
+id: custom query
+msg: pesquisa personalizada
+
+id: filename
+msg: nome de ficheiro
+
+id: filename as TV episode
+msg: nome do ficheiro como um episódio de TV
+
+id: folder name
+msg: nome de pasta
+
+#
+# ./src/metadata/metadb.c
+#
+id: %d items deleted
+msg: %d items apagado(s)
+
+id: Clear all metadata
+msg: Limpar todos os metadados
+
+id: Clearing all metadata means losing <b>all</b> information about:\n\nIf a track/movie has been seen\nNumber of times a track/movie has been played\nPlayback resume position\n\nIt will also erase the metadata cached from external sources such as themoviedb.org, etc\n\nAre you sure you proceed?
+msg: Limpar todos os metadados significa perder <b>toda</b> a informação sobre:\n\nSe uma faixa/filme foi vista\nO número de vezes que uma faixa/filme foi reproduzido\nA posição de resumo da reprodução\n\nE também vai apagar os metadados em cache de fontes externas como o themoviedb.org, etc\n\nTem a certeza que quer continuar?
+
 #
 # ./src/navigator.c
 #
+id: Add and remove items on homepage
+msg: Adicionar e remover items na página inicial
+
+id: Added new bookmark: %s
+msg: Adicionar novo favorito: %s
+
+id: Bookmarks
+msg: Favoritos
+
+id: Music
+msg: Música
+
 id: No handler for URL
 msg: Nenhum handler para o URL
+
+id: Other
+msg: Outro
+
+id: Photos
+msg: Fotografias
+
+id: Removed bookmark: %s
+msg: Favorito removido: %s
+
+id: TV
+msg: TV
+
+id: Title
+msg: Título
+
+id: Type
+msg: Tipo
+
+id: URL
+msg: Endereço
 
 #
 # ./src/plugins.c
 #
-id: Invalud URI
-msg: URI inválido
+id: Alternate plugin Repository URL
+msg: Repositótio de plugins alternativo
 
-id: Plugin ID %s does not exist
-msg: O plugin com o ID %s não existe
+id: Automatically upgrade plugins
+msg: Atualizar automaticamente os plugins
 
-id: Plugin ID %s have no download URL
-msg: O plugin com o ID %s não tem URL de download
+id: Available plugins
+msg: Plugins disponíveis
+
+id: Background
+msg: Fundo
+
+id: Beta testing passwords
+msg: Palavras-passe de testes beta
+
+id: Browse available plugins
+msg: Listar plugins disponíveis
+
+id: Browsing
+msg: Navegando
+
+id: Cloud services
+msg: Serviços em cloud
+
+id: Corrupt plugin bundle
+msg: Bundle de plugin corrupto
+
+id: Default
+msg: Por defeito
+
+id: Disk write error
+msg: Erro de escrita em disco
+
+id: Downloading
+msg: A efetuar download
+
+id: File open error
+msg: Erro ao abrir o ficheiro
+
+id: Home page
+msg: Página inicial
+
+id: Installed plugins
+msg: Plugins instalados
+
+id: Installed version higher than available
+msg: Está instalada uma versão mais atual que a disponível
+
+id: Installing
+msg: A instalar
+
+id: List of albums
+msg: Lista de álbuns
+
+id: Loading screen
+msg: Ecrã a carregar 
+
+id: Movies
+msg: Filmes
+
+id: Music streaming
+msg: Streaming de música
+
+id: Not installable
+msg: Não instalável
+
+id: Not installed
+msg: Não instalado
+
+id: Not upgradable
+msg: Não atualizável
+
+id: Online TV
+msg: TV online
+
+id: Preferred views from plugins
+msg: Vistas de plugins preferidas
+
+id: Screen saver
+msg: Protetor de ecrã
+
+id: TV channels
+msg: Canais de TV
 
 id: Unable to load plugin.json: %s
 msg: Não foi possível carregar o plugin.json: %s
@@ -538,8 +991,23 @@ msg: Não foi possível carregar o plugin.json: %s
 id: Unable to load plugin.json: Malformed JSON
 msg: Não foi possível carregar o plugin.json: sintaxe de JSON incorreta
 
-id: Unable to request plugin repository: %s
-msg: Não foi possível obter o repositório de plugins: %s
+id: Uncategorized
+msg: Não categorizado
+
+id: Up to date
+msg: Atualizado
+
+id: Upgradable
+msg: Pode ser atualizado
+
+id: Upgraded plugin %s to version %s
+msg: Plusgin %s atualizado para a versão %s
+
+id: User interface extensions
+msg: Extensões de interface de utilizador
+
+id: Video streaming
+msg: Streaming de vídeo
 
 #
 # ./src/runcontrol.c
@@ -547,20 +1015,29 @@ msg: Não foi possível obter o repositório de plugins: %s
 id: Automatic standby
 msg: Modo de espera automático
 
-id: Run control
-msg: Controle de execução
+id: Logout
+msg: Logout
+
+id: Open shell
+msg: Abrir shell
+
+id: Power off system
+msg: Desligar o sistema
+
+id: Starting and stopping Showtime
+msg: Iniciar e parar o Showtime
 
 #
 # ./src/sd/sd.c
 #
-id: Enabled
-msg: Ativo
-
 id: Name
 msg: Nome
 
-id: Type
-msg: Tipo
+#
+# ./src/service.c
+#
+id: Local network
+msg: Rede local
 
 #
 # ./src/settings.c
@@ -568,18 +1045,54 @@ msg: Tipo
 id: Applications and installed plugins
 msg: Aplicações e plugins instalados
 
+id: Developer settings
+msg: Configurações de programador
+
 id: Discovered media sources
 msg: Fontes de media descobertos
+
+id: Fonts and user interface styling
+msg: Estilos de fontes e interface de utilizador
+
+id: General
+msg: Geral
 
 id: Global settings
 msg: Definições globais
 
-#
-# ./src/ui/glw/glw.c
-#
-id: Display and user interface
-msg: Visualização e interface do utilizador
+id: Look and feel
+msg: Olhar e sentir
 
+id: Settings useful for developers
+msg: Configurações úteis para programadores
+
+id: System related settings
+msg: Configurações relacionadas com o sistema
+
+#
+# ./src/text/fontstash.c
+#
+id: Narrow text
+msg: Texto estreito
+
+id: Unable to load %s -- %s
+msg: Não foi possível carregar %s -- %s
+
+id: Unable to open %s for writing
+msg: Não foi possível abrir para escrita %s
+
+id: Unable to write to %s
+msg: Não foi possível escrever em %s
+
+id: Use font %s for
+msg: Usar a fonte %s para
+
+id: User interface
+msg: Interface de utilizador
+
+#
+# ./src/ui/glw/glw_settings.c
+#
 id: Horizontal underscan
 msg: Underscan horizontal
 
@@ -595,9 +1108,6 @@ msg: Underscan vertical
 #
 # ./src/ui/glw/glw_x11.c
 #
-id: Fullscreen mode
-msg: Modo de ecrã inteiro
-
 id: Map mouse wheel to up/down
 msg: Mapear a roda do rato para cima/baixo
 
@@ -617,10 +1127,28 @@ id: Video modes
 msg: Modos de vídeo
 
 #
+# ./src/upgrade.c
+#
+id: Notify about upgrades
+msg: Notificar por atualizações
+
+id: Open download page
+msg: Abrir página de download
+
+id: Showtime version %s is available
+msg: A versão %s do Showtime está disponível
+
+id: Software upgrade
+msg: Atualização de software
+
+id: Upgrade to releases from
+msg: Atualizar para releases desde
+
+#
 # ./src/upnp/upnp.c
 #
 id: Enabled on home screen
-msg: Ativo no ecrã de início
+msg: Ativo na página inicial
 
 #
 # ./src/upnp/upnp_browse.c
@@ -685,6 +1213,9 @@ msg: Cor
 id: Count video as played when reaching
 msg: Marcar vídeo como reproduzido quando chegar a
 
+id: Enable VDA
+msg: Ativar VDA
+
 id: Enable VDPAU
 msg: Ativar VDPAU
 
@@ -706,11 +1237,11 @@ msg: Esquerda
 id: Maximum resolution for deinterlacer
 msg: Resolução máxima para o deinterlacer
 
-id: No
-msg: Não
-
 id: No limit
 msg: Sem limite
+
+id: Off
+msg: Deslig.
 
 id: Outline color
 msg: Cor do contorno
@@ -751,9 +1282,6 @@ msg: Tamanho e posição das legendas
 id: Subtitle styling
 msg: Estilo das legendas
 
-id: Subtitles
-msg: Legendas
-
 id: Temporal
 msg: Temporal
 
@@ -765,7 +1293,4 @@ msg: Acelaração de vídeo e comportamento da visualização
 
 id: Video playback
 msg: Reprodução de vídeo
-
-id: Yes
-msg: Sim
 

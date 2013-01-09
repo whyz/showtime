@@ -43,10 +43,10 @@ fa_search_destroy(fa_search_t *fas)
 {
   free(fas->fas_query);
   
+  prop_unsubscribe(fas->fas_sub);
+  
   if (fas->fas_pc)
     prop_courier_destroy(fas->fas_pc);
-  
-  prop_unsubscribe(fas->fas_sub);
   
   if (fas->fas_nodes)
     prop_ref_dec(fas->fas_nodes);
@@ -194,7 +194,7 @@ spotlight_searcher(void *aux)
     path = malloc(len);
     CFStringGetCString(pathRef, path, len, kCFStringEncodingUTF8);
     CFRelease(pathRef);
-    metadata_t *md = fa_probe_metadata(path, NULL, 0);
+    metadata_t *md = fa_probe_metadata(path, NULL, 0, NULL);
     
     if(md == NULL)
       continue;

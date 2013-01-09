@@ -260,9 +260,12 @@ glw_event_map_deliverEvent_fire(glw_t *w, glw_event_map_t *gem, event_t *src)
 {
   glw_event_deliverEvent_t *de = (glw_event_deliverEvent_t *)gem;
 
-  if(de->action == NULL)
-    return prop_send_ext_event(de->target, src);
-  
+  if(de->action == NULL) {
+    if(src != NULL)
+      prop_send_ext_event(de->target, src);
+    return;
+  }
+
   src = event_create_action_str(rstr_get(de->action));
   prop_send_ext_event(de->target, src);
   event_release(src);
@@ -382,6 +385,7 @@ typedef struct glw_event_internal {
 
   char *target;
   action_type_t event;
+  int uc;
 
 } glw_event_internal_t;
 
@@ -411,7 +415,10 @@ glw_event_map_internal_fire(glw_t *w, glw_event_map_t *gem, event_t *src)
   glw_t *t;
   event_t *e;
 
-  e = event_create_action(g->event);
+  if(g->uc)
+    e = event_create_int(EVENT_UNICODE, g->uc);
+  else
+    e = event_create_action(g->event);
   e->e_mapped = 1;
 
   if(g->target != NULL) {
@@ -433,12 +440,14 @@ glw_event_map_internal_fire(glw_t *w, glw_event_map_t *gem, event_t *src)
  *
  */
 glw_event_map_t *
-glw_event_map_internal_create(const char *target, action_type_t event)
+glw_event_map_internal_create(const char *target, action_type_t event,
+			      int uc)
 {
   glw_event_internal_t *g = malloc(sizeof(glw_event_internal_t));
   
   g->target = target ? strdup(target) : NULL;
   g->event  = event;
+  g->uc     = uc;
 
   g->map.gem_dtor = glw_event_map_internal_dtor;
   g->map.gem_fire = glw_event_map_internal_fire;

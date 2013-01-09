@@ -85,6 +85,13 @@ set_how(glw_t *w, const char *str)
     w->glw_class->gc_set_how(w, str);
 }
 
+static void
+set_description(glw_t *w, const char *str)
+{
+  if(w->glw_class->gc_set_desc != NULL)
+    w->glw_class->gc_set_desc(w, str);
+}
+
 
 /**
  *
@@ -149,8 +156,35 @@ set_font(glw_view_eval_context_t *ec, const token_attrib_t *a,
   else
     str = NULL;
 
+  str = str ? fa_absolute_path(str, t->file) : NULL;
+
   if(ec->w->glw_class->gc_set_font != NULL)
     ec->w->glw_class->gc_set_font(ec->w, str);
+  rstr_release(str);
+  return 0;
+}
+
+
+
+/**
+ *
+ */
+static int
+set_fs(glw_view_eval_context_t *ec, const token_attrib_t *a,
+       struct token *t)
+{
+  rstr_t *str;
+
+  if(t->type == TOKEN_RSTRING)
+    str = t->t_rstring;
+  else
+    str = NULL;
+
+  str = str ? fa_absolute_path(str, t->file) : NULL;
+
+  if(ec->w->glw_class->gc_set_fs != NULL)
+    ec->w->glw_class->gc_set_fs(ec->w, str);
+  rstr_release(str);
   return 0;
 }
 
@@ -254,6 +288,17 @@ set_size(glw_t *w, float v)
 }
 
 
+/**
+ *
+ */
+static void
+set_min_size(glw_t *w, float v)
+{
+  if(w->glw_class->gc_set_min_size != NULL)
+    w->glw_class->gc_set_min_size(w, v);
+}
+
+
 
 /**
  *
@@ -316,6 +361,16 @@ static void
 set_height(glw_t *w, int v)
 {
   glw_conf_constraints(w, 0, v, 0, GLW_CONSTRAINT_CONF_Y);
+}
+
+
+/**
+ *
+ */
+static void
+set_divider(glw_t *w, int v)
+{
+  glw_conf_constraints(w, 0, 0, 0, GLW_CONSTRAINT_CONF_D);
 }
 
 
@@ -525,6 +580,10 @@ set_int16_4(glw_view_eval_context_t *ec, const token_attrib_t *a,
 
   case TOKEN_INT:
     v[0] = v[1] = v[2] = v[3] = t->t_int;
+    break;
+
+  case TOKEN_VOID:
+    v[0] = v[1] = v[2] = v[3] = 0;
     break;
 
   default:
@@ -792,11 +851,60 @@ mod_video_flags(glw_t *w, int set, int clr)
 /**
  *
  */
-static void
-set_source(glw_t *w, rstr_t *p)
+static rstr_t **
+build_rstr_vector(struct token *t0)
 {
-  if(w->glw_class->gc_set_source != NULL)
-    w->glw_class->gc_set_source(w, p);
+  int cnt = 1;
+  token_t *t;
+  rstr_t **rv;
+
+  for(t = t0->child; t != NULL; t = t->next)
+    if(t->type == TOKEN_RSTRING || t->type == TOKEN_LINK)
+      cnt++;
+  
+  rv = malloc(sizeof(rstr_t *) * cnt);
+  cnt = 0;
+
+  for(t = t0->child; t != NULL; t = t->next)
+    if(t->type == TOKEN_RSTRING || t->type == TOKEN_LINK)
+      rv[cnt++] = rstr_dup(t->t_rstring);
+  rv[cnt++] = NULL;
+  return rv;
+}
+
+
+
+/**
+ *
+ */
+static int
+set_alt(glw_view_eval_context_t *ec, const token_attrib_t *a,
+	struct token *t)
+{
+  glw_t *w = ec->w;
+
+  rstr_t *r;
+
+  switch(t->type) {
+  default:
+    if(w->glw_class->gc_set_alt != NULL)
+      w->glw_class->gc_set_alt(w, NULL);
+    return 0;
+
+  case TOKEN_RSTRING:
+    r = t->t_rstring;
+    break;
+  case TOKEN_LINK:
+    r = t->t_link_rurl;
+    break;
+  }
+
+  r = fa_absolute_path(r, t->file);
+
+  if(w->glw_class->gc_set_alt != NULL)
+    w->glw_class->gc_set_alt(w, r);
+  rstr_release(r);
+  return 0;
 }
 
 
@@ -804,33 +912,36 @@ set_source(glw_t *w, rstr_t *p)
  *
  */
 static int
-set_path(glw_view_eval_context_t *ec, const token_attrib_t *a,
-	 struct token *t)
+set_source(glw_view_eval_context_t *ec, const token_attrib_t *a,
+	   struct token *t)
 {
   glw_t *w = ec->w;
 
   rstr_t *r;
 
-  void (*fn)(glw_t *w, rstr_t *r) = a->fn;
-
   switch(t->type) {
-  case TOKEN_VOID:
-    fn(w, NULL);
+  default:
+    if(w->glw_class->gc_set_source != NULL)
+      w->glw_class->gc_set_source(w, NULL);
+    return 0;
+
+  case TOKEN_VECTOR:
+    if(w->glw_class->gc_set_sources != NULL)
+      w->glw_class->gc_set_sources(w, build_rstr_vector(t));
     return 0;
 
   case TOKEN_RSTRING:
-  case TOKEN_LINK:
     r = t->t_rstring;
     break;
-
-  default:
-    return glw_view_seterr(ec->ei, t, 
-			    "Attribute '%s' expects a string or scalar not %s",
-			   a->name, token2name(t));
+  case TOKEN_LINK:
+    r = t->t_link_rurl;
+    break;
   }
 
   r = fa_absolute_path(r, t->file);
-  fn(w, r);
+
+  if(w->glw_class->gc_set_source != NULL)
+    w->glw_class->gc_set_source(w, r);
   rstr_release(r);
   return 0;
 }
@@ -875,6 +986,41 @@ set_propref(glw_view_eval_context_t *ec, const token_attrib_t *a,
 }
 
 
+/**
+ *
+ */
+static int
+set_page(glw_view_eval_context_t *ec, const token_attrib_t *a,
+	   struct token *t)
+{
+  const char *str;
+
+  switch(t->type) {
+  default:
+    glw_set(ec->w, GLW_ATTRIB_PAGE_BY_ID, NULL, NULL);
+    break;
+
+  case TOKEN_CSTRING:
+    glw_set(ec->w, GLW_ATTRIB_PAGE_BY_ID, t->t_cstring, NULL);
+    break;
+
+  case TOKEN_RSTRING:
+  case TOKEN_LINK:
+    str = rstr_get(t->t_rstring);
+    glw_set(ec->w, GLW_ATTRIB_PAGE_BY_ID, str, NULL);
+    break;
+
+  case TOKEN_INT:
+    glw_set(ec->w, GLW_ATTRIB_PAGE, t->t_int, NULL);
+    break;
+
+  case TOKEN_FLOAT:
+    glw_set(ec->w, GLW_ATTRIB_PAGE, (int)t->t_float, NULL);
+    break;
+  }
+  return 0;
+}
+
 
 /**
  *
@@ -882,9 +1028,12 @@ set_propref(glw_view_eval_context_t *ec, const token_attrib_t *a,
 static const token_attrib_t attribtab[] = {
   {"id",              set_string, 0, set_id},
   {"how",             set_string, 0, set_how},
+  {"description",     set_string, 0, set_description},
   {"caption",         set_caption, 0},
   {"font",            set_font, 0},
-  {"source",          set_path, 0, set_source},
+  {"fragmentShader",  set_fs, 0},
+  {"source",          set_source},
+  {"alt",             set_alt},
 
   {"debug",                   mod_flag, GLW_DEBUG, mod_flags1},
   {"filterConstraintX",       mod_flag, GLW_CONSTRAINT_IGNORE_X, mod_flags1},
@@ -903,7 +1052,9 @@ static const token_attrib_t attribtab[] = {
   {"autohide",                mod_flag, GLW2_AUTOHIDE, mod_flags2},
   {"shadow",                  mod_flag, GLW2_SHADOW, mod_flags2},
   {"autofade",                mod_flag, GLW2_AUTOFADE, mod_flags2},
+  {"automargin",              mod_flag, GLW2_AUTOMARGIN, mod_flags2},
   {"expediteSubscriptions",   mod_flag, GLW2_EXPEDITE_SUBSCRIPTIONS, mod_flags2},
+  {"reverseRender",           mod_flag, GLW2_REVERSE_RENDER, mod_flags2},
 
   {"fixedSize",       mod_flag, GLW_IMAGE_FIXED_SIZE, mod_img_flags},
   {"bevelLeft",       mod_flag, GLW_IMAGE_BEVEL_LEFT, mod_img_flags},
@@ -917,11 +1068,19 @@ static const token_attrib_t attribtab[] = {
   {"rightBorder",     mod_flag, GLW_IMAGE_BORDER_RIGHT, mod_img_flags},
   {"aspectFixedBorders", mod_flag, GLW_IMAGE_ASPECT_FIXED_BORDERS, mod_img_flags},
 
+  {"cornerTopLeft",     mod_flag, GLW_IMAGE_CORNER_TOPLEFT,     mod_img_flags},
+  {"cornerTopRight",    mod_flag, GLW_IMAGE_CORNER_TOPRIGHT,    mod_img_flags},
+  {"cornerBottomLeft",  mod_flag, GLW_IMAGE_CORNER_BOTTOMLEFT,  mod_img_flags},
+  {"cornerBottomRight", mod_flag, GLW_IMAGE_CORNER_BOTTOMRIGHT, mod_img_flags},
+
+
   {"password",        mod_flag,  GTB_PASSWORD, mod_text_flags},
   {"ellipsize",       mod_flag,  GTB_ELLIPSIZE, mod_text_flags},
   {"bold",            mod_flag,  GTB_BOLD, mod_text_flags},
   {"italic",          mod_flag,  GTB_ITALIC, mod_text_flags},
   {"outline",         mod_flag,  GTB_OUTLINE, mod_text_flags},
+  {"permanentCursor", mod_flag,  GTB_PERMANENT_CURSOR, mod_text_flags},
+  {"oskPassword",     mod_flag,  GTB_OSK_PASSWORD, mod_text_flags},
   
   {"primary",         mod_flag, GLW_VIDEO_PRIMARY, mod_video_flags},
   {"noAudio",         mod_flag, GLW_VIDEO_NO_AUDIO, mod_video_flags},
@@ -932,6 +1091,7 @@ static const token_attrib_t attribtab[] = {
   {"saturation",      set_float,  GLW_ATTRIB_SATURATION},
   {"weight",          set_float,  0, set_weight},
   {"time",            set_float,  GLW_ATTRIB_TIME},
+  {"transitionTime",  set_float,  GLW_ATTRIB_TRANSITION_TIME},
   {"angle",           set_float,  GLW_ATTRIB_ANGLE},
   {"expansion",       set_float,  GLW_ATTRIB_EXPANSION},
   {"min",             set_float,  GLW_ATTRIB_INT_MIN},
@@ -940,6 +1100,7 @@ static const token_attrib_t attribtab[] = {
   {"value",           set_float,  GLW_ATTRIB_VALUE},
   {"sizeScale",       set_float,  0, set_size_scale},
   {"size",            set_float,  0, set_size},
+  {"minSize",         set_float,  0, set_min_size},
   {"focusable",       set_float,  0, glw_set_focus_weight},
   {"childAspect",     set_float,  GLW_ATTRIB_CHILD_ASPECT},
   {"center",          set_float,  GLW_ATTRIB_CENTER},
@@ -955,7 +1116,7 @@ static const token_attrib_t attribtab[] = {
   {"childTilesX",     set_int,    GLW_ATTRIB_CHILD_TILES_X},
   {"childTilesY",     set_int ,   GLW_ATTRIB_CHILD_TILES_Y},
 
-  {"page",            set_int ,   GLW_ATTRIB_PAGE},
+  {"page",            set_page,   0},
 
   {"alphaEdges",      set_int,    GLW_ATTRIB_ALPHA_EDGES},
   {"priority",        set_int,    GLW_ATTRIB_PRIORITY},
@@ -964,6 +1125,8 @@ static const token_attrib_t attribtab[] = {
   {"Xspacing",        set_int,    GLW_ATTRIB_X_SPACING},
   {"Yspacing",        set_int,    GLW_ATTRIB_Y_SPACING},
   {"scrollThreshold", set_int,    GLW_ATTRIB_SCROLL_THRESHOLD},
+  {"divider",         set_int,    0, set_divider},
+  {"cornerRadius",    set_int,    GLW_ATTRIB_RADIUS},
 
   {"color",           set_float3, 0, set_rgb},
   {"translation",     set_float3, 0, set_translation},

@@ -1,6 +1,7 @@
 /*
  *  JSAPI <-> Navigator page object
  *  Copyright (C) 2010 Andreas Öman
+ *  Copyright (C) 2012 Fábio Ferreira
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -26,17 +27,20 @@
 #include "backend/backend_prop.h"
 #include "backend/search.h"
 #include "navigator.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "misc/regex.h"
 #include "prop/prop_nodefilter.h"
 #include "event.h"
 #include "metadata/metadata.h"
 #include "htsmsg/htsmsg_json.h"
 
-LIST_HEAD(js_item_list, js_item);
+TAILQ_HEAD(js_item_queue, js_item);
+
+static hts_mutex_t js_page_mutex; // protects global lists
 
 static struct js_route_list js_routes;
 static struct js_searcher_list js_searchers;
+
 static JSFunctionSpec item_proto_functions[];
 
 /**
@@ -101,12 +105,13 @@ typedef struct js_model {
   prop_sub_t *jm_eventsub;
 
   jsval jm_paginator;
+  jsval jm_reorderer;
   
   JSContext *jm_cx;
 
   struct js_event_handler_list jm_event_handlers;
 
-  struct js_item_list jm_items;
+  struct js_item_queue jm_items;
 
   int jm_subs;
 
@@ -114,22 +119,38 @@ typedef struct js_model {
 
   char *jm_url;
 
+  struct js_subscription_list jm_subscriptions;
+
+  int jm_pending_want_more;
+
 } js_model_t;
 
 
 static JSObject *make_model_object(JSContext *cx, js_model_t *jm,
 				   jsval *root);
 
+static void install_nodesub(js_model_t *jm);
+
+/**
+ *
+ */
+void
+js_page_init(void)
+{
+  hts_mutex_init(&js_page_mutex);
+}
 
 /**
  *
  */
 static js_model_t *
-js_model_create(jsval openfunc)
+js_model_create(JSContext *cx, jsval openfunc)
 {
   js_model_t *jm = calloc(1, sizeof(js_model_t));
   jm->jm_refcount = 1;
   jm->jm_openfunc = openfunc;
+  JS_AddNamedRoot(cx, &jm->jm_openfunc, "openfunc");
+  TAILQ_INIT(&jm->jm_items);
   return jm;
 }
 
@@ -140,6 +161,8 @@ js_model_create(jsval openfunc)
 static void
 js_model_destroy(js_model_t *jm)
 {
+  assert(TAILQ_FIRST(&jm->jm_items) == NULL);
+
   if(jm->jm_args)
     strvec_free(jm->jm_args);
 
@@ -246,7 +269,7 @@ js_setLoading(JSContext *cx, JSObject *obj, jsval idval, jsval *vp)
  */
 typedef struct js_item {
   js_model_t *ji_model;
-  LIST_ENTRY(js_item) ji_link;
+  TAILQ_ENTRY(js_item) ji_link;
   prop_t *ji_root;
   struct js_event_handler_list ji_event_handlers;
   prop_sub_t *ji_eventsub;
@@ -263,7 +286,8 @@ item_finalize(JSContext *cx, JSObject *obj)
 {
   js_item_t *ji = JS_GetPrivate(cx, obj);
   assert(LIST_FIRST(&ji->ji_event_handlers) == NULL);
-  LIST_REMOVE(ji, ji_link);
+  TAILQ_REMOVE(&ji->ji_model->jm_items, ji, ji_link);
+  js_model_release(ji->ji_model);
   prop_ref_dec(ji->ji_root);
   free(ji);
 }
@@ -322,6 +346,7 @@ js_item_eventsub(void *opaque, prop_event_t event, ...)
     ji->ji_eventsub = NULL;
     ji->ji_model->jm_subs--;
     JS_RemoveRoot(ji->ji_model->jm_cx, &ji->ji_this);
+    prop_tag_clear(ji->ji_root, ji->ji_model);
     break;
 
   case PROP_EXT_EVENT:
@@ -345,18 +370,6 @@ js_item_onEvent(JSContext *cx, JSObject *obj,
   if(!JS_ObjectIsFunction(cx, JSVAL_TO_OBJECT(argv[1]))) {
     JS_ReportError(cx, "Argument is not a function");
     return JS_FALSE;
-  }
-
-  if(ji->ji_eventsub == NULL) {
-    ji->ji_eventsub = 
-      prop_subscribe(PROP_SUB_TRACK_DESTROY,
-		     PROP_TAG_CALLBACK, js_item_eventsub, ji,
-		     PROP_TAG_ROOT, ji->ji_root,
-		     PROP_TAG_COURIER, ji->ji_model->jm_pc,
-		     NULL);
-    ji->ji_model->jm_subs++;
-    ji->ji_this = OBJECT_TO_JSVAL(obj);
-    JS_AddNamedRoot(cx, &ji->ji_this, "item_this");
   }
 
   js_event_handler_create(cx, &ji->ji_event_handlers,
@@ -384,6 +397,36 @@ js_item_destroy(JSContext *cx, JSObject *obj,
 }
 
 
+/**
+ *
+ */
+static JSBool 
+js_item_moveBefore(JSContext *cx, JSObject *obj,
+		   uintN argc, jsval *argv, jsval *rval)
+{
+  js_item_t *ji = JS_GetPrivate(cx, obj);
+  js_item_t *before;
+
+  if(argc >= 1 && JSVAL_IS_OBJECT(argv[0]) &&
+     !JSVAL_IS_NULL(argv[0]) && 
+     JS_GetClass(cx, JSVAL_TO_OBJECT(argv[0])) == &item_class) {
+    before = JS_GetPrivate(cx, JSVAL_TO_OBJECT(argv[0]));
+  } else {
+    before = NULL;
+  }
+
+  TAILQ_REMOVE(&ji->ji_model->jm_items, ji, ji_link);
+  if(before)
+    TAILQ_INSERT_BEFORE(before, ji, ji_link);
+  else
+    TAILQ_INSERT_TAIL(&ji->ji_model->jm_items, ji, ji_link);
+
+  prop_move(ji->ji_root, before ? before->ji_root : NULL);
+  *rval = JSVAL_VOID;
+  return JS_TRUE;
+}
+
+
 
 /**
  *
@@ -394,6 +437,34 @@ js_item_dump(JSContext *cx, JSObject *obj,
 {
   js_item_t *ji = JS_GetPrivate(cx, obj);
   prop_print_tree(ji->ji_root, 1);
+  *rval = JSVAL_VOID;
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
+js_item_enable(JSContext *cx, JSObject *obj,
+	       uintN argc, jsval *argv, jsval *rval)
+{
+  js_item_t *ji = JS_GetPrivate(cx, obj);
+  prop_set(ji->ji_root, "enabled", PROP_SET_INT, 1);
+  *rval = JSVAL_VOID;
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
+js_item_disable(JSContext *cx, JSObject *obj,
+		uintN argc, jsval *argv, jsval *rval)
+{
+  js_item_t *ji = JS_GetPrivate(cx, obj);
+  prop_set(ji->ji_root, "enabled", PROP_SET_INT, 0);
   *rval = JSVAL_VOID;
   return JS_TRUE;
 }
@@ -498,6 +569,9 @@ static JSFunctionSpec item_proto_functions[] = {
   JS_FS("addOptAction",       js_item_addOptAction,    2, 0, 0),
   JS_FS("addOptSeparator",    js_item_addOptSeparator, 1, 0, 0),
   JS_FS("dump",               js_item_dump,            0, 0, 0),
+  JS_FS("enable",             js_item_enable,          0, 0, 0),
+  JS_FS("disable",            js_item_disable,         0, 0, 0),
+  JS_FS("moveBefore",         js_item_moveBefore,      1, 0, 0),
   JS_FS_END
 };
 
@@ -511,6 +585,8 @@ js_appendItem0(JSContext *cx, js_model_t *model, prop_t *parent,
 	       jsval *data, jsval *rval, int enabled,
 	       const char *metabind)
 {
+  install_nodesub(model);
+
   prop_t *item = prop_create_root(NULL);
 
   if(url != NULL)
@@ -552,11 +628,23 @@ js_appendItem0(JSContext *cx, js_model_t *model, prop_t *parent,
 
     *rval =  OBJECT_TO_JSVAL(robj);
     js_item_t *ji = calloc(1, sizeof(js_item_t));
+    atomic_add(&model->jm_refcount, 1);
     ji->ji_model = model;
     ji->ji_root =  p;
-    LIST_INSERT_HEAD(&model->jm_items, ji, ji_link);
+    TAILQ_INSERT_TAIL(&model->jm_items, ji, ji_link);
     JS_SetPrivate(cx, robj, ji);
     ji->ji_enable_set_property = 1; 
+
+    ji->ji_eventsub = 
+      prop_subscribe(PROP_SUB_TRACK_DESTROY,
+		     PROP_TAG_CALLBACK, js_item_eventsub, ji,
+		     PROP_TAG_ROOT, ji->ji_root,
+		     PROP_TAG_COURIER, model->jm_pc,
+		     NULL);
+    model->jm_subs++;
+    ji->ji_this = OBJECT_TO_JSVAL(robj);
+    JS_AddNamedRoot(cx, &ji->ji_this, "item_this");
+    prop_tag_set(ji->ji_root, model, ji);
   }
   return JS_TRUE;
 }
@@ -707,7 +795,7 @@ js_appendModel(JSContext *cx, JSObject *obj, uintN argc,
   prop_set_rstring(prop_create(item, "url"), url);
   rstr_release(url);
 
-  jm = js_model_create(JSVAL_VOID);
+  jm = js_model_create(cx, JSVAL_VOID);
 
   init_model_props(jm, item);
   prop_set_string(jm->jm_type, type);
@@ -833,6 +921,53 @@ js_page_dump(JSContext *cx, JSObject *obj, uintN argc,
  *
  */
 static JSBool 
+js_page_redirect(JSContext *cx, JSObject *obj, uintN argc,
+	      jsval *argv, jsval *rval)
+{
+  js_model_t *jm = JS_GetPrivate(cx, obj);
+  const char *url;
+
+  if (!JS_ConvertArguments(cx, argc, argv, "s", &url))
+    return JS_FALSE;
+
+  event_t *e = event_create_str(EVENT_REDIRECT, url);
+  prop_send_ext_event(jm->jm_eventsink, e);
+  event_release(e);
+
+  *rval = JSVAL_VOID;
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
+js_page_items(JSContext *cx, JSObject *obj, uintN argc,
+	      jsval *argv, jsval *rval)
+{
+  js_model_t *jm = JS_GetPrivate(cx, obj);
+  js_item_t *ji;
+
+  int pos = 0;
+  TAILQ_FOREACH(ji, &jm->jm_items, ji_link)
+    pos++;
+
+  JSObject *robj = JS_NewArrayObject(cx, pos, NULL);
+  *rval = OBJECT_TO_JSVAL(robj);
+
+  pos = 0;
+  TAILQ_FOREACH(ji, &jm->jm_items, ji_link)
+    JS_SetElement(cx, robj, pos++, &ji->ji_this);
+
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
 js_page_wfv(JSContext *cx, JSObject *obj, uintN argc,
 	    jsval *argv, jsval *rval)
 {
@@ -863,11 +998,27 @@ static JSFunctionSpec model_functions[] = {
 /**
  *
  */
+static JSBool 
+js_page_subscribe(JSContext *cx, JSObject *obj, uintN argc, 
+		  jsval *argv, jsval *rval)
+{
+  js_model_t *jm = JS_GetPrivate(cx, obj);
+  return js_subscribe(cx, argc, argv, rval, jm->jm_root, "page",
+		      &jm->jm_subscriptions, jm->jm_pc,
+		      &jm->jm_subs);
+}
+
+/**
+ *
+ */
 static JSFunctionSpec page_functions[] = {
     JS_FS("onEvent",            js_page_onEvent, 2, 0, 0),
     JS_FS("error",              js_page_error,   1, 0, 0),
+    JS_FS("redirect",           js_page_redirect,1, 0, 0),
     JS_FS("dump",               js_page_dump,    0, 0, 0),
     JS_FS("waitForValue",       js_page_wfv,     2, 0, 0),
+    JS_FS("subscribe",          js_page_subscribe, 2, 0, 0),
+    JS_FS("getItems",           js_page_items,   0, 0, 0),
     JS_FS_END
 };
 
@@ -899,12 +1050,28 @@ js_model_fill(JSContext *cx, js_model_t *jm)
 {
   jsval result;
 
-  if(!jm->jm_paginator)
-    return 0;
-
   JS_CallFunctionValue(cx, NULL, jm->jm_paginator, 0, NULL, &result);
 
   return JSVAL_IS_BOOLEAN(result) && JSVAL_TO_BOOLEAN(result);
+}
+
+/**
+ *
+ */
+static void
+js_reorder(JSContext *cx, js_model_t *jm, js_item_t *ji, js_item_t *before)
+{
+  void *mark;
+  jsval *argv, result;
+
+  if(!jm->jm_reorderer)
+    return;
+
+  argv = JS_PushArguments(cx, &mark, "vv", ji->ji_this,
+			  before ? before->ji_this : JSVAL_NULL);
+  
+  JS_CallFunctionValue(cx, NULL, jm->jm_reorderer, 2, argv, &result);
+  JS_PopArguments(cx, mark);
 }
 
 
@@ -916,7 +1083,7 @@ js_model_nodesub(void *opaque, prop_event_t event, ...)
 {
   js_model_t *jm = opaque;
   va_list ap;
-
+  prop_t *p1, *p2;
   va_start(ap, event);
 
   switch(event) {
@@ -924,19 +1091,54 @@ js_model_nodesub(void *opaque, prop_event_t event, ...)
     break;
 
   case PROP_DESTROYED:
-    JS_RemoveRoot(jm->jm_cx, &jm->jm_paginator);
+    if(jm->jm_paginator)
+      JS_RemoveRoot(jm->jm_cx, &jm->jm_paginator);
+    if(jm->jm_reorderer)
+       JS_RemoveRoot(jm->jm_cx, &jm->jm_reorderer);
+
     prop_unsubscribe(jm->jm_nodesub);
     jm->jm_nodesub = NULL;
     jm->jm_subs--;
     break;
 
+  case PROP_REQ_MOVE_CHILD:
+    p1 = va_arg(ap, prop_t *);
+    p2 = va_arg(ap, prop_t *);
+    js_reorder(jm->jm_cx, jm, prop_tag_get(p1, jm), 
+	       p2 ? prop_tag_get(p2, jm) : NULL);
+    break;
+
   case PROP_WANT_MORE_CHILDS:
-    if(js_model_fill(jm->jm_cx, jm))
-      prop_have_more_childs(jm->jm_nodes);
+    if(jm->jm_paginator) {
+      if(js_model_fill(jm->jm_cx, jm))
+	prop_have_more_childs(jm->jm_nodes);
+    } else {
+      jm->jm_pending_want_more = 1;
+    }
     break;
   }
   va_end(ap);
 }
+
+
+/**
+ *
+ */
+static void
+install_nodesub(js_model_t *jm)
+{
+  if(jm->jm_nodesub)
+    return;
+
+  jm->jm_subs++;
+  jm->jm_nodesub = 
+    prop_subscribe(PROP_SUB_TRACK_DESTROY,
+		   PROP_TAG_CALLBACK, js_model_nodesub, jm,
+		   PROP_TAG_ROOT, jm->jm_nodes,
+		   PROP_TAG_COURIER, jm->jm_pc,
+		   NULL);
+}
+
 
 /**
  *
@@ -952,16 +1154,32 @@ js_setPaginator(JSContext *cx, JSObject *obj, jsval idval, jsval *vp)
     return JS_FALSE;
   }
 
-  jm->jm_subs++;
-  jm->jm_nodesub = 
-    prop_subscribe(PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, js_model_nodesub, jm,
-		   PROP_TAG_ROOT, jm->jm_nodes,
-		   PROP_TAG_COURIER, jm->jm_pc,
-		   NULL);
-
+  install_nodesub(jm);
+  if(!jm->jm_paginator)
+    JS_AddNamedRoot(cx, &jm->jm_paginator, "paginator");
   jm->jm_paginator = *vp;
-  JS_AddNamedRoot(cx, &jm->jm_paginator, "paginator");
+  return JS_TRUE;
+}
+
+
+/**
+ *
+ */
+static JSBool 
+js_setReorderer(JSContext *cx, JSObject *obj, jsval idval, jsval *vp)
+{
+  js_model_t *jm = JS_GetPrivate(cx, obj);
+
+  if(!JSVAL_IS_OBJECT(*vp) || 
+     !JS_ObjectIsFunction(cx, JSVAL_TO_OBJECT(*vp))) {
+    JS_ReportError(cx, "Argument is not a function");
+    return JS_FALSE;
+  }
+
+  install_nodesub(jm);
+  if(!jm->jm_reorderer)
+    JS_AddNamedRoot(cx, &jm->jm_reorderer, "reorderer");
+  jm->jm_reorderer = *vp;
   return JS_TRUE;
 }
 
@@ -978,7 +1196,8 @@ make_model_object(JSContext *cx, js_model_t *jm, jsval *root)
   JS_SetPrivate(cx, obj, jm);
   atomic_add(&jm->jm_refcount, 1);
 
-  JS_DefineFunctions(cx, obj, model_functions);
+  if(jm->jm_pc != NULL)
+    JS_DefineFunctions(cx, obj, model_functions);
 
   if(jm->jm_entries != NULL)
     JS_DefineProperty(cx, obj, "entries", JSVAL_VOID,
@@ -1006,8 +1225,13 @@ make_model_object(JSContext *cx, js_model_t *jm, jsval *root)
 		      NULL, NULL, JSPROP_PERMANENT);
   }
 
-  JS_DefineProperty(cx, obj, "paginator", JSVAL_VOID,
-		    NULL, js_setPaginator, JSPROP_PERMANENT);
+  if(jm->jm_pc != NULL) {
+    JS_DefineProperty(cx, obj, "paginator", JSVAL_VOID,
+		      NULL, js_setPaginator, JSPROP_PERMANENT);
+
+    JS_DefineProperty(cx, obj, "reorderer", JSVAL_VOID,
+		      NULL, js_setReorderer, JSPROP_PERMANENT);
+  }
   return obj;
 }
 
@@ -1028,7 +1252,9 @@ js_open_invoke(JSContext *cx, js_model_t *jm)
 
   JSObject *obj = make_model_object(cx, jm, &pageobj);
 
-  JS_DefineFunctions(cx, obj, page_functions);
+  if(jm->jm_pc != NULL)
+    JS_DefineFunctions(cx, obj, page_functions);
+
   if(jm->jm_url != NULL)
     js_createPageOptions(cx, obj, jm->jm_url, jm->jm_options);
 
@@ -1088,11 +1314,9 @@ js_open_error(JSContext *cx, const char *msg, JSErrorReport *r)
 /**
  *
  */
-static void *
-js_open_trampoline(void *arg)
+static void
+js_open(js_model_t *jm)
 {
-  js_model_t *jm = arg;
-  
   JSContext *cx = js_newctx(js_open_error);
   JS_SetContextPrivate(cx, jm);
 
@@ -1104,6 +1328,8 @@ js_open_trampoline(void *arg)
 		     item_proto_functions);
 
   js_open_invoke(cx, jm);
+  jm->jm_openfunc = JSVAL_VOID;
+  JS_RemoveRoot(cx, &jm->jm_openfunc);
 
   jm->jm_cx = cx;
 
@@ -1115,6 +1341,11 @@ js_open_trampoline(void *arg)
     prop_notify_dispatch(&exp);
     prop_notify_dispatch(&nor);
 
+    if(jm->jm_pending_want_more && jm->jm_paginator) {
+      jm->jm_pending_want_more = 0;
+      if(js_model_fill(jm->jm_cx, jm))
+	prop_have_more_childs(jm->jm_nodes);
+    }
   }
 
   JS_RemoveRoot(cx, &jm->jm_item_proto);
@@ -1122,6 +1353,17 @@ js_open_trampoline(void *arg)
   js_model_release(jm);
 
   JS_DestroyContext(cx);
+}
+
+
+/**
+ *
+ */
+static void *
+js_open_trampoline(void *arg)
+{
+  js_model_t *jm = arg;
+  js_open(jm);
   return NULL;
 }
 
@@ -1142,7 +1384,7 @@ model_launch(js_model_t *jm)
  *
  */
 int
-js_backend_open(prop_t *page, const char *url)
+js_backend_open(prop_t *page, const char *url, int sync)
 {
   js_route_t *jsr;
   hts_regmatch_t matches[8];
@@ -1150,15 +1392,23 @@ js_backend_open(prop_t *page, const char *url)
   js_model_t *jm;
   prop_t *model;
 
+  hts_mutex_lock(&js_page_mutex);
+
   LIST_FOREACH(jsr, &js_routes, jsr_global_link)
     if(jsr->jsr_jsp->jsp_enable_uri_routing &&
        !hts_regexec(&jsr->jsr_regex, url, 8, matches, 0))
       break;
 
-  if(jsr == NULL)
+  if(jsr == NULL) {
+    hts_mutex_unlock(&js_page_mutex);
     return 1;
- 
-  jm = js_model_create(jsr->jsr_openfunc);
+  }
+
+  JSContext *cx = js_newctx(NULL);
+  JS_BeginRequest(cx);
+  jm = js_model_create(cx, jsr->jsr_openfunc);
+  JS_EndRequest(cx);
+  JS_DestroyContext(cx);
 
   for(i = 1; i < 8; i++)
     if(matches[i].rm_so != -1)
@@ -1175,7 +1425,12 @@ js_backend_open(prop_t *page, const char *url)
   jm->jm_root      = prop_ref_inc(page);
   jm->jm_url       = strdup(url);
 
-  model_launch(jm);
+  hts_mutex_unlock(&js_page_mutex);
+  if(sync) {
+    js_open(jm);
+  } else {
+    model_launch(jm);
+  }
   return 0;
 }
 
@@ -1190,11 +1445,16 @@ js_backend_search(struct prop *model, const char *query)
   prop_t *parent = prop_create(model, "nodes");
   js_model_t *jm;
 
+  JSContext *cx = js_newctx(NULL);
+  JS_BeginRequest(cx);
+
+  hts_mutex_lock(&js_page_mutex);
+
   LIST_FOREACH(jss, &js_searchers, jss_global_link) {
     if(!jss->jss_jsp->jsp_enable_search)
       continue;
 
-    jm = js_model_create(jss->jss_openfunc);
+    jm = js_model_create(cx, jss->jss_openfunc);
     strvec_addp(&jm->jm_args, query);
 
     search_class_create(parent, &jm->jm_nodes, &jm->jm_entries, 
@@ -1202,6 +1462,9 @@ js_backend_search(struct prop *model, const char *query)
 
     model_launch(jm);
   }
+  hts_mutex_unlock(&js_page_mutex);
+  JS_EndRequest(cx);
+  JS_DestroyContext(cx);
 }
 
 
@@ -1254,17 +1517,19 @@ js_addURI(JSContext *cx, JSObject *obj, uintN argc,
     JS_ReportError(cx, "Invalid regular expression");
     return JS_FALSE;
   }
+
+  TRACE(TRACE_DEBUG, "JS", "Add route for %s", str);
   
   jsr->jsr_pattern = strdup(str);
   jsr->jsr_prio = strcspn(str, "()[].*?+$") ?: INT32_MAX;
-  
+
+
+  hts_mutex_lock(&js_page_mutex);
   LIST_INSERT_SORTED(&js_routes, jsr, jsr_global_link, jsr_cmp);
   LIST_INSERT_HEAD(&jsp->jsp_routes, jsr, jsr_plugin_link);
-
-  TRACE(TRACE_DEBUG, "JS", "Add route for %s", str);
-
   jsr->jsr_openfunc = argv[1];
   JS_AddNamedRoot(cx, &jsr->jsr_openfunc, "routeduri");
+  hts_mutex_unlock(&js_page_mutex);
 
   *rval = JSVAL_VOID;
   return JS_TRUE;
@@ -1289,6 +1554,7 @@ js_addSearcher(JSContext *cx, JSObject *obj, uintN argc,
   jss = calloc(1, sizeof(js_searcher_t));
   jss->jss_jsp = jsp;
 
+  hts_mutex_lock(&js_page_mutex);
   LIST_INSERT_HEAD(&js_searchers, jss, jss_global_link);
   LIST_INSERT_HEAD(&jsp->jsp_searchers, jss, jss_plugin_link);
 
@@ -1298,6 +1564,7 @@ js_addSearcher(JSContext *cx, JSObject *obj, uintN argc,
 
   jss->jss_openfunc = argv[2];
   JS_AddNamedRoot(cx, &jss->jss_openfunc, "searcher");
+  hts_mutex_unlock(&js_page_mutex);
 
   *rval = JSVAL_VOID;
   return JS_TRUE;

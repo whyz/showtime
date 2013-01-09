@@ -21,12 +21,10 @@
 #include <sys/stat.h>
 
 #include "networking/http_server.h"
-#include "httpcontrol.h"
 #include "event.h"
 #include "misc/pixmap.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "backend/backend.h"
-#include "ui/ui.h"
 #include "notifications.h"
 #include "fileaccess/fileaccess.h"
 
@@ -59,6 +57,18 @@ hc_open(http_connection_t *hc, const char *remain, void *opaque,
   htsbuf_queue_init(&out, 0);
   htsbuf_append(&out, openpage, strlen(openpage));
   return http_send_reply(hc, 0, "text/html", NULL, NULL, 0, &out);
+}
+
+
+static int
+hc_done(http_connection_t *hc, const char *remain, void *opaque,
+        http_cmd_t method)
+{
+  htsbuf_queue_t out;
+
+  htsbuf_queue_init(&out, 0);
+  htsbuf_qprintf(&out, "OK");
+  return http_send_reply(hc, 0, "text/ascii", NULL, NULL, 0, &out);
 }
 
 
@@ -165,14 +175,16 @@ hc_prop(http_connection_t *hc, const char *remain, void *opaque,
 	rval = HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE;
 	break;
       }
+      htsbuf_qprintf(&out, "dir");
       for(i = 0; childs[i] != NULL; i++) {
-	htsbuf_qprintf(&out, "\t%s\n", childs[i]);
+	htsbuf_qprintf(&out, "%c%s", i ? ',' : ':', childs[i]);
       }
     } else {
+      htsbuf_qprintf(&out, "value:");
       htsbuf_append(&out, rstr_get(r), strlen(rstr_get(r)));
-      htsbuf_append(&out, "\n", 1);
       rstr_release(r);
     }
+    htsbuf_append(&out, "\n", 1);
     rval = http_send_reply(hc, 0, "text/ascii", NULL, NULL, 0, &out);
     break;
 
@@ -194,7 +206,7 @@ hc_action(http_connection_t *hc, const char *remain, void *opaque,
   if(remain == NULL)
     return 404;
 
-  ui_primary_event(event_create_action_str(remain));
+  event_to_ui(event_create_action_str(remain));
   return HTTP_STATUS_OK;
 }
 
@@ -222,12 +234,11 @@ hc_utf8(http_connection_t *hc, const char *remain, void *opaque,
       e = event_create_int(EVENT_UNICODE, c);
       break;
     }
-    ui_primary_event(e);
+    event_to_ui(e);
   }
   return HTTP_STATUS_OK;
 }
 
-#if ENABLE_BINREPLACE
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -241,10 +252,11 @@ static int
 hc_binreplace(http_connection_t *hc, const char *remain, void *opaque,
 	      http_cmd_t method)
 {
-  extern char *showtime_bin;
-
-  if(showtime_bin == NULL)
+  if(gconf.binary == NULL)
     return HTTP_STATUS_PRECONDITION_FAILED;
+
+  if(!gconf.enable_bin_replace)
+    return 403;
 
   size_t len;
   void *data = http_get_post_data(hc, &len, 0);
@@ -253,9 +265,9 @@ hc_binreplace(http_connection_t *hc, const char *remain, void *opaque,
     return 405;
   
   TRACE(TRACE_INFO, "BINREPLACE", "Replacing %s with %d bytes received",
-	showtime_bin, (int)len);
+	gconf.binary, (int)len);
 
-  int fd = open(showtime_bin, O_TRUNC | O_RDWR, 0777);
+  int fd = open(gconf.binary, O_TRUNC | O_RDWR, 0777);
   if(fd == -1) {
     TRACE(TRACE_ERROR, "BINREPLACE", "Unable to open file");
     return HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE;
@@ -269,8 +281,6 @@ hc_binreplace(http_connection_t *hc, const char *remain, void *opaque,
   showtime_shutdown(13);
   return HTTP_STATUS_OK;
 }
-#endif
-
 
 
 /**
@@ -323,7 +333,7 @@ hc_diagnostics(http_connection_t *hc, const char *remain, void *opaque,
 
   for(i = 0; i <= 5; i++) {
     struct stat st;
-    snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", showtime_cache_path,i);
+    snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", gconf.cache_path,i);
     if(stat(p1, &st)) 
       continue;
     char timestr[32];
@@ -337,7 +347,7 @@ hc_diagnostics(http_connection_t *hc, const char *remain, void *opaque,
 
 
     htsbuf_qprintf(&out,
-		   "<a href=\"/showtime/logfile/%d\">showtime.log.%d</a> Last modified %s ago<br>", i, i, timestr);
+		   "showtime.log.%d (Last modified %s ago): <a href=\"/showtime/logfile/%d\">View</a> | <a href=\"/showtime/logfile/%d?mode=download\">Download</a><br>", i, timestr, i, i);
   }
   htsbuf_qprintf(&out, 
 		 "</body></html>");
@@ -360,17 +370,20 @@ hc_logfile(http_connection_t *hc, const char *remain, void *opaque,
     return 400;
   const int n = atoi(remain);
   size_t size;
+  const char *mode = http_arg_get_req(hc, "mode");
 
   char p1[500];
-  snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", showtime_cache_path, n);
+  snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", gconf.cache_path, n);
   char *buf = fa_load(p1, &size, NULL, NULL, 0, NULL, 0, NULL, NULL);
   
   if(buf == NULL)
     return 404;
   htsbuf_append_prealloc(&out, buf, size);
-  snprintf(p1, sizeof(p1), "attachment; filename=\"showtime.log.%d\"", n);
-  http_set_response_hdr(hc, "Content-Disposition", p1);
-  return http_send_reply(hc, 0, "text/ascii", NULL, NULL, 0, &out);
+  if (mode != NULL && !strcmp(mode, "download")) {
+    snprintf(p1, sizeof(p1), "attachment; filename=\"showtime.log.%d\"", n);
+    http_set_response_hdr(hc, "Content-Disposition", p1);
+  }
+  return http_send_reply(hc, 0, "text/plain", NULL, NULL, 0, &out);
 }
 
 
@@ -471,9 +484,10 @@ hc_hexdump(http_connection_t *hc, const char *remain, void *opaque,
 /**
  *
  */
-void
+static void
 httpcontrol_init(void)
 {
+  http_path_add("/showtime/done", NULL, hc_done, 0);
   http_path_add("/showtime/image", NULL, hc_image, 0);
   http_path_add("/showtime/open", NULL, hc_open, 1);
   http_path_add("/showtime/prop", NULL, hc_prop, 0);
@@ -482,8 +496,7 @@ httpcontrol_init(void)
   http_path_add("/showtime/notifyuser", NULL, hc_notify_user, 1);
   http_path_add("/showtime/diag", NULL, hc_diagnostics, 1);
   http_path_add("/showtime/logfile", NULL, hc_logfile, 0);
-#if ENABLE_BINREPLACE
   http_path_add("/showtime/replace", NULL, hc_binreplace, 1);
-#endif
 }
 
+INITME(INIT_GROUP_API, httpcontrol_init);

@@ -158,6 +158,7 @@ update_mastervol(void *opaque, float value)
 static void
 read_mastervol(GtkScaleButton *button, gdouble value, gpointer user_data)
 {
+#if 0
   playdeck_t *pd = user_data;
   extern prop_t *prop_mastervol; /* A bit ugly.  We could use
 				    prop_get_by_name(), but this is
@@ -165,6 +166,7 @@ read_mastervol(GtkScaleButton *button, gdouble value, gpointer user_data)
   
   value = (value - 1) * 75;
   prop_set_float_ex(prop_mastervol, pd->sub_volume, value, 0);
+#endif
 }
 
 
@@ -358,7 +360,6 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
   GtkWidget *vbox;
   GtkWidget *playdeck;
   playdeck_t *pd = calloc(1, sizeof(playdeck_t));
-  prop_courier_t *pc = gw->gw_gu->gu_pc;
 
   playdeck = gtk_vbox_new(FALSE, 0);
   gtk_box_pack_start(GTK_BOX(parent), playdeck, FALSE, TRUE, 0);
@@ -383,7 +384,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 		   PROP_TAG_NAME("global", "media", "current", 
 				 "metadata", "album_art"),
 		   PROP_TAG_CALLBACK_STRING, pd_set_albumart, w,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /* Middle vbox */
@@ -403,7 +404,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 		   PROP_TAG_NAME("global", "media", "current", 
 				 "metadata", "title"),
 		   PROP_TAG_CALLBACK_STRING, set_current_title, l,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /* Title of current track */
@@ -418,7 +419,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 		   PROP_TAG_NAME("global", "media", "current", 
 				 "metadata", "album"),
 		   PROP_TAG_CALLBACK_STRING, set_current_album, pd,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
   
   pd->sub_artist = 
@@ -426,7 +427,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 		   PROP_TAG_NAME("global", "media", "current", 
 				 "metadata", "artist"),
 		   PROP_TAG_CALLBACK_STRING, set_current_artist, pd,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
 
@@ -447,7 +448,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 				 "canSkipBackward"),
 		   PROP_TAG_CALLBACK_INT, gu_subscription_set_sensitivity,
 		   pd->prev,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /* Play / Pause */
@@ -461,7 +462,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 				 "canPause"),
 		   PROP_TAG_CALLBACK_INT, gu_subscription_set_sensitivity,
 		   pd->playpause,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /* Next button */
@@ -475,7 +476,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 				 "canSkipForward"),
 		   PROP_TAG_CALLBACK_INT, gu_subscription_set_sensitivity,
 		   pd->next,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /* Separator */
@@ -487,7 +488,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
     prop_subscribe(0,
 		   PROP_TAG_NAME("global", "media", "current", "playstatus"),
 		   PROP_TAG_CALLBACK, update_playstatus, pd,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /**
@@ -517,7 +518,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
     prop_subscribe(0,
 		   PROP_TAG_NAME("global", "media", "current", "currenttime"),
 		   PROP_TAG_CALLBACK_FLOAT, update_curtime, pd,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
   /* Subscribe to current track duration */
@@ -526,7 +527,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
 		   PROP_TAG_NAME("global", "media", "current", 
 				 "metadata", "duration"),
 		   PROP_TAG_CALLBACK_FLOAT, update_duration, pd,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
 
 
@@ -552,7 +553,7 @@ gu_playdeck_add(gu_window_t *gw, GtkWidget *parent)
     prop_subscribe(0,
 		   PROP_TAG_NAME("global", "audio", "mastervolume"),
 		   PROP_TAG_CALLBACK_FLOAT, update_mastervol, pd,
-		   PROP_TAG_COURIER, pc,
+		   PROP_TAG_COURIER, glibcourier,
 		   NULL);
   gtk_widget_show_all(GTK_WIDGET(ti));
 

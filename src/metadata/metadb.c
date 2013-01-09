@@ -5,10 +5,9 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#include <libavformat/avformat.h>
+#include <sqlite3.h>
 
 #include "prop/prop.h"
-#include "ext/sqlite/sqlite3.h"
 
 #include "showtime.h"
 #include "media.h"
@@ -16,6 +15,8 @@
 #include "db/db_support.h"
 #include "fileaccess/fileaccess.h"
 #include "htsmsg/htsmsg_json.h"
+#include "settings.h"
+#include "notifications.h"
 
 #define METADATA_VERSION_STR "1"
 
@@ -32,8 +33,53 @@ rc2metadatacode(int rc)
     return METADATA_DEADLOCK;
   if(rc == SQLITE_DONE)
     return 0;
-  return METADATA_ERROR;
+  return METADATA_PERMANENT_ERROR;
 }
+
+
+
+static void
+items_clear(void *opaque, prop_event_t event, ...)
+{
+  rstr_t *r = _("Clearing all metadata means losing <b>all</b> information about:\n\nIf a track/movie has been seen\nNumber of times a track/movie has been played\nPlayback resume position\n\nIt will also erase the metadata cached from external sources such as themoviedb.org, etc\n\nAre you sure you proceed?");
+
+  int x = message_popup(rstr_get(r), MESSAGE_POPUP_RICH_TEXT |
+			MESSAGE_POPUP_CANCEL | MESSAGE_POPUP_OK, NULL);
+
+  rstr_release(r);
+
+  if(x != MESSAGE_POPUP_OK)
+    return;
+
+  void *db = metadb_get();
+ again:
+  if(db_begin(db)) {
+    metadb_close(db);
+    return;
+  }
+
+  int rc;
+  sqlite3_stmt *stmt;
+  rc = db_prepare(db, &stmt, "DELETE FROM item");
+
+  if(rc == SQLITE_OK) {
+    rc = db_step(stmt);
+    sqlite3_finalize(stmt);
+  }
+
+  if(rc == SQLITE_LOCKED) {
+    db_rollback_deadlock(db);
+    goto again;
+  }
+
+  int deleted = sqlite3_changes(db);
+
+  db_commit(db);
+  metadb_close(db);
+
+  notify_add(NULL, NOTIFY_INFO, NULL, 3, _("%d items deleted"), deleted);
+}
+
 
 /**
  *
@@ -42,12 +88,11 @@ void
 metadb_init(void)
 {
   sqlite3 *db;
-  extern char *showtime_persistent_path;
   char buf[256];
 
-  snprintf(buf, sizeof(buf), "%s/metadb", showtime_persistent_path);
+  snprintf(buf, sizeof(buf), "%s/metadb", gconf.persistent_path);
   mkdir(buf, 0770);
-  snprintf(buf, sizeof(buf), "%s/metadb/meta.db", showtime_persistent_path);
+  snprintf(buf, sizeof(buf), "%s/metadb/meta.db", gconf.persistent_path);
 
   //  unlink(buf);
 
@@ -66,6 +111,10 @@ metadb_init(void)
 
   if(r)
     metadb_pool = NULL; // Disable
+  else
+    settings_create_action(gconf.settings_general, _p("Clear all metadata"),
+			   items_clear, NULL, 0, NULL);
+
 }
 
 
@@ -106,14 +155,13 @@ static int64_t
 db_item_get(sqlite3 *db, const char *url, time_t *mtimep)
 {
   int rc;
-  int64_t rval = METADATA_ERROR;
+  int64_t rval = METADATA_PERMANENT_ERROR;
   sqlite3_stmt *stmt;
 
-  rc = db_prepare(db, 
-		  "SELECT id,mtime from item where url=?1 ",
-		  -1, &stmt, NULL);
+  rc = db_prepare(db, &stmt,
+		  "SELECT id,mtime from item where url=?1 ");
   if(rc)
-    return METADATA_ERROR;
+    return METADATA_PERMANENT_ERROR;
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
 
   rc = db_step(stmt);
@@ -135,23 +183,20 @@ db_item_get(sqlite3 *db, const char *url, time_t *mtimep)
  */
 static int64_t
 db_item_create(sqlite3 *db, const char *url, int contenttype, time_t mtime,
-	       int64_t parentid)
+	       int64_t parentid, metadata_index_status_t indexstatus)
 {
   int rc;
   sqlite3_stmt *stmt;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt,
 		  "INSERT INTO item "
-		  "(url, contenttype, mtime, parent, metadataversion) "
+		  "(url, contenttype, mtime, parent, metadataversion, "
+                  "indexstatus) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4, " METADATA_VERSION_STR ")",
-		  -1, &stmt, NULL);
+		  "(?1, ?2, ?3, ?4, " METADATA_VERSION_STR ", ?5)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
   if(contenttype)
@@ -160,6 +205,7 @@ db_item_create(sqlite3 *db, const char *url, int contenttype, time_t mtime,
     sqlite3_bind_int(stmt, 3, mtime);
   if(parentid > 0)
     sqlite3_bind_int64(stmt, 4, parentid);
+  sqlite3_bind_int(stmt, 5, indexstatus);
 
   rc = db_step(stmt);
   sqlite3_finalize(stmt);
@@ -170,7 +216,7 @@ db_item_create(sqlite3 *db, const char *url, int contenttype, time_t mtime,
   if(rc == SQLITE_DONE)
     return sqlite3_last_insert_rowid(db);
   else
-    return METADATA_ERROR;
+    return METADATA_PERMANENT_ERROR;
 }
 
 
@@ -182,21 +228,18 @@ metadb_artist_get_by_title(void *db, const char *title, int ds_id,
 			   const char *ext_id)
 {
   int rc;
-  int64_t rval = METADATA_ERROR;
+  int64_t rval = METADATA_PERMANENT_ERROR;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &sel,
 		  "SELECT id "
 		  "FROM artist "
 		  "WHERE title=?1 "
 		  "AND ds_id=?2"
-		  "AND (?3 OR ext_id = ?4)",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+		  "AND (?3 OR ext_id = ?4)");
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_text(sel, 1, title, -1, SQLITE_STATIC);
   sqlite3_bind_int(sel, 2, ds_id);
@@ -212,12 +255,11 @@ metadb_artist_get_by_title(void *db, const char *title, int ds_id,
 
     sqlite3_stmt *ins;
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &ins, 
 		    "INSERT INTO artist "
 		    "(title, ds_id, ext_id) "
 		    "VALUES "
-		    "(?1, ?2, ?3)",
-		    -1, &ins, NULL);
+		    "(?1, ?2, ?3)");
 
     if(rc == SQLITE_OK) {
       sqlite3_bind_text(ins, 1, title, -1, SQLITE_STATIC);
@@ -230,9 +272,6 @@ metadb_artist_get_by_title(void *db, const char *title, int ds_id,
 	rval = METADATA_DEADLOCK;
       if(rc == SQLITE_DONE)
 	rval = sqlite3_last_insert_rowid(db);
-    } else {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
     }
   } else if(rc == SQLITE_LOCKED) {
     rval = METADATA_DEADLOCK;
@@ -251,24 +290,20 @@ metadb_album_get_by_title(void *db, const char *album, int64_t artist_id,
 			  int ds_id, const char *ext_id)
 {
   int rc;
-  int64_t rval = -1;
+  int64_t rval =  METADATA_PERMANENT_ERROR;
   sqlite3_stmt *sel;
 
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &sel,
 		  "SELECT id "
 		  "FROM album "
 		  "WHERE title=?1 "
 		  "AND artist_id IS ?2 "
 		  "AND ds_id = ?3 "
-		  "AND (?4 OR ext_id = ?5)",
-		  -1, &sel, NULL);
+		  "AND (?4 OR ext_id = ?5)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+  if(rc != SQLITE_OK)
+    return  METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_text(sel, 1, album, -1, SQLITE_STATIC);
   if(artist_id != -1)
@@ -285,12 +320,11 @@ metadb_album_get_by_title(void *db, const char *album, int64_t artist_id,
     // No entry found, INSERT it
     sqlite3_stmt *ins;
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &ins,
 		    "INSERT INTO album "
 		    "(title, ds_id, artist_id, ext_id) "
 		    "VALUES "
-		    "(?1, ?3, ?2, ?4)",
-		    -1, &ins, NULL);
+		    "(?1, ?3, ?2, ?4)");
 
     if(rc == SQLITE_OK) {
       sqlite3_bind_text(ins, 1, album, -1, SQLITE_STATIC);
@@ -306,9 +340,6 @@ metadb_album_get_by_title(void *db, const char *album, int64_t artist_id,
 	rval = sqlite3_last_insert_rowid(db);
       if(rc == SQLITE_LOCKED)
 	rval = METADATA_DEADLOCK;
-    } else {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
     }
   } else if(rc == SQLITE_LOCKED)
     rval = METADATA_DEADLOCK;
@@ -329,18 +360,14 @@ metadb_insert_albumart(void *db, int64_t album_id, const char *url,
   sqlite3_stmt *ins;
   int rc;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &ins,
 		  "INSERT INTO albumart "
 		  "(album_id, url, width, height) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4)",
-		  -1, &ins, NULL);
+		  "(?1, ?2, ?3, ?4)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return;
-  }
   
   sqlite3_bind_int64(ins, 1, album_id);
   sqlite3_bind_text(ins, 2, url, -1, SQLITE_STATIC);
@@ -361,18 +388,14 @@ metadb_insert_artistpic(void *db, int64_t artist_id, const char *url,
   sqlite3_stmt *ins;
   int rc;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &ins,
 		  "INSERT INTO artistpic "
 		  "(artist_id, url, width, height) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4)",
-		  -1, &ins, NULL);
+		  "(?1, ?2, ?3, ?4)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return;
-  }
   
   sqlite3_bind_int64(ins, 1, artist_id);
   sqlite3_bind_text(ins, 2, url, -1, SQLITE_STATIC);
@@ -387,29 +410,52 @@ metadb_insert_artistpic(void *db, int64_t artist_id, const char *url,
  */
 void
 metadb_insert_videoart(void *db, int64_t videoitem_id, const char *url,
-		       metadata_image_type_t type, int width, int height)
+		       metadata_image_type_t type, int width, int height,
+		       int weight, const char *group, int titled)
 {
   sqlite3_stmt *ins;
   int rc;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &ins,
 		  "INSERT OR REPLACE INTO videoart "
-		  "(videoitem_id, url, width, height, type) "
+		  "(videoitem_id, url, width, height, "
+		  "type, weight, grp, titled) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4, ?5)",
-		  -1, &ins, NULL);
+		  "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return;
-  }
   
   sqlite3_bind_int64(ins, 1, videoitem_id);
   sqlite3_bind_text(ins, 2, url, -1, SQLITE_STATIC);
   if(width) sqlite3_bind_int(ins, 3, width);
   if(height) sqlite3_bind_int(ins, 4, height);
   sqlite3_bind_int(ins, 5, type);
+  if(weight) sqlite3_bind_int(ins, 6, weight);
+  sqlite3_bind_text(ins, 7, group, -1, SQLITE_STATIC);
+  sqlite3_bind_int(ins, 8, titled);
+
+  db_step(ins);
+  sqlite3_finalize(ins);
+}
+
+
+/**
+ *
+ */
+void
+metadb_delete_videoart(void *db, int64_t videoitem_id)
+{
+  sqlite3_stmt *ins;
+  int rc;
+
+  rc = db_prepare(db, &ins,
+		  "DELETE FROM videoart WHERE videoitem_id = ?1");
+
+  if(rc != SQLITE_OK)
+    return;
+  
+  sqlite3_bind_int64(ins, 1, videoitem_id);
   db_step(ins);
   sqlite3_finalize(ins);
 }
@@ -434,19 +480,15 @@ metadb_insert_videocast(void *db, int64_t videoitem_id,
    sqlite3_stmt *ins;
   int rc;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &ins,
 		  "INSERT OR REPLACE INTO videocast "
 		  "(videoitem_id, name, character, department, job, "
 		  "\"order\", image, width, height, ext_id) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-		  -1, &ins, NULL);
+		  "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return;
-  }
   
   sqlite3_bind_int64(ins, 1, videoitem_id);
   sqlite3_bind_text(ins, 2, name, -1, SQLITE_STATIC);
@@ -463,6 +505,26 @@ metadb_insert_videocast(void *db, int64_t videoitem_id,
 }
 
 
+/**
+ *
+ */
+void
+metadb_delete_videocast(void *db, int64_t videoitem_id)
+{
+  sqlite3_stmt *ins;
+  int rc;
+
+  rc = db_prepare(db, &ins,
+		  "DELETE FROM videocast WHERE videoitem_id = ?1");
+
+  if(rc != SQLITE_OK)
+    return;
+  
+  sqlite3_bind_int64(ins, 1, videoitem_id);
+  db_step(ins);
+  sqlite3_finalize(ins);
+}
+
 
 /**
  *
@@ -473,18 +535,14 @@ metadb_insert_videogenre(void *db, int64_t videoitem_id, const char *title)
   sqlite3_stmt *ins;
   int rc;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &ins,
 		  "INSERT OR REPLACE INTO videogenre "
 		  "(videoitem_id, title) "
 		  "VALUES "
-		  "(?1, ?2)",
-		  -1, &ins, NULL);
+		  "(?1, ?2)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return;
-  }
   
   sqlite3_bind_int64(ins, 1, videoitem_id);
   sqlite3_bind_text(ins, 2, title, -1, SQLITE_STATIC);
@@ -524,7 +582,7 @@ metadb_insert_audioitem(sqlite3 *db, int64_t item_id, const metadata_t *md,
   for(i = 0; i < 2; i++) {
     sqlite3_stmt *stmt;
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &stmt,
 		    i == 0 ? 
 		    "INSERT OR FAIL INTO audioitem "
 		    "(item_id, title, album_id, artist_id, duration, ds_id, track) "
@@ -537,14 +595,10 @@ metadb_insert_audioitem(sqlite3 *db, int64_t item_id, const metadata_t *md,
 		    "artist_id = ?4, "
 		    "duration = ?5 "
 		    "WHERE item_id = ?1 AND ds_id = 1"
-		    ,
-		    -1, &stmt, NULL);
+		    );
 
-    if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
-      return METADATA_ERROR;
-    }
+    if(rc != SQLITE_OK)
+      return METADATA_PERMANENT_ERROR;
 
     sqlite3_bind_int64(stmt, 1, item_id);
 
@@ -611,19 +665,16 @@ metadb_get_album_art(void *db, const char *album, const char *artist)
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT aa.url, aa.width, aa.height "
 		  "FROM artist,album,albumart AS aa "
 		  "WHERE artist.title=?1 "
 		  "AND album.title=?2 "
 		  "AND album.artist_id = artist.id "
-		  "AND aa.album_id = album.id",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+		  "AND aa.album_id = album.id"
+		  );
+  if(rc != SQLITE_OK)
     return NULL;
-  }
 
   sqlite3_bind_text(sel, 1, artist, -1, SQLITE_STATIC);
   sqlite3_bind_text(sel, 2, album, -1, SQLITE_STATIC);
@@ -642,21 +693,24 @@ metadb_get_video_art(void *db, int64_t videoitem_id, int type)
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
-		  "SELECT url, width, height "
+  rc = db_prepare(db, &sel,
+		  "SELECT url "
 		  "FROM videoart "
 		  "WHERE videoitem_id=?1 "
-		  "AND type=?2 ",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+		  "AND type=?2 "
+		  "ORDER BY weight DESC"
+		  );
+
+  if(rc != SQLITE_OK)
     return NULL;
-  }
 
   sqlite3_bind_int64(sel, 1, videoitem_id);
   sqlite3_bind_int(sel, 2, type);
-  rstr_t *r = metadb_construct_imageset(sel, 0, 1, 2);
+  rc = db_step(sel);
+  rstr_t *r = NULL;
+  if(rc == SQLITE_ROW)
+    r = db_rstr(sel, 0);
+
   sqlite3_finalize(sel);
   return r;
 }
@@ -692,16 +746,13 @@ metadb_get_video_genre(sqlite3 *db, int64_t videoitem_id)
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT title "
 		  "FROM videogenre "
-		  "WHERE videoitem_id = ?1",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+		  "WHERE videoitem_id = ?1");
+
+  if(rc != SQLITE_OK)
     return NULL;
-  }
 
   sqlite3_bind_int64(sel, 1, videoitem_id);
   rstr_t *r = metadb_construct_list(sel, 0);
@@ -710,32 +761,41 @@ metadb_get_video_genre(sqlite3 *db, int64_t videoitem_id)
 }
 
 
-
 /**
  *
  */
-static rstr_t *
-metadb_get_video_cast(sqlite3 *db, int64_t videoitem_id, const char *job)
+static int
+metadb_get_video_cast(sqlite3 *db, int64_t videoitem_id, metadata_t *md)
 {
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
-		  "SELECT name "
+  rc = db_prepare(db, &sel,
+		  "SELECT name,character,department,job,image "
 		  "FROM videocast "
-		  "WHERE videoitem_id = ?1 AND job = ?2 ORDER BY \"order\"",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return NULL;
-  }
+		  "WHERE videoitem_id = ?1 "
+		  "ORDER BY \"order\"");
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, videoitem_id);
-  sqlite3_bind_text(sel, 2, job, -1, SQLITE_STATIC);
-  rstr_t *r = metadb_construct_list(sel, 0);
+
+  while((rc = db_step(sel)) == SQLITE_ROW) {
+    metadata_person_t *mp = calloc(1, sizeof(metadata_person_t));
+    mp->mp_name       = db_rstr(sel, 0);
+    mp->mp_character  = db_rstr(sel, 1);
+    mp->mp_department = db_rstr(sel, 2);
+    mp->mp_job        = db_rstr(sel, 3);
+    mp->mp_portrait   = db_rstr(sel, 4);
+    
+    if(mp->mp_department && !strcmp(rstr_get(mp->mp_department), "Cast"))
+      TAILQ_INSERT_TAIL(&md->md_cast, mp, mp_link);
+    else
+      TAILQ_INSERT_TAIL(&md->md_crew, mp, mp_link);
+  }
   sqlite3_finalize(sel);
-  return r;
+  return 0;
 }
 
 
@@ -752,18 +812,15 @@ metadb_get_artist_pics(void *db, const char *artist,
 {
   int rc;
   sqlite3_stmt *sel;
-  int rval = -1;
-  rc = db_prepare(db,
+  int rval = METADATA_PERMANENT_ERROR;
+  rc = db_prepare(db, &sel,
 		  "SELECT ap.url, ap.width, ap.height "
 		  "FROM artist,artistpic AS ap "
 		  "WHERE artist.title=?1 "
-		  "AND ap.artist_id = artist.id",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "AND ap.artist_id = artist.id");
+
+  if(rc != SQLITE_OK)
+    return  METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_text(sel, 1, artist, -1, SQLITE_STATIC);
 
@@ -793,27 +850,22 @@ metadb_insert_stream(sqlite3 *db, int64_t videoitem_id,
   const char *media;
 
   switch(ms->ms_type) {
-  case AVMEDIA_TYPE_VIDEO:    media = "video"; break;
-  case AVMEDIA_TYPE_AUDIO:    media = "audio"; break;
-  case AVMEDIA_TYPE_SUBTITLE: media = "subtitle"; break;
+  case MEDIA_TYPE_VIDEO:    media = "video"; break;
+  case MEDIA_TYPE_AUDIO:    media = "audio"; break;
+  case MEDIA_TYPE_SUBTITLE: media = "subtitle"; break;
   default:
     return 0;
   }
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt,
 		  "INSERT INTO videostream "
 		  "(videoitem_id, streamindex, info, isolang, "
 		  "codec, mediatype, disposition, title) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
-		  ,
-		  -1, &stmt, NULL);
+		  "(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(stmt, 1, videoitem_id);
   sqlite3_bind_int(stmt, 2, ms->ms_streamindex);
@@ -844,15 +896,11 @@ metadb_set_streams(sqlite3 *db, int64_t videoitem_id, const metadata_t *md)
   sqlite3_stmt *stmt;
   int rc, r;
 
-  rc = db_prepare(db, 
-		  "DELETE FROM videostream WHERE videoitem_id = ?1",
-		  -1, &stmt, NULL);
+  rc = db_prepare(db, &stmt,
+		  "DELETE FROM videostream WHERE videoitem_id = ?1");
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(stmt, 1, videoitem_id);
 
@@ -861,7 +909,7 @@ metadb_set_streams(sqlite3 *db, int64_t videoitem_id, const metadata_t *md)
   if(rc == SQLITE_LOCKED)
     return METADATA_DEADLOCK;
   if(rc != SQLITE_DONE)
-    return METADATA_ERROR;
+    return METADATA_PERMANENT_ERROR;
 
   TAILQ_FOREACH(ms, &md->md_streams, ms_link) {
     if((r = metadb_insert_stream(db, videoitem_id, ms)) < 0)
@@ -878,35 +926,34 @@ metadb_set_streams(sqlite3 *db, int64_t videoitem_id, const metadata_t *md)
 static int64_t
 metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
 			 const char *ext_id, const metadata_t *md,
-			 int status, int64_t weight)
+			 int status, int64_t weight, int qtype,
+			 int64_t cfgid)
 {
   int i;
   int rc = 0;
-  int64_t id = -1;
+  int64_t id = METADATA_PERMANENT_ERROR;
 
   for(i = 0; i < 2; i++) {
     sqlite3_stmt *stmt;
 
     if(i == 1) {
-      rc = db_prepare(db, 
+      rc = db_prepare(db, &stmt,
 		      "SELECT id "
 		      "FROM videoitem "
-		      "WHERE item_id = ?1 "
+		      "WHERE (?5 OR item_id = ?1) "
 		      "AND ds_id = ?2 "
-		      "AND (?3 OR ext_id = ?4)"
-		      ,
-		      -1, &stmt, NULL);
+		      "AND (?3 OR ext_id = ?4)");
 
-      if(rc != SQLITE_OK) {
-	TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	      __FUNCTION__, __LINE__);
-	return -1;
-      }
+      if(rc != SQLITE_OK)
+	return METADATA_PERMANENT_ERROR;
+
+      sqlite3_bind_int(stmt, 5, !item_id);
       sqlite3_bind_int64(stmt, 1, item_id);
       sqlite3_bind_int64(stmt, 2, ds_id);
+
       sqlite3_bind_int(stmt, 3, !ext_id);
-      
       sqlite3_bind_text(stmt, 4, ext_id, -1, SQLITE_STATIC);
+
       rc = db_step(stmt);
       if(rc != SQLITE_ROW) {
 	sqlite3_finalize(stmt);
@@ -914,23 +961,24 @@ metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
 	  return METADATA_DEADLOCK;
 	TRACE(TRACE_ERROR, "SQLITE", "SQL Error 0x%x at %s:%d",
 	      rc, __FUNCTION__, __LINE__);
-	return -1;
+	return METADATA_PERMANENT_ERROR;
       }
       id = sqlite3_column_int64(stmt, 0);
       sqlite3_finalize(stmt);
     }
 
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &stmt,
 		    i == 0 ? 
 		    "INSERT OR FAIL INTO videoitem "
 		    "(item_id, ds_id, ext_id, "
 		    "title, duration, format, type, tagline, description, "
-		    "year, rating, rate_count, imdb_id, status, weight) "
+		    "year, rating, rate_count, imdb_id, status, weight, "
+		    "querytype, cfgid, parent_id, idx) "
 		    "VALUES "
 		    "(?1, ?2, ?4, "
 		    "?5, ?6, ?7, ?8, ?9, ?10, "
-		    "?11, ?12, ?13, ?14, ?15, ?16)"
+		    "?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"
 		    :
 		    "UPDATE videoitem SET "
 		    "title = ?5, "
@@ -943,19 +991,19 @@ metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
 		    "rating = ?12, "
 		    "rate_count = ?13, "
 		    "imdb_id = ?14, "
-		    "status = ?15 "
+		    "status = ?15, "
+		    "cfgid = ?18, "
+		    "parent_id = ?19, "
+		    "idx = ?20 "
 		    "WHERE id = ?3 "
-		    ,
-		    -1, &stmt, NULL);
+		    );
 
-    if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
-      return -1;
-    }
+    if(rc != SQLITE_OK)
+      return METADATA_PERMANENT_ERROR;
 
     // Keys
-    sqlite3_bind_int64(stmt, 1, item_id);
+    if(item_id)
+      sqlite3_bind_int64(stmt, 1, item_id);
     sqlite3_bind_int(stmt, 2, ds_id);
     sqlite3_bind_int64(stmt, 3, id);
     sqlite3_bind_text(stmt, 4, ext_id, -1, SQLITE_STATIC);
@@ -970,7 +1018,7 @@ metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
 
       sqlite3_bind_text(stmt, 7, rstr_get(md->md_format), -1, SQLITE_STATIC);
 
-      sqlite3_bind_int(stmt, 8, md->md_video_type);
+      sqlite3_bind_int(stmt, 8, md->md_type);
 
       sqlite3_bind_text(stmt, 9, rstr_get(md->md_tagline), -1, SQLITE_STATIC);
       sqlite3_bind_text(stmt, 10, rstr_get(md->md_description),-1, SQLITE_STATIC);
@@ -978,17 +1026,24 @@ metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
 	sqlite3_bind_int(stmt, 11, md->md_year);
       if(md->md_rating >= 0)
 	sqlite3_bind_int(stmt, 12, md->md_rating);
-      if(md->md_rate_count >= 0)
-	sqlite3_bind_int(stmt, 13, md->md_rate_count);
+      if(md->md_rating_count >= 0)
+	sqlite3_bind_int(stmt, 13, md->md_rating_count);
+
+      if(md->md_idx >= 0)
+	sqlite3_bind_int(stmt, 20, md->md_idx);
 
       sqlite3_bind_text(stmt, 14, rstr_get(md->md_imdb_id), -1, SQLITE_STATIC);
+
+      if(md->md_parent_id)
+	sqlite3_bind_int64(stmt, 19, md->md_parent_id);
     } else {
       sqlite3_bind_int(stmt, 8, 0);
     }
     
     sqlite3_bind_int(stmt, 15, status);
     sqlite3_bind_int64(stmt, 16, weight);
-
+    sqlite3_bind_int(stmt, 17, qtype);
+    sqlite3_bind_int64(stmt, 18, cfgid);
 
     rc = db_step(stmt);
     sqlite3_finalize(stmt);
@@ -1005,14 +1060,14 @@ metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
   if(rc != SQLITE_DONE) {
     TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d error:%d",
 	  __FUNCTION__, __LINE__, rc);
-    return METADATA_ERROR;
+    return METADATA_PERMANENT_ERROR;
   }
 
   if(md != NULL) {
     if(metadb_set_streams(db, id, md)) {
       TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
 	    __FUNCTION__, __LINE__);
-      return METADATA_ERROR;
+      return METADATA_PERMANENT_ERROR;
     }
   }
 
@@ -1023,21 +1078,22 @@ metadb_insert_videoitem0(sqlite3 *db, int64_t item_id, int ds_id,
 int64_t
 metadb_insert_videoitem(void *db, const char *url, int ds_id,
 			const char *ext_id, const metadata_t *md,
-			int status, int64_t weight)
+			int status, int64_t weight, int qtype,
+			int64_t cfgid)
 {
   int64_t item_id = db_item_get(db, url, NULL);
 
   if(item_id == METADATA_DEADLOCK)
     return item_id;
 
-  if(item_id == -1) {
-    item_id = db_item_create(db, url, CONTENT_VIDEO, 0, 0);
+  if(item_id == METADATA_PERMANENT_ERROR) {
+    item_id = db_item_create(db, url, CONTENT_VIDEO, 0, 0, 0);
     if(item_id < 0)
       return item_id;
   }
   
   return metadb_insert_videoitem0(db, item_id, ds_id, ext_id, md, status,
-				  weight);
+				  weight, qtype, cfgid);
 }
 
 /**
@@ -1051,7 +1107,7 @@ metadb_insert_imageitem(sqlite3 *db, int64_t item_id, const metadata_t *md)
   for(i = 0; i < 2; i++) {
     sqlite3_stmt *stmt;
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &stmt,
 		    i == 0 ? 
 		    "INSERT OR FAIL INTO imageitem "
 		    "(item_id, original_time, manufacturer, equipment) "
@@ -1063,14 +1119,11 @@ metadb_insert_imageitem(sqlite3 *db, int64_t item_id, const metadata_t *md)
 		    "manufacturer = ?3, "
 		    "equipment = ?4 "
 		    "WHERE item_id = ?1"
-		    ,
-		    -1, &stmt, NULL);
+		    );
 
-    if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
-      return -1;
-    }
+    if(rc != SQLITE_OK)
+      return METADATA_PERMANENT_ERROR;
+
     sqlite3_bind_int64(stmt, 1, item_id);
 
     if(md->md_time)
@@ -1092,101 +1145,79 @@ metadb_insert_imageitem(sqlite3 *db, int64_t item_id, const metadata_t *md)
 }
 
 
-
-
-
-
 /**
  *
  */
-void
-metadb_metadata_write(void *db, const char *url, time_t mtime,
-		      const metadata_t *md, const char *parent,
-		      time_t parent_mtime)
+int
+metadb_metadata_writex(void *db, const char *url, time_t mtime,
+                       const metadata_t *md, const char *parent,
+                       time_t parent_mtime,
+                       metadata_index_status_t indexstatus)
 {
   int64_t item_id;
   int64_t parent_id = 0;
   int rc;
   sqlite3_stmt *stmt;
 
- again:
-  if(db_begin(db))
-    return;
-
   if(parent != NULL) {
     parent_id = db_item_get(db, parent, NULL);
-    if(parent_id == METADATA_DEADLOCK) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
+    if(parent_id == METADATA_DEADLOCK)
+      return METADATA_DEADLOCK;
 
-    if(parent_id == -1)
-      parent_id = db_item_create(db, parent, CONTENT_DIR, parent_mtime, 0);
+    if(parent_id == METADATA_PERMANENT_ERROR)
+      parent_id = db_item_create(db, parent, CONTENT_DIR, parent_mtime, 0, 0);
 
-    if(parent_id == METADATA_DEADLOCK) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
+    if(parent_id == METADATA_DEADLOCK)
+      return METADATA_DEADLOCK;
   }
 
   item_id = db_item_get(db, url, NULL);
-  if(item_id == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
+  if(item_id == METADATA_DEADLOCK)
+    return METADATA_DEADLOCK;
 
-  if(item_id == -1) {
+  if(item_id < 0) {
 
-    item_id = db_item_create(db, url, md->md_contenttype, mtime, parent_id);
+    item_id = db_item_create(db, url, md->md_contenttype, mtime, parent_id,
+                             indexstatus);
 
-    if(item_id == METADATA_DEADLOCK) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
+    if(item_id == METADATA_DEADLOCK)
+      return METADATA_DEADLOCK;
 
-    if(item_id == -1) {
-      db_rollback(db);
-      return;
-    }
+    if(item_id == -1)
+      return METADATA_TEMPORARY_ERROR;
 
   } else {
 
-    rc = db_prepare(db, 
-		    parent_id > 0 ? 
-		    "UPDATE item "
-		    "SET contenttype=?1, "
-		    "mtime=?2, "
-		    "metadataversion=" METADATA_VERSION_STR ", "
-		    "parent=?4 "
-		    "WHERE id=?3"
-		    :
-		    "UPDATE item "
-		    "SET contenttype=?1, "
-		    "mtime=?2, "
-		    "metadataversion=" METADATA_VERSION_STR " "
-		    "WHERE id=?3",
-		    -1, &stmt, NULL);
+    char sql[512];
 
-    if(rc != SQLITE_OK) {
-      db_rollback(db);
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
-      return;
-    }
+    snprintf(sql, sizeof(sql),
+             "UPDATE item SET metadataversion=" METADATA_VERSION_STR
+             "%s"
+             "%s"
+             "%s"
+             "%s"
+             " WHERE id=?1",
+             md->md_contenttype ? ", contenttype=?2" : "",
+             mtime              ? ", mtime=?3" : "",
+             parent_id          ? ", parent=?4" : "",
+             indexstatus        ? ", indexstatus=?5" : "");
+    
+    rc = db_prepare(db, &stmt, sql);
 
-    if(md->md_contenttype)
-      sqlite3_bind_int(stmt, 1, md->md_contenttype);
-    if(mtime)
-      sqlite3_bind_int(stmt, 2, mtime);
-    sqlite3_bind_int64(stmt, 3, item_id);
+    if(rc != SQLITE_OK)
+      return METADATA_PERMANENT_ERROR;
+
+    sqlite3_bind_int64(stmt, 1, item_id);
+
+    sqlite3_bind_int(stmt,   2, md->md_contenttype);
+    sqlite3_bind_int(stmt,   3, mtime);
     sqlite3_bind_int64(stmt, 4, parent_id);
+    sqlite3_bind_int(stmt,   5, indexstatus);
 
     rc = db_step(stmt);
     sqlite3_finalize(stmt);
-    if(rc == METADATA_DEADLOCK) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
+    if(rc == METADATA_DEADLOCK)
+      return METADATA_DEADLOCK;
   }
 
   int r;
@@ -1197,32 +1228,59 @@ metadb_metadata_write(void *db, const char *url, time_t mtime,
     break;
 
   case CONTENT_VIDEO:
-    r = metadb_insert_videoitem0(db, item_id, 1, NULL, md, 3, 0) < 0;
+    r = metadb_insert_videoitem0(db, item_id, 1, NULL, md, 3, 0, 0, 0) < 0;
     break;
 
   case CONTENT_IMAGE:
     r = metadb_insert_imageitem(db, item_id, md);
     break;
 
-  case CONTENT_DIR:
-  case CONTENT_DVD:
-    r = 0;
-    break;
 
   default:
-    r = 1;
+    return 0;
+  }
+  return r;
+}
+
+
+
+/**
+ *
+ */
+void
+metadb_metadata_write(void *db, const char *url, time_t mtime,
+		      const metadata_t *md, const char *parent,
+		      time_t parent_mtime,
+                      metadata_index_status_t indexstatus)
+{
+  switch(md->md_contenttype) {
+  case CONTENT_AUDIO:
+  case CONTENT_VIDEO:
+  case CONTENT_IMAGE:
+  case CONTENT_DIR:
+  case CONTENT_DVD:
     break;
+  default:
+    return;
   }
 
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
+  while(1) {
+    if(db_begin(db))
+      return;
+    
+    int r = metadb_metadata_writex(db, url, mtime, md, parent, parent_mtime,
+                                   indexstatus);
+    
+    if(r == METADATA_DEADLOCK) {
+      db_rollback_deadlock(db);
+      continue;
+    }
+    if(r)
+      db_rollback(db);
+    else
+      db_commit(db);
+    return;
   }
-
-  if(r)
-    db_rollback(db);
-  else
-    db_commit(db);
 }
 
 
@@ -1254,7 +1312,7 @@ static int
 metadb_metadata_get_artist(sqlite3 *db, get_cache_t *gc, int64_t id)
 {
   if(id < 1)
-    return -1;
+    return METADATA_PERMANENT_ERROR;
 
   if(id == gc->gc_artist_id)
     return 0;
@@ -1262,16 +1320,14 @@ metadb_metadata_get_artist(sqlite3 *db, get_cache_t *gc, int64_t id)
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT title "
 		  "FROM artist "
-		  "WHERE id = ?1 AND ds_id=1",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "WHERE id = ?1 AND ds_id=1"
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, id);
 
@@ -1279,7 +1335,7 @@ metadb_metadata_get_artist(sqlite3 *db, get_cache_t *gc, int64_t id)
 
   if(rc != SQLITE_ROW) {
     sqlite3_finalize(sel);
-    return -1;
+    return METADATA_PERMANENT_ERROR;
   }
 
   gc->gc_artist_id = id;
@@ -1298,7 +1354,7 @@ static int
 metadb_metadata_get_album(sqlite3 *db, get_cache_t *gc, int64_t id)
 {
   if(id < 1)
-    return -1;
+    return METADATA_PERMANENT_ERROR;
 
   if(id == gc->gc_album_id)
     return 0;
@@ -1306,16 +1362,13 @@ metadb_metadata_get_album(sqlite3 *db, get_cache_t *gc, int64_t id)
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT title "
 		  "FROM album "
-		  "WHERE id = ?1 AND ds_id=1",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "WHERE id = ?1 AND ds_id=1");
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, id);
 
@@ -1323,7 +1376,7 @@ metadb_metadata_get_album(sqlite3 *db, get_cache_t *gc, int64_t id)
 
   if(rc != SQLITE_ROW) {
     sqlite3_finalize(sel);
-    return -1;
+    return METADATA_PERMANENT_ERROR;
   }
 
   gc->gc_album_id = id;
@@ -1344,16 +1397,14 @@ metadb_metadata_get_audio(sqlite3 *db, metadata_t *md, int64_t item_id,
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT title, album_id, artist_id, duration, track "
 		  "FROM audioitem "
-		  "WHERE item_id = ?1 AND ds_id = 1",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "WHERE item_id = ?1 AND ds_id = 1"
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, item_id);
 
@@ -1361,7 +1412,7 @@ metadb_metadata_get_audio(sqlite3 *db, metadata_t *md, int64_t item_id,
 
   if(rc != SQLITE_ROW) {
     sqlite3_finalize(sel);
-    return -1;
+    return METADATA_PERMANENT_ERROR;
   }
 
   md->md_title = rstr_alloc((void *)sqlite3_column_text(sel, 0));
@@ -1390,17 +1441,15 @@ metadb_metadata_get_video(sqlite3 *db, metadata_t *md, int64_t item_id,
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT id, title, duration, format, year "
 		  "FROM videoitem "
 		  "WHERE item_id = ?1 "
-		  "AND ds_id = ?2",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "AND ds_id = ?2"
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, item_id);
   sqlite3_bind_int(sel, 2, ds_id);
@@ -1409,7 +1458,7 @@ metadb_metadata_get_video(sqlite3 *db, metadata_t *md, int64_t item_id,
 
   if(rc != SQLITE_ROW) {
     sqlite3_finalize(sel);
-    return -1;
+    return METADATA_PERMANENT_ERROR;
   }
 
   int64_t id = sqlite3_column_int64(sel, 0);
@@ -1434,21 +1483,49 @@ metadb_videoitem_set_preferred(void *db, const char *url, int64_t vid)
   sqlite3_stmt *stmt;
   int rc;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &stmt,
 		  "UPDATE videoitem "
 		  "SET preferred = (CASE WHEN id=?2 THEN 1 ELSE 0 END) "
 		  "WHERE item_id = (SELECT id FROM item WHERE url = ?1)"
-		  , -1, &stmt, NULL);
+		  );
   
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
+
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
   sqlite3_bind_int64(stmt, 2, vid);
 
   rc = db_step(stmt);
+  sqlite3_finalize(stmt);
+  if(rc == SQLITE_LOCKED)
+    return METADATA_DEADLOCK;
+  return 0;
+}
+
+
+/**
+ *
+ */
+int
+metadb_videoitem_delete_from_ds(void *db, const char *url, int ds)
+{
+  sqlite3_stmt *stmt;
+  int rc;
+
+  rc = db_prepare(db, &stmt,
+		  "DELETE FROM videoitem "
+		  "WHERE item_id = (SELECT id FROM item WHERE url = ?1) AND "
+		  "ds_id = ?2"
+		  );
+  
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
+
+  sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
+  sqlite3_bind_int(stmt, 2, ds);
+
+  rc = db_step(stmt);
+  sqlite3_finalize(stmt);
   if(rc == SQLITE_LOCKED)
     return METADATA_DEADLOCK;
   return 0;
@@ -1466,20 +1543,18 @@ metadb_videoitem_alternatives0(void *db, prop_t *p, const char *url, int dsid,
   prop_t *active = NULL;
   sqlite3_stmt *sel;
   prop_vec_t *pv = prop_vec_create(10);
-  rc = db_prepare(db,
+
+  rc = db_prepare(db, &sel,
 		  "SELECT v.id, v.title, v.year, v.preferred, v.status "
 		  "FROM videoitem as v, item "
 		  "WHERE item.url = ?1 "
 		  "AND v.item_id = item.id "
 		  "AND v.ds_id = ?2 "
 		  "ORDER BY v.weight DESC"
-		  , -1, &sel, NULL);
+		  );
   
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return 0;
-  }
 
   sqlite3_bind_text(sel, 1, url, -1, SQLITE_STATIC);
   sqlite3_bind_int(sel, 2, dsid);
@@ -1560,17 +1635,14 @@ metadb_item_set_preferred_ds(void *db, const char *url, int ds_id)
 {
   int rc;
   sqlite3_stmt *stmt;
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt,
 		  "UPDATE item "
 		  "SET ds_id = ?2 "
-		  "WHERE url=?1",
-		  -1, &stmt, NULL);
+		  "WHERE url=?1"
+		  );
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
   if(ds_id)
@@ -1597,19 +1669,17 @@ metadb_item_get_preferred_ds(const char *url)
   sqlite3_stmt *stmt;
 
   if((db = metadb_get()) == NULL)
-    return METADATA_ERROR;
+    return METADATA_PERMANENT_ERROR;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt,
 		  "SELECT ds_id "
 		  "FROM item "
 		  "WHERE url=?1"
-		  , -1, &stmt, NULL);
+		  );
 
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     metadb_close(db);
-    return METADATA_ERROR;
+    return METADATA_PERMANENT_ERROR;
   }
 
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
@@ -1623,6 +1693,173 @@ metadb_item_get_preferred_ds(const char *url)
 }
 
 
+/**
+ *
+ */
+rstr_t *
+metadb_item_get_user_title(const char *url)
+{
+  void *db;
+  int rc;
+  sqlite3_stmt *stmt;
+  rstr_t *ret = NULL;
+
+  if((db = metadb_get()) == NULL)
+    return NULL;
+
+  rc = db_prepare(db, &stmt, 
+		  "SELECT usertitle "
+		  "FROM item "
+		  "WHERE url=?1"
+		  );
+
+  if(rc != SQLITE_OK) {
+    metadb_close(db);
+    return NULL;
+  }
+
+  sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
+
+  rc = db_step(stmt);
+  if(rc == SQLITE_ROW)
+    ret = db_rstr(stmt, 0);
+
+  sqlite3_finalize(stmt);
+  metadb_close(db);
+  return ret;
+}
+
+
+
+/**
+ *
+ */
+void
+metadb_item_set_user_title(const char *url, const char *str)
+{
+  void *db;
+  int rc;
+  sqlite3_stmt *stmt;
+
+  if((db = metadb_get()) == NULL)
+    return;
+
+  rc = db_prepare(db, &stmt, 
+		  "UPDATE item "
+		  "SET usertitle=?2 "
+		  "WHERE url=?1"
+		  );
+
+  if(rc != SQLITE_OK) {
+    metadb_close(db);
+    return;
+  }
+
+  sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
+  if(str && !*str)
+    str = NULL;
+  sqlite3_bind_text(stmt, 2, str, -1, SQLITE_STATIC);
+
+  db_step(stmt);
+  sqlite3_finalize(stmt);
+  metadb_close(db);
+}
+
+
+/**
+ *
+ */
+static int
+metadb_get_videoinfo2(void *db, int64_t id, metadata_t **mdp)
+{
+  sqlite3_stmt *sel;
+  int rc;
+
+  rc = db_prepare(db, &sel,
+		  "SELECT v.parent_id, v.title, v.tagline, v.description, "
+		  "v.year, v.rating, v.rate_count, v.imdb_id, v.idx, v.type, "
+		  "v.id "
+		  "FROM videoitem AS v "
+		  "WHERE v.id = ?1 "
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
+
+  sqlite3_bind_int64(sel, 1, id);
+
+  rc = db_step(sel);
+
+  if(rc == SQLITE_LOCKED) {
+    sqlite3_finalize(sel);
+    return METADATA_DEADLOCK;
+  }
+
+  if(rc == SQLITE_ROW) {
+    metadata_t *md = metadata_create();
+
+    md->md_parent_id   = sqlite3_column_int64(sel, 0);
+    md->md_title       = db_rstr(sel, 1);
+    md->md_tagline     = db_rstr(sel, 2);
+    md->md_description = db_rstr(sel, 3);
+    md->md_year        = sqlite3_column_int(sel, 4);
+    md->md_rating      = db_posint(sel, 5);
+    md->md_rating_count= db_posint(sel, 6);
+    md->md_imdb_id     = db_rstr(sel, 7);
+    md->md_idx         = db_posint(sel, 8);
+    md->md_type        = sqlite3_column_int(sel, 9);
+    md->md_id          = sqlite3_column_int64(sel, 10);
+
+    md->md_icon =
+      metadb_get_video_art(db, id, METADATA_IMAGE_POSTER);
+    md->md_backdrop =
+      metadb_get_video_art(db, id, METADATA_IMAGE_BACKDROP);
+    md->md_banner_wide =
+      metadb_get_video_art(db, id, METADATA_IMAGE_BANNER_WIDE);
+
+    md->md_genre = metadb_get_video_genre(db, id);
+
+    metadb_get_video_cast(db, id, md);
+
+    if(md->md_parent_id)
+      metadb_get_videoinfo2(db, md->md_parent_id, &md->md_parent);
+    *mdp = md;
+  }
+  sqlite3_finalize(sel);
+  return 0;
+}
+
+
+/**
+ *
+ */
+int64_t
+metadb_get_videoitem(void *db, const char *url)
+{
+  int rc;
+  int64_t rval = METADATA_PERMANENT_ERROR;
+  sqlite3_stmt *stmt;
+
+  rc = db_prepare(db, &stmt, 
+		  "SELECT videoitem.id "
+		  "FROM videoitem,item "
+		  "WHERE videoitem.item_id = item.id "
+		  "AND item.url = ?1"
+		  );
+
+  if(rc)
+    return METADATA_PERMANENT_ERROR;
+
+  sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
+  rc = db_step(stmt);
+  if(rc == SQLITE_ROW) {
+    rval = sqlite3_column_int64(stmt, 0);
+  } else if(rc == SQLITE_LOCKED)
+    rval = METADATA_DEADLOCK;
+  sqlite3_finalize(stmt);
+  return rval;
+}
+
 
 /**
  *
@@ -1635,18 +1872,16 @@ metadb_get_videoinfo(void *db, const char *url,
   int rc;
   sqlite3_stmt *sel;
 
-  *fixed_ds = 0;
+  if(fixed_ds)
+    *fixed_ds = 0;
   *mdp = NULL;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT id, ds_id FROM item WHERE url = ?1"
-		  , -1, &sel, NULL);
+		  );
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_text(sel, 1, url, -1, SQLITE_STATIC);
 
@@ -1654,8 +1889,8 @@ metadb_get_videoinfo(void *db, const char *url,
   if(rc == SQLITE_LOCKED) {
     sqlite3_finalize(sel);
     return METADATA_DEADLOCK;
-
   }
+
   if(rc != SQLITE_ROW) {
     sqlite3_finalize(sel);
     return 0;
@@ -1666,24 +1901,23 @@ metadb_get_videoinfo(void *db, const char *url,
 
   sqlite3_finalize(sel);
 
-  *fixed_ds = ds_id;
+  if(fixed_ds)
+    *fixed_ds = ds_id;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT v.id, v.title, v.tagline, v.description, v.year, "
 		  "v.rating, v.rate_count, v.imdb_id, v.ds_id, v.status, "
-		  "v.preferred, v.ext_id, ds.id, ds.enabled "
+		  "v.preferred, v.ext_id, ds.id, ds.enabled, v.querytype, "
+		  "v.cfgid, v.idx, v.type, v.parent_id "
 		  "FROM datasource AS ds, videoitem AS v "
 		  "WHERE v.item_id = ?1 "
 		  "AND ds.id = v.ds_id "
 		  "AND (?2 == 0 OR ?2 = v.ds_id) "
 		  "ORDER BY ds.prio ASC, v.weight DESC"
-		  , -1, &sel, NULL);
+		  );
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return METADATA_ERROR;
-  }
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, item_id);
   sqlite3_bind_int(sel, 2, ds_id);
@@ -1695,15 +1929,25 @@ metadb_get_videoinfo(void *db, const char *url,
     int dsid = sqlite3_column_int(sel, 12);
     int dsenabled = sqlite3_column_int(sel, 13);
     int preferred = sqlite3_column_int(sel, 10);
-    
+    int qtype = sqlite3_column_int(sel, 14);
+    int64_t cfgid = sqlite3_column_int64(sel, 15);
     if(!dsenabled)
       continue;
 
-    metadata_source_t *ms;
+    if(sources != NULL) {
+      metadata_source_t *ms;
 
-    LIST_FOREACH(ms, sources, ms_link)
-      if(ms->ms_id == dsid)
-	ms->ms_mark = 1;
+      LIST_FOREACH(ms, sources, ms_link)
+	if(ms->ms_id == dsid && cfgid == ms->ms_cfgid) {
+	  ms->ms_mark = 1;
+	  ms->ms_qtype = qtype;
+	  ms->ms_status = status;
+	  break;
+	}
+
+      if(ms == NULL)
+	continue;
+    }
 
     if(status == METAITEM_STATUS_ABSENT)
       continue;
@@ -1718,33 +1962,42 @@ metadb_get_videoinfo(void *db, const char *url,
 
     md = metadata_create();
 
+    int64_t vid = sqlite3_column_int64(sel, 0);
+
     md->md_preferred = preferred;
     md->md_title = db_rstr(sel, 1);
     md->md_tagline = db_rstr(sel, 2);
     md->md_description = db_rstr(sel, 3);
     md->md_year = sqlite3_column_int(sel, 4);
-    if(sqlite3_column_type(sel, 5) == SQLITE_INTEGER)
-      md->md_rating = sqlite3_column_int(sel, 5);
-    else
-      md->md_rating = -1;
+    md->md_rating = db_posint(sel, 5);
 
-    if(sqlite3_column_type(sel, 6) == SQLITE_INTEGER)
-      md->md_rate_count = sqlite3_column_int(sel, 6);
-    else
-      md->md_rate_count = -1;
+    md->md_rating_count = db_posint(sel, 6);
+
+    md->md_type = sqlite3_column_int(sel, 17);
 
     md->md_imdb_id = db_rstr(sel, 7);
     md->md_dsid = sqlite3_column_int(sel, 8);
     md->md_metaitem_status = status;
     md->md_ext_id = db_rstr(sel, 11);
 
-    int64_t vid = sqlite3_column_int64(sel, 0);
     md->md_icon = metadb_get_video_art(db, vid, METADATA_IMAGE_POSTER);
     md->md_backdrop = metadb_get_video_art(db, vid, METADATA_IMAGE_BACKDROP);
+    md->md_banner_wide =
+      metadb_get_video_art(db, vid, METADATA_IMAGE_BANNER_WIDE);
+    metadb_get_video_cast(db, vid, md);
+
     md->md_genre = metadb_get_video_genre(db, vid);
-    md->md_director = metadb_get_video_cast(db, vid, "Director");
-    md->md_producer = metadb_get_video_cast(db, vid, "Producer");
+    md->md_qtype = qtype;
+    
+    md->md_idx = db_posint(sel, 16);
+
+    md->md_parent_id = sqlite3_column_int64(sel, 18);
+    md->md_id = vid;
+    
+    if(md->md_parent_id)
+      metadb_get_videoinfo2(db, md->md_parent_id, &md->md_parent);
   }
+
   sqlite3_finalize(sel);
   *mdp = md;
   return 0;
@@ -1763,31 +2016,31 @@ metadb_metadata_get_streams(sqlite3 *db, metadata_t *md, int64_t videoitem_id)
   int strack = 0;
   int vtrack = 0;
 
-  rc = db_prepare(db,
-		  "SELECT streamindex, info, isolang, codec, mediatype, disposition, title "
+  rc = db_prepare(db, &sel,
+		  "SELECT streamindex, info, isolang, codec, "
+		  "mediatype, disposition, title "
 		  "FROM videostream "
-		  "WHERE videoitem_id = ?1 ORDER BY streamindex",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "WHERE videoitem_id = ?1 "
+		  "ORDER BY streamindex"
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, videoitem_id);
 
   while((rc = db_step(sel)) == SQLITE_ROW) {
-    enum AVMediaType type;
+    int type;
     int tn;
     const char *str = (const char *)sqlite3_column_text(sel, 4);
     if(!strcmp(str, "audio")) {
-      type = AVMEDIA_TYPE_AUDIO;
+      type = MEDIA_TYPE_AUDIO;
       tn = ++atrack;
     } else if(!strcmp(str, "video")) {
-      type = AVMEDIA_TYPE_VIDEO;
+      type = MEDIA_TYPE_VIDEO;
       tn = ++vtrack;
     } else if(!strcmp(str, "subtitle")) {
-      type = AVMEDIA_TYPE_SUBTITLE;
+      type = MEDIA_TYPE_SUBTITLE;
       tn = ++strack;
     } else {
       continue;
@@ -1816,16 +2069,14 @@ metadb_metadata_get_image(sqlite3 *db, metadata_t *md, int64_t item_id)
   int rc;
   sqlite3_stmt *sel;
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &sel,
 		  "SELECT original_time, manufacturer, equipment "
 		  "FROM imageitem "
-		  "WHERE item_id = ?1",
-		  -1, &sel, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "WHERE item_id = ?1"
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
 
   sqlite3_bind_int64(sel, 1, item_id);
 
@@ -1833,7 +2084,7 @@ metadb_metadata_get_image(sqlite3 *db, metadata_t *md, int64_t item_id)
 
   if(rc != SQLITE_ROW) {
     sqlite3_finalize(sel);
-    return -1;
+    return METADATA_PERMANENT_ERROR;
   }
 
   md->md_time = sqlite3_column_int(sel, 0);
@@ -1904,15 +2155,14 @@ metadb_metadata_get(void *db, const char *url, time_t mtime)
   if(db_begin(db))
     return NULL;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &sel,
 		  "SELECT id,contenttype from item "
 		  "where url=?1 AND "
 		  "mtime=?2 AND "
-		  "metadataversion=" METADATA_VERSION_STR,
-		  -1, &sel, NULL);
+		  "metadataversion=" METADATA_VERSION_STR
+		  );
+
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     db_rollback(db);
     return NULL;
   }
@@ -1966,15 +2216,14 @@ metadb_metadata_scandir(void *db, const char *url, time_t *mtime)
   sqlite3_stmt *sel;
   int rc;
 
-  rc = db_prepare(db,
-		  "SELECT id,url,contenttype,mtime,playcount,lastplay,metadataversion "
+  rc = db_prepare(db, &sel,
+		  "SELECT id, url, contenttype, mtime, playcount, "
+		  "lastplay, metadataversion "
 		  "FROM item "
-		  "WHERE parent = ?1",
-		  -1, &sel, NULL);
+		  "WHERE parent = ?1"
+		  );
 
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     db_rollback(db);
     return NULL;
   }
@@ -2039,12 +2288,11 @@ metadb_unparent_item(void *db, const char *url)
 
   sqlite3_stmt *stmt;
     
-  rc = db_prepare(db, "UPDATE item SET parent = NULL WHERE url=?1",
-			  -1, &stmt, NULL);
+  rc = db_prepare(db, &stmt,
+		  "UPDATE item SET parent = NULL WHERE url=?1"
+		  );
   
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     db_rollback(db);
     return;
   }
@@ -2085,7 +2333,7 @@ metadb_register_play(const char *url, int inc, int content_type)
   for(i = 0; i < 2; i++) {
     sqlite3_stmt *stmt;
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &stmt,
 		    i == 0 ? 
 		    "UPDATE item "
 		    "SET playcount = playcount + ?3, "
@@ -2095,12 +2343,10 @@ metadb_register_play(const char *url, int inc, int content_type)
 		    "INSERT INTO item "
 		    "(url, contenttype, playcount, lastplay) "
 		    "VALUES "
-		    "(?1, ?4, ?3, ?2)",
-		    -1, &stmt, NULL);
+		    "(?1, ?4, ?3, ?2)"
+		    );
 
     if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
       db_rollback(db);
       metadb_close(db);
       return;
@@ -2120,7 +2366,9 @@ metadb_register_play(const char *url, int inc, int content_type)
       break;
   }
   db_commit(db);
+  hts_mutex_lock(&mip_mutex);
   mip_update_by_url(db, url);
+  hts_mutex_unlock(&mip_mutex);
   metadb_close(db);
 }
 
@@ -2136,6 +2384,9 @@ metadb_set_video_restartpos(const char *url, int64_t pos_ms)
   int i;
   void *db;
 
+  if(pos_ms >= 0 && pos_ms < 60000)
+    return;
+
   if((db = metadb_get()) == NULL)
     return;
  again:
@@ -2147,28 +2398,26 @@ metadb_set_video_restartpos(const char *url, int64_t pos_ms)
   for(i = 0; i < 2; i++) {
     sqlite3_stmt *stmt;
 
-    rc = db_prepare(db, 
+    rc = db_prepare(db, &stmt,
 		    i == 0 ? 
 		    "UPDATE item "
-		    "SET restartposition = ?2 "
+		    "SET restartposition = ?2, contenttype = ?3 "
 		    "WHERE url=?1"
 		    :
 		    "INSERT INTO item "
 		    "(url, contenttype, restartposition) "
 		    "VALUES "
-		    "(?1, ?3, ?2)",
-		    -1, &stmt, NULL);
+		    "(?1, ?3, ?2)");
 
     if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
       db_rollback(db);
       metadb_close(db);
       return;
     }
 
     sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 2, pos_ms);
+    if(pos_ms > 0)
+      sqlite3_bind_int64(stmt, 2, pos_ms);
     sqlite3_bind_int(stmt, 3, CONTENT_VIDEO);
     rc = db_step(stmt);
     sqlite3_finalize(stmt);
@@ -2199,16 +2448,13 @@ video_get_restartpos(const char *url)
   if((db = metadb_get()) == NULL)
     return 0;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt,
 		  "SELECT restartposition "
 		  "FROM item "
-		  "WHERE url = ?1",
-		  -1, &stmt, NULL);
+		  "WHERE url = ?1"
+		  );
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-  } else {
+  if(rc == SQLITE_OK) {
     sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
     rc = db_step(stmt);
 
@@ -2256,20 +2502,19 @@ typedef struct metadb_item_info {
 static int
 mip_get(sqlite3 *db, const char *url, metadb_item_info_t *mii)
 {
-  int rc = -1;
+  int rc = METADATA_PERMANENT_ERROR;
   sqlite3_stmt *stmt;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt,
 		  "SELECT "
 		  "playcount,lastplay,restartposition "
 		  "FROM item "
-		  "WHERE url=?1 ",
-		  -1, &stmt, NULL);
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    return -1;
-  }
+		  "WHERE url=?1"
+		  );
+
+  if(rc != SQLITE_OK)
+    return METADATA_PERMANENT_ERROR;
+
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
 
   rc = db_step(stmt);
@@ -2310,8 +2555,6 @@ mip_update_by_url(sqlite3 *db, const char *url)
 
   unsigned int hash = mystrhash(url) % MIP_HASHWIDTH;
 
-  hts_mutex_lock(&mip_mutex);
-
   LIST_FOREACH(mip, &mip_hash[hash], mip_link) {
     if(strcmp(mip->mip_url, url))
       continue;
@@ -2323,7 +2566,6 @@ mip_update_by_url(sqlite3 *db, const char *url)
     }
     mip_set(mip, &mii);
   }
-  hts_mutex_unlock(&mip_mutex);
 }
 
 
@@ -2367,7 +2609,7 @@ static void
 metadb_set_playcount(void *opaque, prop_event_t event, ...)
 {
   metadb_item_prop_t *mip = opaque;
-  int rc;
+  int rc, i;
   void *db;
   va_list ap;
 
@@ -2390,29 +2632,41 @@ metadb_set_playcount(void *opaque, prop_event_t event, ...)
     return;
   }
 
-  sqlite3_stmt *stmt;
-  rc = db_prepare(db, 
-		  "UPDATE item "
-		  "SET playcount = ?2 "
-		  "WHERE url=?1",
-		  -1, &stmt, NULL);
+  for(i = 0; i < 2; i++) {
+    sqlite3_stmt *stmt;
+    rc = db_prepare(db, &stmt, 
+		    i == 0 ? 
+		    "UPDATE item "
+		    "SET playcount = ?2 "
+		    "WHERE url=?1"
+		    :
+		    "INSERT INTO item "
+		    "(url, playcount, metadataversion) "
+		    "VALUES "
+		    "(?1, ?2, " METADATA_VERSION_STR ")"
+		    );
+    
+    if(rc != SQLITE_OK) {
+      db_rollback(db);
+      metadb_close(db);
+      return;
+    }
 
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
-    db_rollback(db);
-    metadb_close(db);
-    return;
+    sqlite3_bind_text(stmt, 1, mip->mip_url, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 2, v);
+    rc = db_step(stmt);
+    sqlite3_finalize(stmt);
+    if(rc == SQLITE_LOCKED) {
+      db_rollback_deadlock(db);
+      goto again;
+    }
+
+    if(rc == SQLITE_DONE && sqlite3_changes(db) == 0) {
+      continue;
+    }
+    break;
   }
 
-  sqlite3_bind_text(stmt, 1, mip->mip_url, -1, SQLITE_STATIC);
-  sqlite3_bind_int64(stmt, 2, v);
-  rc = db_step(stmt);
-  sqlite3_finalize(stmt);
-  if(rc == SQLITE_LOCKED) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
   db_commit(db);
   mip_update_by_url(db, mip->mip_url);
   metadb_close(db);

@@ -186,6 +186,7 @@ htsbuf_peek(htsbuf_queue_t *hq, void *buf, size_t len)
     c = MIN(hd->hd_data_len - hd->hd_data_off, len);
     memcpy(buf, hd->hd_data + hd->hd_data_off, c);
 
+    r += c;
     buf += c;
     len -= c;
 
@@ -226,7 +227,7 @@ htsbuf_drop(htsbuf_queue_t *hq, size_t len)
 void
 htsbuf_vqprintf(htsbuf_queue_t *hq, const char *fmt, va_list ap)
 {
-  char buf[1000];
+  char buf[10000];
   htsbuf_append(hq, buf, vsnprintf(buf, sizeof(buf), fmt, ap));
 }
 
@@ -273,6 +274,16 @@ htsbuf_dump_raw_stderr(htsbuf_queue_t *hq)
   }
   if(write(2, &n, 1) != 1)
     return;
+}
+
+
+void
+htsbuf_hexdump(htsbuf_queue_t *hq, const char *prefix)
+{
+  char *r = malloc(hq->hq_size);
+  htsbuf_peek(hq, r, hq->hq_size);
+  hexdump(prefix, r, hq->hq_size);
+  free(r);
 }
 
 

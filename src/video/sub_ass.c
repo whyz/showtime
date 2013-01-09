@@ -15,13 +15,14 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+#include <stdio.h>
 
 #include "showtime.h"
 #include "video_decoder.h"
 #include "video_overlay.h"
 #include "text/text.h"
 #include "misc/pixmap.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "sub.h"
 #include "video_settings.h"
 #include "ext_subtitles.h"
@@ -33,7 +34,7 @@ static int64_t
 ass_get_ts(const char *buf)
 {
   if(strlen(buf) != 10)
-    return AV_NOPTS_VALUE;
+    return PTS_UNSET;
 
   return 1000LL * (
     (buf[ 0] - '0') *  3600000LL +
@@ -473,8 +474,8 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
   const char *fmt = adc->adc_event_format;
   const ass_style_t *as = &ass_style_default;
   int layer = 0;
-  int64_t start = AV_NOPTS_VALUE;
-  int64_t end = AV_NOPTS_VALUE;
+  int64_t start = PTS_UNSET;
+  int64_t end = PTS_UNSET;
   const char *str = NULL;
   ass_dialoge_t ad;
 
@@ -504,7 +505,7 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
       as = adc_find_style(adc, val);
   }
 
-  if(start == AV_NOPTS_VALUE || end == AV_NOPTS_VALUE || str == NULL)
+  if(start == PTS_UNSET || end == PTS_UNSET || str == NULL)
     return NULL;
 
   if(as->as_bold)
@@ -514,8 +515,6 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
   if(as->as_fontname)
     ad_txt_append(&ad, TR_CODE_FONT_FAMILY |
 		  freetype_family_id(as->as_fontname, fontdomain));
-
-  ad_txt_append(&ad, TR_CODE_SIZE_PX | as->as_fontsize);
 
   if(as == &ass_style_default || subtitle_settings.style_override) {
 
@@ -529,6 +528,8 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
   } else {
     int alpha;
     alpha = 255 - (as->as_primary_color >> 24);
+
+    ad_txt_append(&ad, TR_CODE_SIZE_PX | as->as_fontsize);
 
     ad_txt_append(&ad, TR_CODE_COLOR | (as->as_primary_color & 0xffffff));
     ad_txt_append(&ad, TR_CODE_ALPHA | alpha);

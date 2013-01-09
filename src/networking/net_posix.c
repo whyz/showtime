@@ -89,6 +89,10 @@ ssl_read(tcpcon_t *tc, void *buf, size_t len, int all,
       return -1;
 
     tot += c;
+
+    if(cb != NULL)
+      if(cb(opaque, tot))
+	return -1;
   }
   return tot;
 }
@@ -125,6 +129,9 @@ polarssl_read(tcpcon_t *tc, void *buf, size_t len, int all,
     if(ret < 0) 
       return -1;
     tot += ret;
+    if(cb != NULL)
+      if(cb(opaque, tot))
+	return -1;
   }
   return tot;
 }
@@ -434,10 +441,10 @@ tcp_connect(const char *hostname, int port, char *errbuf, size_t errbufsize,
       ssl_set_endpoint(tc->ssl, SSL_IS_CLIENT );
       ssl_set_authmode(tc->ssl, SSL_VERIFY_NONE );
 
-      ssl_set_rng(tc->ssl, havege_rand, tc->hs );
+      ssl_set_rng(tc->ssl, havege_random, tc->hs );
       ssl_set_bio(tc->ssl, net_recv, &tc->fd, net_send, &tc->fd);
-      ssl_set_ciphers(tc->ssl, ssl_default_ciphers );
-      ssl_set_session(tc->ssl, 1, 600, tc->ssn );
+      ssl_set_ciphersuites(tc->ssl, ssl_default_ciphersuites );
+      ssl_set_session(tc->ssl, tc->ssn );
       
       tc->read = polarssl_read;
       tc->write = polarssl_write;
@@ -527,7 +534,8 @@ net_get_interfaces(void)
   n = ni = calloc(1, sizeof(struct netif) * (num + 1));
   
   for(ifa = ifa_list; ifa != NULL; ifa = ifa->ifa_next) {
-    if((ifa->ifa_flags & (IFF_UP | IFF_LOOPBACK)) != IFF_UP ||
+    if((ifa->ifa_flags & (IFF_UP | IFF_LOOPBACK | IFF_RUNNING)) != 
+       (IFF_UP | IFF_RUNNING) ||
        ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET)
 	 continue;
 
@@ -539,7 +547,12 @@ net_get_interfaces(void)
     n++;
   }
   
-  freeifaddrs (ifa_list);
+  freeifaddrs(ifa_list);
+
+  if(ni->ipv4 == 0) {
+    free(ni);
+    return NULL;
+  }
 
   return ni;
 }

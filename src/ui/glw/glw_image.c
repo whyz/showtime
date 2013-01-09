@@ -49,6 +49,11 @@ typedef struct glw_image {
   int16_t gi_margin_top;
   int16_t gi_margin_bottom;
 
+  int16_t gi_automargin_left;
+  int16_t gi_automargin_right;
+  int16_t gi_automargin_top;
+  int16_t gi_automargin_bottom;
+
   // gi_box_ is (gi_border_ + gi_padding_ + gi_margin_)
   int16_t gi_box_left;
   int16_t gi_box_right;
@@ -65,16 +70,17 @@ typedef struct glw_image {
 #define GI_MODE_ALPHA_EDGES      3
 #define GI_MODE_BORDER_ONLY_SCALING  4
 
-  uint8_t gi_update;
 
   uint8_t gi_alpha_edge;
 
-  uint8_t gi_is_ready;
+  uint8_t gi_is_ready : 1;
+  uint8_t gi_update : 1;
+  uint8_t gi_need_reload : 1;
+  uint8_t gi_loading_new_url : 1;
+  uint8_t gi_recompile : 1;
 
-  uint8_t gi_need_reload;
-
-  uint8_t gi_loading_new_url;
-
+  int16_t gi_fixed_size;
+  int16_t gi_radius;
 
   glw_renderer_t gi_gr;
 
@@ -91,7 +97,17 @@ typedef struct glw_image {
 
   float gi_autofade;
 
+  float gi_child_aspect;
+
   LIST_ENTRY(glw_image) gi_link;
+
+  rstr_t **gi_sources;
+
+  int gi_switch_cnt;
+  int gi_switch_tgt;
+
+  glw_program_t *gi_prog;
+  rstr_t *gi_fs;
 
 } glw_image_t;
 
@@ -111,9 +127,23 @@ static int8_t tex_transform[9][4] = {
 };
 
 static void update_box(glw_image_t *gi);
+static void pick_source(glw_image_t *gi, int next);
 
 
 
+/**
+ *
+ */
+static void
+sources_free(rstr_t **v)
+{
+  int i;
+  if(v == NULL)
+    return;
+  for(i = 0; v[i] != NULL; i++)
+    rstr_release(v[i]);
+  free(v);
+}
 
 
 
@@ -125,6 +155,8 @@ glw_image_dtor(glw_t *w)
 {
   glw_image_t *gi = (glw_image_t *)w;
 
+  sources_free(gi->gi_sources);
+
   rstr_release(gi->gi_pending_url);
     
   if(gi->gi_current != NULL)
@@ -133,6 +165,21 @@ glw_image_dtor(glw_t *w)
   if(gi->gi_pending != NULL)
     glw_tex_deref(w->glw_root, gi->gi_pending);
   glw_renderer_free(&gi->gi_gr);
+  rstr_release(gi->gi_fs);
+  glw_destroy_program(w->glw_root, gi->gi_prog);
+}
+
+
+/**
+ *
+ */
+static void 
+glw_image_set_fs(glw_t *w, rstr_t *fs)
+{
+  glw_image_t *gi = (glw_image_t *)w;
+  rstr_set(&gi->gi_fs, fs);
+  gi->gi_recompile = 1;
+
 }
 
 /**
@@ -176,8 +223,11 @@ render_child_autocentered(glw_image_t *gi, const glw_rctx_t *rc)
 
   rc0 = *rc;
   
-  glw_reposition(&rc0, gi->gi_box_left, rc->rc_height - gi->gi_box_top,
-		 rc->rc_width  - gi->gi_box_right, gi->gi_box_bottom);
+  glw_reposition(&rc0,
+		 gi->gi_box_left + gi->gi_automargin_left,
+		 rc->rc_height - gi->gi_box_top - gi->gi_automargin_top,
+		 rc->rc_width  - gi->gi_box_right - gi->gi_automargin_right,
+		 gi->gi_box_bottom + gi->gi_automargin_bottom);
 
   rc0.rc_alpha *= gi->w.glw_alpha;
   glw_render0(c, &rc0);
@@ -211,6 +261,12 @@ glw_image_render(glw_t *w, const glw_rctx_t *rc)
   float blur = 1 - (rc->rc_sharpness * w->glw_sharpness);
   glw_rctx_t rc0;
   
+  if(gi->gi_recompile) {
+    glw_destroy_program(w->glw_root, gi->gi_prog);
+    gi->gi_prog = glw_make_program(w->glw_root, NULL, rstr_get(gi->gi_fs));
+    gi->gi_recompile = 0;
+  }
+
   alpha_self = rc->rc_alpha * w->glw_alpha * gi->gi_alpha_self * gi->gi_autofade;
 
   if(gi->gi_mode == GI_MODE_NORMAL || gi->gi_mode == GI_MODE_ALPHA_EDGES) {
@@ -224,9 +280,9 @@ glw_image_render(glw_t *w, const glw_rctx_t *rc)
       
     if(gi->gi_bitmap_flags & GLW_IMAGE_FIXED_SIZE)
       glw_scale_to_pixels(&rc0, glt->glt_xs, glt->glt_ys);
-    else if(w->glw_class == &glw_image || w->glw_class == &glw_icon)
+    else if(w->glw_class == &glw_image || w->glw_class == &glw_icon) {
       glw_scale_to_aspect(&rc0, glt->glt_aspect);
-
+    }
     if(gi->gi_angle != 0)
       glw_Rotatef(&rc0, -gi->gi_angle, 0, 0, 1);
 
@@ -250,7 +306,7 @@ glw_image_render(glw_t *w, const glw_rctx_t *rc)
 
 	glw_renderer_draw(&gi->gi_gr, w->glw_root, &rc0,
 			  &glt->glt_texture,
-			  &black, NULL, alpha_self * 0.75f, 1);
+			  &black, NULL, alpha_self * 0.75f, 1, NULL);
 	glw_Translatef(&rc0, -xd, -yd, 0.0f);
       }
 
@@ -259,7 +315,8 @@ glw_image_render(glw_t *w, const glw_rctx_t *rc)
 
       glw_renderer_draw(&gi->gi_gr, w->glw_root, &rc0,
 			&glt->glt_texture,
-			&gi->gi_col_mul, &gi->gi_col_off, alpha_self, blur);
+			&gi->gi_col_mul, &gi->gi_col_off, alpha_self, blur,
+			gi->gi_prog);
 
       if(gi->gi_bitmap_flags & GLW_IMAGE_ADDITIVE)
 	glw_blendmode(w->glw_root, GLW_BLEND_NORMAL);
@@ -283,7 +340,8 @@ glw_image_render(glw_t *w, const glw_rctx_t *rc)
 
       glw_renderer_draw(&gi->gi_gr, w->glw_root, rc,
 			&glt->glt_texture,
-			&gi->gi_col_mul, &gi->gi_col_off, alpha_self, blur);
+			&gi->gi_col_mul, &gi->gi_col_off, alpha_self, blur,
+			gi->gi_prog);
 
       if(gi->gi_bitmap_flags & GLW_IMAGE_ADDITIVE)
 	glw_blendmode(w->glw_root, GLW_BLEND_NORMAL);
@@ -304,6 +362,84 @@ glw_image_layout_tesselated(glw_root_t *gr, glw_rctx_t *rc, glw_image_t *gi,
   float vex[4][2];
 
   int x, y, i = 0, BL, BR;
+
+  if(gi->w.glw_flags2 & GLW2_AUTOMARGIN) {
+
+    gi->gi_automargin_left = 0;
+    gi->gi_automargin_top = 0;
+    gi->gi_automargin_right = 0;
+    gi->gi_automargin_bottom = 0;
+    
+    glw_t *c = TAILQ_FIRST(&gi->w.glw_childs);
+
+    if(c != NULL && (c->glw_flags & (GLW_CONSTRAINT_X | GLW_CONSTRAINT_Y)) ==
+		     (GLW_CONSTRAINT_X | GLW_CONSTRAINT_Y)) {
+
+      int hspill = rc->rc_width - c->glw_req_size_x - 
+	gi->gi_box_left - gi->gi_box_right;
+
+      if(hspill > 0) {
+	gi->gi_automargin_left = hspill / 2 + (hspill & 1);
+	gi->gi_automargin_right = hspill / 2;
+      }
+      
+      int vspill = rc->rc_height - c->glw_req_size_y -
+	gi->gi_box_top - gi->gi_box_bottom;
+
+      if(vspill > 0) {
+	gi->gi_automargin_top = vspill / 2 + (vspill & 1);
+	gi->gi_automargin_bottom = vspill / 2;
+      }
+
+    } else if(c != NULL && c->glw_flags & GLW_CONSTRAINT_W &&
+	      c->glw_req_weight < 0) {
+      float aspect = -c->glw_req_weight;
+
+      float cw = rc->rc_width - gi->gi_box_left - gi->gi_box_right;
+      float ch = rc->rc_height - gi->gi_box_top - gi->gi_box_bottom;
+
+      float myaspect = cw / ch;
+
+      if(myaspect > aspect) {
+	// We are wider than our child wants
+	
+	int cwidth = ch * aspect;
+	int hspill = cw - cwidth;
+      
+	if(hspill > 0) {
+	  gi->gi_automargin_left = hspill / 2 + (hspill & 1);
+	  gi->gi_automargin_right = hspill / 2;
+	}
+      } else {
+	int cheight = cw / aspect;
+	int vspill = ch - cheight;
+
+	if(vspill > 0) {
+	  gi->gi_automargin_top = vspill / 2 + (vspill & 1);
+	  gi->gi_automargin_bottom = vspill / 2;
+	}
+      }
+    } else if(gi->gi_child_aspect > 0) {
+      
+      int px = rc->rc_height * gi->gi_child_aspect;
+      int hspill = rc->rc_width - px - gi->gi_box_left - gi->gi_box_right;
+      
+      if(hspill > 0) {
+	gi->gi_automargin_left = hspill / 2 + (hspill & 1);
+	gi->gi_automargin_right = hspill / 2;
+      }
+
+    }
+    if(gi->w.glw_flags & GLW_DEBUG)
+      printf("Automargin %d,%d,%d,%d\n",
+	     gi->gi_automargin_left,
+	     gi->gi_automargin_top,
+	     gi->gi_automargin_right,
+	     gi->gi_automargin_bottom);
+
+
+    update_box(gi);
+  }
 
   if(gr->gr_normalized_texture_coords) {
 
@@ -342,15 +478,15 @@ glw_image_layout_tesselated(glw_root_t *gr, glw_rctx_t *rc, glw_image_t *gi,
   }
 
 
-  vex[0][0] = GLW_MIN(-1.0f + 2.0f * (gi->gi_margin_left)  / rc->rc_width, 0.0f);
-  vex[1][0] = GLW_MIN(-1.0f + 2.0f * (BL + gi->gi_margin_left)  / rc->rc_width, 0.0f);
-  vex[2][0] = GLW_MAX( 1.0f - 2.0f * (BR + gi->gi_margin_right) / rc->rc_width, 0.0f);
-  vex[3][0] = GLW_MAX( 1.0f - 2.0f * (gi->gi_margin_right) / rc->rc_width, 0.0f);
+  vex[0][0] = GLW_MIN(-1.0f + 2.0f * (gi->gi_margin_left + gi->gi_automargin_left)  / rc->rc_width, 0.0f);
+  vex[1][0] = GLW_MIN(-1.0f + 2.0f * (BL + gi->gi_margin_left + gi->gi_automargin_left)  / rc->rc_width, 0.0f);
+  vex[2][0] = GLW_MAX( 1.0f - 2.0f * (BR + gi->gi_margin_right + gi->gi_automargin_right) / rc->rc_width, 0.0f);
+  vex[3][0] = GLW_MAX( 1.0f - 2.0f * (gi->gi_margin_right + gi->gi_automargin_right) / rc->rc_width, 0.0f);
     
-  vex[0][1] = GLW_MAX( 1.0f - 2.0f * (gi->gi_margin_top)  / rc->rc_height, 0.0f);
-  vex[1][1] = GLW_MAX( 1.0f - 2.0f * (gi->gi_border_top + gi->gi_margin_top)  / rc->rc_height, 0.0f);
-  vex[2][1] = GLW_MIN(-1.0f + 2.0f * (gi->gi_border_bottom + gi->gi_margin_bottom) / rc->rc_height, 0.0f);
-  vex[3][1] = GLW_MIN(-1.0f + 2.0f * (gi->gi_margin_bottom) / rc->rc_height, 0.0f);
+  vex[0][1] = GLW_MAX( 1.0f - 2.0f * (gi->gi_margin_top + gi->gi_automargin_top)  / rc->rc_height, 0.0f);
+  vex[1][1] = GLW_MAX( 1.0f - 2.0f * (gi->gi_border_top + gi->gi_margin_top + gi->gi_automargin_top)  / rc->rc_height, 0.0f);
+  vex[2][1] = GLW_MIN(-1.0f + 2.0f * (gi->gi_border_bottom + gi->gi_margin_bottom + gi->gi_automargin_bottom) / rc->rc_height, 0.0f);
+  vex[3][1] = GLW_MIN(-1.0f + 2.0f * (gi->gi_margin_bottom + gi->gi_automargin_bottom) / rc->rc_height, 0.0f);
 
   for(y = 0; y < 4; y++) {
     for(x = 0; x < 4; x++) {
@@ -446,16 +582,22 @@ static void
 glw_image_layout_normal(glw_root_t *gr, glw_rctx_t *rc, glw_image_t *gi, 
 			glw_loadable_texture_t *glt)
 {
-  glw_renderer_vtx_pos(&gi->gi_gr, 0, -1.0, -1.0, 0.0);
+  int m = glt->glt_margin;
+  float x1 = -1.0f + 2.0f * -m / (float)rc->rc_width;
+  float y1 = -1.0f + 2.0f * -m / (float)rc->rc_height;
+  float x2 =  1.0f + 2.0f *  m / (float)rc->rc_width;
+  float y2 =  1.0f + 2.0f *  m / (float)rc->rc_height;
+
+  glw_renderer_vtx_pos(&gi->gi_gr, 0, x1, y1, 0.0);
   settexcoord(&gi->gi_gr, 0, 0, 1, gr, glt);
 
-  glw_renderer_vtx_pos(&gi->gi_gr, 1,  1.0, -1.0, 0.0);
+  glw_renderer_vtx_pos(&gi->gi_gr, 1, x2, y1, 0.0);
   settexcoord(&gi->gi_gr, 1, 1, 1, gr, glt);
 
-  glw_renderer_vtx_pos(&gi->gi_gr, 2,  1.0,  1.0, 0.0);
+  glw_renderer_vtx_pos(&gi->gi_gr, 2, x2, y2, 0.0);
   settexcoord(&gi->gi_gr, 2, 1, 0, gr, glt);
 
-  glw_renderer_vtx_pos(&gi->gi_gr, 3, -1.0,  1.0, 0.0);
+  glw_renderer_vtx_pos(&gi->gi_gr, 3, x1, y2, 0.0);
   settexcoord(&gi->gi_gr, 3, 0, 0, gr, glt);
 }
 
@@ -514,32 +656,34 @@ glw_image_update_constraints(glw_image_t *gi)
 			  gi->gi_box_top + gi->gi_box_bottom,
 			  c->glw_req_weight,
 			  c->glw_flags & GLW_CONSTRAINT_FLAGS);
+      
+      if(gi->w.glw_flags2 & GLW2_AUTOMARGIN)
+	gi->gi_update = 1;
+
+      if(gi->w.glw_flags & GLW_DEBUG)
+	printf("Req size: %d,%d\n", c->glw_req_size_x, c->glw_req_size_y);
+
 
     } else if(glt != NULL) {
       glw_set_constraints(&gi->w, 
-			  glt->glt_xs,
-			  glt->glt_ys,
+			  glt->glt_xs - glt->glt_margin * 2,
+			  glt->glt_ys - glt->glt_margin * 2,
 			  0, 0);
     }
 
   } else if(gi->w.glw_class == &glw_image && glt != NULL) {
-    float aspect = (float)glt->glt_xs / glt->glt_ys;
+    float aspect = (float)glt->glt_aspect;
 
     if(gi->gi_bitmap_flags & GLW_IMAGE_SET_ASPECT) {
-      // This is unstable and should be removed
-      glw_set_constraints(&gi->w, 0, 0, -aspect,
-			  GLW_CONSTRAINT_W);
+      glw_set_constraints(&gi->w, 0, 0, -aspect, GLW_CONSTRAINT_W);
     } else if(gi->w.glw_flags & GLW_CONSTRAINT_CONF_X) {
 
       int ys = gi->w.glw_req_size_x / aspect;
-      glw_set_constraints(&gi->w, 0, ys, 0,
-			  GLW_CONSTRAINT_Y);
+      glw_set_constraints(&gi->w, 0, ys, 0, GLW_CONSTRAINT_Y);
     } else if(gi->w.glw_flags & GLW_CONSTRAINT_CONF_Y) {
 
       int xs = gi->w.glw_req_size_y * aspect;
-      printf("xs=%d\n", xs);
-      glw_set_constraints(&gi->w, xs, 0, 0,
-			  GLW_CONSTRAINT_X);
+      glw_set_constraints(&gi->w, xs, 0, 0, GLW_CONSTRAINT_X);
     }
   }
 }
@@ -614,11 +758,22 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
   glw_rctx_t rc0;
   glw_t *c;
   int hq = (w->glw_class == &glw_icon || w->glw_class == &glw_image);
+  hq = gi->gi_mode == GI_MODE_NORMAL || gi->gi_mode == GI_MODE_ALPHA_EDGES;
+  gi->gi_switch_tgt = 180;
+
+  if(gi->gi_sources && gi->gi_switch_tgt) {
+    gi->gi_switch_cnt++;
+    if(gi->gi_switch_cnt == gi->gi_switch_tgt) {
+      pick_source(gi, 1);
+      gi->gi_switch_cnt = 0;
+    }
+  }
+
 
   if(gi->gi_pending_url != NULL) {
     // Request to load
     int xs = -1, ys = -1;
-    int flags = 0;
+    int flags = gi->gi_bitmap_flags & 0xf; // corners
     gi->gi_loading_new_url = 1;
 
     if(gi->gi_pending != NULL) {
@@ -642,18 +797,28 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
 	flags |= GLW_TEX_REPEAT;
 	
       if(hq) {
-	if(rc->rc_width < rc->rc_height) {
-	  xs = rc->rc_width;
+	if(w->glw_class == &glw_image || w->glw_class == &glw_icon) {
+	  if(rc->rc_width < rc->rc_height) {
+	    xs = rc->rc_width;
+	  } else {
+	    ys = rc->rc_height;
+	  }
 	} else {
+	  xs = rc->rc_width;
 	  ys = rc->rc_height;
 	}
       }
 
       if(xs && ys) {
 
+	if(w->glw_flags & GLW_DEBUG)
+	  TRACE(TRACE_DEBUG, "IMG", "Loading texture: %s (%d %d)",
+		rstr_get(gi->gi_pending_url),
+		xs, ys);
+
 	gi->gi_pending = glw_tex_create(w->glw_root,
 					gi->gi_pending_url,
-					flags, xs, ys);
+					flags, xs, ys, gi->gi_radius);
 	  
 	rstr_release(gi->gi_pending_url);
 	gi->gi_pending_url = NULL;
@@ -681,11 +846,7 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
   if((glt = gi->gi_current) == NULL)
     return;
 
-  if(gi->gi_loading_new_url) {
-    gi->gi_autofade = GLW_LP(8, gi->gi_autofade, 0);
-  } else {
-    gi->gi_autofade = GLW_LP(8, gi->gi_autofade, 1);
-  }
+  glw_lp(&gi->gi_autofade, w->glw_root, !gi->gi_loading_new_url, 0.25);
 
   glw_tex_layout(gr, glt);
 
@@ -767,21 +928,35 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
 	
       int xs = -1, ys = -1, rescale;
 	
-      if(rc->rc_width < rc->rc_height) {
-	rescale = rc->rc_width != glt->glt_xs;
-	xs = rc->rc_width;
+      if(w->glw_class == &glw_image || w->glw_class == &glw_icon) {
+
+	if(rc->rc_width < rc->rc_height) {
+	  rescale = abs(rc->rc_width - glt->glt_xs);
+	  xs = rc->rc_width;
+	} else {
+	  rescale = abs(rc->rc_height - glt->glt_ys);
+	  ys = rc->rc_height;
+	}
       } else {
-	rescale = rc->rc_height != glt->glt_ys;
+	rescale = (rc->rc_width - glt->glt_xs) || (rc->rc_height - glt->glt_ys);
+	xs = rc->rc_width;
 	ys = rc->rc_height;
       }
-      
+
+
+      // Requesting aspect cause a lot of rounding errors
+      // so to avoid ending up in infinite reload loops,
+      // consider 1px off as nothing
+      if(gi->gi_bitmap_flags & GLW_IMAGE_SET_ASPECT && rescale == 1)
+	rescale = 0;
+
       if(rescale) {
-	int flags = 0;
+	int flags = gi->gi_bitmap_flags & 0xf; // corners
 	if(w->glw_class == &glw_repeatedimage)
 	  flags |= GLW_TEX_REPEAT;
 	
 	gi->gi_pending = glw_tex_create(w->glw_root, glt->glt_url,
-					flags, xs, ys);
+					flags, xs, ys, gi->gi_radius);
       }
     }
   } else {
@@ -797,8 +972,19 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
   if((c = TAILQ_FIRST(&w->glw_childs)) != NULL) {
     rc0 = *rc;
     
-    rc0.rc_width  -= gi->gi_box_left + gi->gi_box_right;
-    rc0.rc_height -= gi->gi_box_top  + gi->gi_box_bottom;
+    if(gi->w.glw_flags & GLW_DEBUG)
+      printf("Output width = %d-%d=%d   Output height=%d-%d=%d\n",
+	     rc0.rc_width, (gi->gi_box_left + gi->gi_box_right),
+	     rc0.rc_width - (gi->gi_box_left + gi->gi_box_right),
+
+	     rc0.rc_height, (gi->gi_box_top + gi->gi_box_bottom),
+	     rc0.rc_height - (gi->gi_box_top + gi->gi_box_bottom));
+
+    rc0.rc_width  -= gi->gi_box_left + gi->gi_box_right +
+      gi->gi_automargin_left + gi->gi_automargin_right;
+    rc0.rc_height -= gi->gi_box_top  + gi->gi_box_bottom + 
+      gi->gi_automargin_top + gi->gi_automargin_bottom;
+
 
     if(rc0.rc_height >= 0 && rc0.rc_width >= 0)
       glw_layout0(c, &rc0);
@@ -864,7 +1050,14 @@ glw_image_ctor(glw_t *w)
 {
   glw_image_t *gi = (void *)w;
 
-  gi->gi_bitmap_flags = GLW_IMAGE_BORDER_LEFT | GLW_IMAGE_BORDER_RIGHT;
+  gi->gi_bitmap_flags =
+    GLW_TEX_CORNER_TOPLEFT |
+    GLW_TEX_CORNER_TOPRIGHT |
+    GLW_TEX_CORNER_BOTTOMLEFT |
+    GLW_TEX_CORNER_BOTTOMRIGHT |
+    GLW_IMAGE_BORDER_LEFT |
+    GLW_IMAGE_BORDER_RIGHT;
+
   gi->gi_autofade = 1;
   gi->gi_alpha_self = 1;
   gi->gi_color.r = 1.0;
@@ -921,6 +1114,15 @@ update_box(glw_image_t *gi)
     gi->gi_margin_right + (gi->gi_border_left_afix ?: gi->gi_border_right) + gi->gi_padding_right;
   gi->gi_box_bottom =
     gi->gi_margin_bottom + gi->gi_border_bottom + gi->gi_padding_bottom;
+
+  if(gi->w.glw_flags & GLW_DEBUG)
+    printf("Box: %d,%d,%d,%d == %d,%d\n",
+	   gi->gi_box_left,
+	   gi->gi_box_top,
+	   gi->gi_box_right,
+	   gi->gi_box_bottom,
+	   gi->gi_box_left + gi->gi_box_right,
+	   gi->gi_box_top + gi->gi_box_bottom);
 }
 
 /**
@@ -996,14 +1198,12 @@ mod_image_flags(glw_t *w, int set, int clr)
 }
 
 
-
 /**
  *
  */
-static void
-set_path(glw_image_t *gi, rstr_t *filename)
+static const rstr_t *
+get_curname(glw_image_t *gi)
 {
- 
   const rstr_t *curname;
 
   if(gi->gi_pending_url != NULL)
@@ -1014,15 +1214,35 @@ set_path(glw_image_t *gi, rstr_t *filename)
     curname = gi->gi_current->glt_url;
   else 
     curname = NULL;
+  return curname;
+}
+
+
+/**
+ *
+ */
+static void
+set_pending(glw_image_t *gi, rstr_t *filename)
+{
+  if(gi->gi_pending_url != NULL)
+    rstr_release(gi->gi_pending_url);
+  gi->gi_pending_url = filename ? rstr_dup(filename) : rstr_alloc("");
+
+}
+
+/**
+ *
+ */
+static void
+set_path(glw_image_t *gi, rstr_t *filename)
+{
+  const rstr_t *curname = get_curname(gi);
   
   if(curname != NULL && filename != NULL && !strcmp(rstr_get(filename),
 						    rstr_get(curname)))
     return;
-  
-  if(gi->gi_pending_url != NULL)
-    rstr_release(gi->gi_pending_url);
-  
-  gi->gi_pending_url = filename ? rstr_dup(filename) : rstr_alloc("");
+
+  set_pending(gi, filename);
 }
 
 
@@ -1034,6 +1254,50 @@ set_source(glw_t *w, rstr_t *filename)
 {
   glw_image_t *gi = (glw_image_t *)w;
   set_path(gi, filename);
+}
+
+
+/**
+ *
+ */
+static void
+pick_source(glw_image_t *gi, int next)
+{
+  const rstr_t *curname = get_curname(gi);
+  if(curname == NULL) {
+    set_pending(gi, gi->gi_sources[0]);
+  } else {
+
+    int i;
+    int found = -1;
+    for(i = 0; gi->gi_sources[i] != NULL && found == -1; i++) {
+      if(!strcmp(rstr_get(gi->gi_sources[i]), rstr_get(curname)))
+	found = i;
+    }
+    if(found == -1) {
+      set_pending(gi, gi->gi_sources[0]);
+    } else if(next) {
+      if(gi->gi_sources[found+1] == NULL) {
+	set_pending(gi, gi->gi_sources[0]);
+      } else {
+	set_pending(gi, gi->gi_sources[found+1]);
+      }
+    }
+  }
+}
+
+
+/**
+ *
+ */
+static void
+set_sources(glw_t *w, rstr_t **filenames)
+{
+  glw_image_t *gi = (glw_image_t *)w;
+  sources_free(gi->gi_sources);
+  gi->gi_sources = filenames;
+
+  pick_source(gi, 0);
 }
 
 
@@ -1061,6 +1325,18 @@ set_size_scale(glw_t *w, float f)
   glw_set_constraints(w, siz, siz, 0, GLW_CONSTRAINT_X | GLW_CONSTRAINT_Y);
 }
 
+
+/**
+ * Only for icon class
+ */
+static void
+set_default_size(glw_t *w, int px)
+{
+  glw_image_t *gi = (glw_image_t *)w;
+  gi->gi_fixed_size = px;
+  glw_set_constraints(w, px, px, 0, GLW_CONSTRAINT_X | GLW_CONSTRAINT_Y);
+}
+
 /**
  *
  */
@@ -1069,6 +1345,7 @@ glw_image_set(glw_t *w, va_list ap)
 {
   glw_image_t *gi = (glw_image_t *)w;
   glw_attribute_t attrib;
+  int r;
 
   do {
     attrib = va_arg(ap, int);
@@ -1085,6 +1362,18 @@ glw_image_set(glw_t *w, va_list ap)
     case GLW_ATTRIB_ALPHA_EDGES:
       gi->gi_alpha_edge = va_arg(ap, int);
       gi->gi_mode = GI_MODE_ALPHA_EDGES;
+      break;
+
+    case GLW_ATTRIB_CHILD_ASPECT:
+      gi->gi_child_aspect = va_arg(ap, double);
+      break;
+
+    case GLW_ATTRIB_RADIUS:
+      r = va_arg(ap, int);
+      if(gi->gi_radius != r) {
+	gi->gi_radius = r;
+	gi->gi_update = 1;
+      }
       break;
 
     default:
@@ -1126,6 +1415,8 @@ glw_icon_flush(glw_root_t *gr)
 {
   glw_image_t *gi;
   LIST_FOREACH(gi, &gr->gr_icons, gi_link) {
+    if(gi->gi_fixed_size)
+      continue;
     float siz = gi->gi_size_scale * gr->gr_current_size;
     
     glw_set_constraints(&gi->w, siz, siz, 0,
@@ -1150,8 +1441,10 @@ static glw_class_t glw_image = {
   .gc_set_padding = set_padding,
   .gc_mod_image_flags = mod_image_flags,
   .gc_set_source = set_source,
+  .gc_set_sources = set_sources,
   .gc_set_alpha_self = set_alpha_self,
   .gc_get_identity = get_identity,
+  .gc_set_fs = glw_image_set_fs,
 };
 
 GLW_REGISTER_CLASS(glw_image);
@@ -1173,9 +1466,12 @@ static glw_class_t glw_icon = {
   .gc_set_padding = set_padding,
   .gc_mod_image_flags = mod_image_flags,
   .gc_set_source = set_source,
+  .gc_set_sources = set_sources,
   .gc_set_alpha_self = set_alpha_self,
   .gc_set_size_scale = set_size_scale,
+  .gc_set_default_size = set_default_size,
   .gc_get_identity = get_identity,
+  .gc_set_fs = glw_image_set_fs,
 };
 
 GLW_REGISTER_CLASS(glw_icon);
@@ -1199,8 +1495,10 @@ static glw_class_t glw_backdrop = {
   .gc_set_margin = set_margin,
   .gc_mod_image_flags = mod_image_flags,
   .gc_set_source = set_source,
+  .gc_set_sources = set_sources,
   .gc_set_alpha_self = set_alpha_self,
   .gc_get_identity = get_identity,
+  .gc_set_fs = glw_image_set_fs,
 };
 
 GLW_REGISTER_CLASS(glw_backdrop);
@@ -1225,8 +1523,10 @@ static glw_class_t glw_frontdrop = {
   .gc_set_margin = set_margin,
   .gc_mod_image_flags = mod_image_flags,
   .gc_set_source = set_source,
+  .gc_set_sources = set_sources,
   .gc_set_alpha_self = set_alpha_self,
   .gc_get_identity = get_identity,
+  .gc_set_fs = glw_image_set_fs,
 };
 
 GLW_REGISTER_CLASS(glw_frontdrop);
@@ -1251,6 +1551,7 @@ static glw_class_t glw_repeatedimage = {
   .gc_set_source = set_source,
   .gc_set_alpha_self = set_alpha_self,
   .gc_get_identity = get_identity,
+  .gc_set_fs = glw_image_set_fs,
 };
 
 GLW_REGISTER_CLASS(glw_repeatedimage);

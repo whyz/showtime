@@ -30,9 +30,9 @@
 #include "prop_i.h"
 #include "prop_nodefilter.h"
 #include "misc/pixmap.h"
-#include "misc/string.h"
+#include "misc/str.h"
 
-#define MAX_SORT_KEYS 3
+#define MAX_SORT_KEYS 4
 
 TAILQ_HEAD(nfnode_queue, nfnode);
 LIST_HEAD(nfn_pred_list, nfn_pred);
@@ -74,7 +74,6 @@ typedef struct nfnode {
   struct nfn_pred_list preds;
 
   struct prop_nf *nf;
-  int pos;
   char inserted:1;
   char frozen:1;
   char sortkey_type[MAX_SORT_KEYS];
@@ -105,9 +104,10 @@ typedef struct prop_nf_pred {
   prop_nf_cmp_t pnp_cf;
   prop_nf_mode_t pnp_mode;
   prop_sub_t *pnp_enable_sub;
+  int pnp_id;
 
   char pnp_enabled;
-
+  
   char *pnp_str;
   int pnp_int;
 
@@ -123,6 +123,8 @@ typedef struct prop_nf {
   int pnf_refcount;
   int flags;
 
+  int pred_tally;
+
   int nodecount;
   prop_t *src;
   prop_t *dst;
@@ -135,8 +137,6 @@ typedef struct prop_nf {
   struct nfnode_queue out;
 
   char *filter;
-
-  int pos_valid;
 
   char *sortkey[MAX_SORT_KEYS];
   sortmap_t *sortmap[MAX_SORT_KEYS];
@@ -226,24 +226,6 @@ eval_preds(nfnode_t *nfn)
   return 0;
 }
 
-/**
- *
- */
-static void
-nf_renumber(prop_nf_t *nf)
-{
-  int pos;
-  nfnode_t *nfn;
-
-  if(nf->pos_valid)
-    return;
-
-  nf->pos_valid = 1;
-  pos = 0;
-  TAILQ_FOREACH(nfn, &nf->in, in_link)
-    nfn->pos = pos++;
-}
-
 
 /**
  *
@@ -331,7 +313,7 @@ nf_egress_cmp(const nfnode_t *a, const nfnode_t *b)
     if(r)
       return r * a->nf->sortorder[i];
   }
-  return a->pos - b->pos;
+  return a < b ? -1 : 1;
 }
 
 
@@ -384,7 +366,8 @@ nf_insert_node(prop_nf_t *nf, nfnode_t *nfn)
 
   if(nfn->sortkey_type[0] == SORTKEY_NONE &&
      nfn->sortkey_type[1] == SORTKEY_NONE &&
-     nfn->sortkey_type[2] == SORTKEY_NONE) {
+     nfn->sortkey_type[2] == SORTKEY_NONE &&
+     nfn->sortkey_type[3] == SORTKEY_NONE) {
 
     b = TAILQ_NEXT(nfn, in_link);
     
@@ -398,8 +381,6 @@ nf_insert_node(prop_nf_t *nf, nfnode_t *nfn)
     }
 
   } else {
-
-    nf_renumber(nf);
 
     TAILQ_INSERT_SORTED(&nf->out, nfn, out_link, nf_egress_cmp);
   }
@@ -656,6 +637,8 @@ nf_set_sortkey_0(void *opaque, prop_event_t event, ...)
   nf_set_sortkey_x(0, opaque, event, ap);
   va_end(ap);
 }
+
+
 /**
  *
  */
@@ -668,6 +651,8 @@ nf_set_sortkey_1(void *opaque, prop_event_t event, ...)
   nf_set_sortkey_x(1, opaque, event, ap);
   va_end(ap);
 }
+
+
 /**
  *
  */
@@ -678,6 +663,20 @@ nf_set_sortkey_2(void *opaque, prop_event_t event, ...)
 
   va_start(ap, event);
   nf_set_sortkey_x(2, opaque, event, ap);
+  va_end(ap);
+}
+
+
+/**
+ *
+ */
+static void
+nf_set_sortkey_3(void *opaque, prop_event_t event, ...)
+{
+  va_list ap;
+
+  va_start(ap, event);
+  nf_set_sortkey_x(3, opaque, event, ap);
   va_end(ap);
 }
 
@@ -708,7 +707,8 @@ nf_update_order_x(prop_nf_t *nf, nfnode_t *nfn, int x)
 		     PROP_TAG_CALLBACK, 
 		     x == 0 ? nf_set_sortkey_0 :
 		     x == 1 ? nf_set_sortkey_1 :
-		     nf_set_sortkey_2, nfn,
+		     x == 2 ? nf_set_sortkey_2 :
+		     nf_set_sortkey_3, nfn,
 		     PROP_TAG_NAMED_ROOT, nfn->in, "node",
 		     PROP_TAG_NAMESTR, nf->sortkey[x],
 		     NULL);
@@ -739,15 +739,7 @@ nf_add_node(prop_nf_t *nf, prop_t *node, nfnode_t *b)
 
   if(b != NULL) {
     TAILQ_INSERT_BEFORE(b, nfn, in_link);
-    nf->pos_valid = 0;
-
   } else {
-
-    if(nf->pos_valid) {
-      nfnode_t *l = TAILQ_LAST(&nf->in, nfnode_queue);
-      nfn->pos = l ? l->pos + 1 : 0;
-    }
-
     TAILQ_INSERT_TAIL(&nf->in, nfn, in_link);
   }
 
@@ -772,9 +764,6 @@ nf_add_nodes(prop_nf_t *nf, prop_vec_t *pv, nfnode_t *b)
   int i;
   nfnode_t *nfn;
 
-  if(b != NULL)
-    nf->pos_valid = 0;
-
   const int len = prop_vec_len(pv);
   nf->nodecount += len;
   for(i = 0; i < len; i++) {
@@ -782,11 +771,6 @@ nf_add_nodes(prop_nf_t *nf, prop_vec_t *pv, nfnode_t *b)
     nfn = calloc(1, sizeof(nfnode_t));
 
     prop_tag_set(p, nf, nfn);
-
-    if(nf->pos_valid) {
-      nfnode_t *l = TAILQ_LAST(&nf->in, nfnode_queue);
-      nfn->pos = l ? l->pos + 1 : 0;
-    }
 
     if(b != NULL) {
       TAILQ_INSERT_BEFORE(b, nfn, in_link);
@@ -823,7 +807,6 @@ nf_del_node(prop_nf_t *nf, nfnode_t *nfn)
   int i;
   nfn_pred_t *nfnp;
 
-  nf->pos_valid = 0;
   nf->nodecount--;
   TAILQ_REMOVE(&nf->in, nfn, in_link);
   TAILQ_REMOVE(&nf->out, nfn, out_link);
@@ -856,8 +839,6 @@ nf_del_node(prop_nf_t *nf, nfnode_t *nfn)
 static void
 nf_move_node(prop_nf_t *nf, nfnode_t *nfn, nfnode_t *b)
 {
-  nf->pos_valid = 0;
-
   TAILQ_REMOVE(&nf->in, nfn, in_link);
 
   if(b != NULL) {
@@ -888,21 +869,28 @@ nf_find_node(prop_nf_t *nf, prop_t *node)
  *
  */
 static void
+nf_destroy_pred(struct prop_nf_pred *pnp)
+{
+  LIST_REMOVE(pnp, pnp_link);
+  strvec_free(pnp->pnp_path);
+  if(pnp->pnp_enable_sub != NULL)
+    prop_unsubscribe0(pnp->pnp_enable_sub);
+  free(pnp->pnp_str);
+  free(pnp);
+}
+
+
+/**
+ *
+ */
+static void
 nf_destroy_preds(prop_nf_t *nf)
 {
   struct prop_nf_pred *pnp;
 
-  while((pnp = LIST_FIRST(&nf->preds)) != NULL) {
-    LIST_REMOVE(pnp, pnp_link);
-
-    strvec_free(pnp->pnp_path);
-    if(pnp->pnp_enable_sub != NULL)
-      prop_unsubscribe0(pnp->pnp_enable_sub);
-    free(pnp->pnp_str);
-    free(pnp);
-  }
+  while((pnp = LIST_FIRST(&nf->preds)) != NULL)
+    nf_destroy_pred(pnp);
 }
-
 
 
 /**
@@ -917,7 +905,6 @@ nf_clear(prop_nf_t *nf)
     prop_tag_clear(nfn->in, nf);
     nf_del_node(nf, nfn);
   }
-  nf->pos_valid = 1;
 }
 
 
@@ -1028,10 +1015,10 @@ prop_nf_src_cb(void *opaque, prop_event_t event, ...)
       prop_have_more_childs0(nf->dst);
     else
       nf->pending_have_more = 1;
-      
     break;
 
   case PROP_WANT_MORE_CHILDS:
+  case PROP_REQ_MOVE_CHILD:
     break;
 
   default:
@@ -1063,6 +1050,30 @@ nf_translate_del_multi(prop_nf_t *nf, prop_vec_t *in)
 }
 
 
+
+/**
+ *
+ */
+static void
+nf_translate_req_move_child(prop_nf_t *nf, prop_t *p, prop_t *before)
+{
+  if(nf->sortkey[0] || nf->sortkey[1] || nf->sortkey[2] || nf->sortkey[3])
+    return;
+  
+  if(nf->filter != NULL)
+    return;
+
+  prop_nf_pred_t *pnp;
+  LIST_FOREACH(pnp, &nf->preds, pnp_link)
+    if(pnp->pnp_enabled)
+      return;
+
+  p = p->hp_originator;
+  before = before ? before->hp_originator : NULL;
+  prop_notify_child2(p, nf->src, before, PROP_REQ_MOVE_CHILD, nf->srcsub, 0);
+}
+
+
 /**
  *
  */
@@ -1070,7 +1081,7 @@ static void
 prop_nf_dst_cb(void *opaque, prop_event_t event, ...)
 {
   prop_nf_t *nf = opaque;
-
+  prop_t *p1, *p2;
   va_list ap;
   va_start(ap, event);
 
@@ -1081,6 +1092,12 @@ prop_nf_dst_cb(void *opaque, prop_event_t event, ...)
 
   case PROP_DESTROYED:
     abort();
+    break;
+
+  case PROP_REQ_MOVE_CHILD:
+    p1 = va_arg(ap, prop_t *);
+    p2 = va_arg(ap, prop_t *);
+    nf_translate_req_move_child(nf, p1, p2);
     break;
 
   case PROP_WANT_MORE_CHILDS:
@@ -1203,7 +1220,6 @@ pnp_set_enable(void *opaque, int v)
     return;
 
   pnp->pnp_enabled = !!v;
-
   if(nf == NULL)
     return;
 
@@ -1215,7 +1231,7 @@ pnp_set_enable(void *opaque, int v)
 /**
  *
  */
-static void
+static int
 prop_nf_pred_add(struct prop_nf *nf,
 		 const char *path, prop_nf_cmp_t cf,
 		 prop_t *enable,
@@ -1224,10 +1240,11 @@ prop_nf_pred_add(struct prop_nf *nf,
 {
   nfnode_t *nfn;
 
+  pnp->pnp_id = ++nf->pred_tally;
   pnp->pnp_path = strvec_split(path, '.');
   pnp->pnp_cf = cf;
   pnp->pnp_mode = mode;
-
+  pnp->pnp_nf = nf;
   LIST_INSERT_HEAD(&nf->preds, pnp, pnp_link);
 
   if(enable != NULL) {
@@ -1242,13 +1259,14 @@ prop_nf_pred_add(struct prop_nf *nf,
 
   TAILQ_FOREACH(nfn, &nf->in, in_link)
     nfn_insert_pred(nf, nfn, pnp);
+  return pnp->pnp_id;
 }
 
 
 /**
  *
  */
-void
+int
 prop_nf_pred_str_add(struct prop_nf *nf,
 		     const char *path, prop_nf_cmp_t cf,
 		     const char *str, prop_t *enable,
@@ -1257,15 +1275,16 @@ prop_nf_pred_str_add(struct prop_nf *nf,
   struct prop_nf_pred *pnp = calloc(1, sizeof(struct prop_nf_pred));
   pnp->pnp_str = strdup(str);
   hts_mutex_lock(&prop_mutex);
-  prop_nf_pred_add(nf, path, cf, enable, mode, pnp);
+  int id = prop_nf_pred_add(nf, path, cf, enable, mode, pnp);
   hts_mutex_unlock(&prop_mutex);
+  return id;
 }
 
 
 /**
  *
  */
-void
+int
 prop_nf_pred_int_add(struct prop_nf *nf,
 		     const char *path, prop_nf_cmp_t cf,
 		     int value, prop_t *enable,
@@ -1274,7 +1293,44 @@ prop_nf_pred_int_add(struct prop_nf *nf,
   struct prop_nf_pred *pnp = calloc(1, sizeof(struct prop_nf_pred));
   pnp->pnp_int = value;
   hts_mutex_lock(&prop_mutex);
-  prop_nf_pred_add(nf, path, cf, enable, mode, pnp);
+  int id = prop_nf_pred_add(nf, path, cf, enable, mode, pnp);
+  hts_mutex_unlock(&prop_mutex);
+  return id;
+}
+
+
+/**
+ *
+ */
+void
+prop_nf_pred_remove(struct prop_nf *nf, int id)
+{
+  nfnode_t *nfn;
+  prop_nf_pred_t *pnp;
+  nfn_pred_t *nfnp;
+
+  if(id == 0)
+    return;
+
+  hts_mutex_lock(&prop_mutex);
+  LIST_FOREACH(pnp, &nf->preds, pnp_link)
+    if(pnp->pnp_id == id)
+      break;
+
+  if(pnp != NULL) {
+    TAILQ_FOREACH(nfn, &nf->in, in_link) {
+
+      LIST_FOREACH(nfnp, &nfn->preds, nfnp_link)
+	if(nfnp->nfnp_conf == pnp)
+	  break;
+
+      assert(nfnp != NULL);
+      nfnp_destroy(nfnp);
+      nf_update_egress(nf, nfn);
+    }
+    nf_destroy_pred(pnp);
+  }
+
   hts_mutex_unlock(&prop_mutex);
 }
 

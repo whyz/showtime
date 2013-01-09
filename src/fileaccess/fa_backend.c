@@ -50,12 +50,13 @@ be_file_canhandle(const char *url)
 /**
  *
  */
-static void
-set_title_from_url(prop_t *metadata, const char *url)
+static rstr_t *
+title_from_url(const char *url)
 {
   char tmp[1024];
   fa_url_get_last_component(tmp, sizeof(tmp), url);
-  prop_set_string(prop_create(metadata, "title"), tmp);
+  rstr_t *r = rstr_alloc(tmp);
+  return r;
 }
 
 
@@ -72,13 +73,18 @@ file_open_browse(prop_t *page, const char *url, time_t mtime)
   prop_set_string(prop_create(model, "type"), "directory");
   
   /* Find a meaningful page title (last component of URL) */
-  set_title_from_url(prop_create(model, "metadata"), url);
+
+  rstr_t *title = title_from_url(url);
+
+  prop_setv(model, "metadata", "title", NULL, PROP_SET_RSTRING, title);
   
   // Set parent
   if(!fa_parent(parent, sizeof(parent), url))
     prop_set_string(prop_create(page, "parent"), parent);
   
-  fa_scanner(url, mtime, model, NULL, prop_create(page, "directClose"));
+  fa_scanner_page(url, mtime, model, NULL, prop_create(page, "directClose"),
+                  title);
+  rstr_release(title);
 }
 
 /**
@@ -92,7 +98,7 @@ file_open_dir(prop_t *page, const char *url, time_t mtime)
 
   switch(md->md_contenttype) {
   case CONTENT_DVD:
-    backend_open_video(page, url);
+    backend_open_video(page, url, 0);
     break;
     
   case CONTENT_DIR:
@@ -147,13 +153,16 @@ file_open_audio(prop_t *page, const char *url)
   prop_set_string(prop_create(model, "type"), "directory");
 
   /* Find a meaningful page title (last component of URL) */
-  set_title_from_url(prop_create(model, "metadata"), parent);
+  rstr_t *title = title_from_url(parent);
+  prop_setv(model, "metadata", "title", NULL, PROP_SET_RSTRING, title);
 
   // Set parent
   if(!fa_parent(parent2, sizeof(parent2), parent))
     prop_set_string(prop_create(page, "parent"), parent2);
 
-  fa_scanner(parent, fs.fs_mtime, model, url, prop_create(page, "directClose"));
+  fa_scanner_page(parent, fs.fs_mtime, model, url,
+                  prop_create(page, "directClose"), title);
+  rstr_release(title);
   return 0;
 }
 
@@ -173,7 +182,7 @@ file_open_file(prop_t *page, const char *url, fa_stat_t *fs)
   metadb_close(db);
 
   if(md == NULL)
-    md = fa_probe_metadata(url, errbuf, sizeof(errbuf));
+    md = fa_probe_metadata(url, errbuf, sizeof(errbuf), NULL);
 
   if(md == NULL) {
     nav_open_errorf(page, _("Unable to open file: %s"), errbuf);
@@ -204,7 +213,7 @@ file_open_file(prop_t *page, const char *url, fa_stat_t *fs)
   case CONTENT_VIDEO:
   case CONTENT_DVD:
     prop_destroy(meta);
-    backend_open_video(page, url);
+    backend_open_video(page, url, 0);
     break;
 
   case CONTENT_IMAGE:
@@ -228,7 +237,7 @@ file_open_file(prop_t *page, const char *url, fa_stat_t *fs)
  *
  */
 static int
-be_file_open(prop_t *page, const char *url)
+be_file_open(prop_t *page, const char *url, int sync)
 {
   struct fa_stat fs;
   char errbuf[200];

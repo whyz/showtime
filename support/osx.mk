@@ -1,3 +1,23 @@
+#
+# Source modification and extra flags
+#
+SRCS += src/arch/osx/osx_app.m \
+	src/arch/osx/GLWUI.m \
+	src/arch/osx/GLWView.m \
+	src/arch/darwin.c \
+	src/arch/posix/posix.c \
+	src/arch/posix/posix_threads.c \
+	src/networking/net_posix.c \
+
+SRCS-$(CONFIG_WEBPOPUP) += src/arch/osx/osx_webpopup.m
+
+SRCS-$(CONFIG_LIBAV) +=	src/audio2/mac_audio.c
+
+DVDCSS_CFLAGS = -DDARWIN_DVD_IOCTL -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE
+
+#
+# Install
+#
 .DEFAULT_GOAL := ${BUILDDIR}/Showtime.app/Contents/MacOS/showtime
 
 APPDIR        := ${BUILDDIR}/Showtime.app

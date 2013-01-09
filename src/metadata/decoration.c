@@ -15,7 +15,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
+#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -28,7 +28,7 @@
 
 LIST_HEAD(deco_browse_list, deco_browse);
 TAILQ_HEAD(deco_item_queue, deco_item);
-LIST_HEAD(deco_item_list,deco_item);
+LIST_HEAD(deco_item_list, deco_item);
 LIST_HEAD(deco_stem_list, deco_stem);
 
 static prop_courier_t *deco_courier;
@@ -41,7 +41,7 @@ static int deco_pendings;
 /**
  *
  */
-typedef struct deco_browse {
+struct deco_browse {
   LIST_ENTRY(deco_browse) db_link;
   prop_sub_t *db_sub;
   struct deco_item_queue db_items;
@@ -52,16 +52,36 @@ typedef struct deco_browse {
   int db_total;
   int db_types[CONTENT_num];
 
+  struct deco_item_list db_items_per_ct[CONTENT_num];
+
   struct deco_stem_list db_stems[STEM_HASH_SIZE];
 
   rstr_t *db_imdb_id;
 
   int db_pending_flags;
-#define DB_PENDING_ALBUM_ANALYSIS 0x1
+#define DB_PENDING_DEFERRED_ALBUM_ANALYSIS 0x1
+#define DB_PENDING_DEFERRED_VIDEO_ANALYSIS 0x2
+
+#define DB_PENDING_DEFERRED_FULL_ANALYSIS 0xffffffff
 
   struct prop_nf *db_pnf;
 
-} deco_browse_t;
+  int db_audio_filter;
+
+  int db_contents_mask;
+#define DB_CONTENTS_IMAGES     0x1
+#define DB_CONTENTS_ALBUM      0x2
+#define DB_CONTENTS_TV_SEASON  0x4
+#define DB_CONTENTS_TV_SERIES  0x8
+
+  int db_current_contents;
+
+  rstr_t *db_title;
+
+  int db_flags;
+
+  int db_lonely_video_item;
+};
 
 
 /**
@@ -82,6 +102,8 @@ typedef struct deco_stem {
 typedef struct deco_item {
   TAILQ_ENTRY(deco_item) di_link;
   deco_browse_t *di_db;
+
+  LIST_ENTRY(deco_item) di_type_link;
 
   LIST_ENTRY(deco_item) di_stem_link;
   deco_stem_t *di_ds;
@@ -109,7 +131,13 @@ typedef struct deco_item {
   prop_sub_t *di_sub_duration;
   int di_duration;
 
-  metadata_lazy_prop_t *di_mlp;
+  prop_sub_t *di_sub_series;
+  rstr_t *di_series;
+
+  prop_sub_t *di_sub_season;
+  int di_season;
+
+  metadata_lazy_video_t *di_mlv;
 
 } deco_item_t;
 
@@ -123,23 +151,29 @@ static void load_nfo(deco_item_t *di);
 static void
 analyze_video(deco_item_t *di)
 {
-  if(di->di_url == NULL || di->di_duration == 0)
+  if(di->di_mlv != NULL)
+    return;
+
+  if(di->di_url == NULL || di->di_filename == NULL)
     return;
   
   deco_browse_t *db = di->di_db;
-  rstr_t *title = NULL;
-  int year = 0;
 
-  if(di->di_filename != NULL)
-    title = metadata_filename_to_title(rstr_get(di->di_filename), &year);
+  rstr_t *fname;
 
-  metadata_bind_movie_info(&di->di_mlp, di->di_metadata,
-			   di->di_url, title, year,
-			   di->di_ds->ds_imdb_id ?: db->db_imdb_id,
-			   di->di_duration,
-			   di->di_options);
-  
-  rstr_release(title);
+  if(db->db_flags & DECO_FLAGS_RAW_FILENAMES) {
+    fname = metadata_remove_postfix_rstr(di->di_filename);
+  } else {
+    fname = rstr_dup(di->di_filename);
+  }
+
+  di->di_mlv = metadata_bind_video_info(di->di_metadata,
+					di->di_url, fname,
+					di->di_ds->ds_imdb_id ?: db->db_imdb_id,
+					di->di_duration, di->di_options,
+					di->di_root, db->db_title,
+					db->db_lonely_video_item, 0);
+  rstr_release(fname);
 }
 
 
@@ -181,14 +215,70 @@ stem_analysis(deco_browse_t *db, deco_stem_t *ds)
   if(video && image) {
     prop_t *p;
 
-    p = prop_create_r(video->di_metadata, "fallbackicon");
+    p = prop_create_r(video->di_metadata, "usericon");
     prop_set_rstring(p, image->di_url);
     prop_ref_dec(p);
 
-    p = prop_create_r(image->di_root, "hidden");
-    prop_set_int(p, 1);
-    prop_ref_dec(p);
+    prop_set(video->di_metadata, "usericon", PROP_SET_RSTRING, image->di_url);
+    prop_set(image->di_root, "hidden", PROP_SET_INT, 1);
   }
+}
+
+
+/**
+ *
+ */
+static void
+update_contents(deco_browse_t *db)
+{
+  if(!(db->db_contents_mask & DB_CONTENTS_ALBUM)) {
+    prop_nf_pred_remove(db->db_pnf, db->db_audio_filter);
+    db->db_audio_filter = 0;
+  }
+
+
+  if(db->db_contents_mask & DB_CONTENTS_IMAGES) {
+    if(db->db_current_contents == DB_CONTENTS_IMAGES)
+      return;
+    db->db_current_contents = DB_CONTENTS_IMAGES;
+    prop_set_string(db->db_prop_contents, "images");
+    prop_nf_sort(db->db_pnf, "node.metadata.timestamp", 0, 1, NULL, 0);
+    prop_nf_sort(db->db_pnf, NULL, 0, 2, NULL, 0);
+    return;
+  }
+
+  if(db->db_contents_mask & DB_CONTENTS_ALBUM) {
+    if(db->db_current_contents == DB_CONTENTS_ALBUM)
+      return;
+    db->db_current_contents = DB_CONTENTS_ALBUM;
+
+    prop_set_string(db->db_prop_contents, "album");
+    prop_nf_sort(db->db_pnf, "node.metadata.track", 0, 1, NULL, 0);
+    prop_nf_sort(db->db_pnf, NULL, 0, 2, NULL, 0);
+
+    if(!db->db_audio_filter)
+      db->db_audio_filter = 
+	prop_nf_pred_str_add(db->db_pnf, "node.type", 
+			     PROP_NF_CMP_NEQ, "audio", NULL,
+			     PROP_NF_MODE_EXCLUDE);
+    return;
+  }
+
+  if(db->db_contents_mask & DB_CONTENTS_TV_SEASON) {
+    if(db->db_current_contents == DB_CONTENTS_TV_SEASON)
+      return;
+    db->db_current_contents = DB_CONTENTS_TV_SEASON;
+
+    prop_set_string(db->db_prop_contents, "tvseason");
+    prop_nf_sort(db->db_pnf, "node.metadata.episode", 0, 1, NULL, 0);
+    prop_nf_sort(db->db_pnf, NULL, 0, 2, NULL, 0);
+    return;
+  }
+
+  db->db_current_contents = 0;
+  prop_set_void(db->db_prop_contents);
+  prop_nf_sort(db->db_pnf, NULL, 0, 1, NULL, 0);
+  prop_nf_sort(db->db_pnf, NULL, 0, 2, NULL, 0);
 }
 
 
@@ -199,10 +289,12 @@ static void
 type_analysis(deco_browse_t *db)
 {
   if(db->db_types[CONTENT_IMAGE] * 4 > db->db_total * 3) {
-    prop_set_string(db->db_prop_contents, "images");
-    prop_nf_sort(db->db_pnf, "node.metadata.timestamp", 0, 1, NULL, 0);
-    return;
+    db->db_contents_mask |= DB_CONTENTS_IMAGES;
+  } else {
+    db->db_contents_mask &= ~DB_CONTENTS_IMAGES;
   }
+
+  update_contents(db);
 }
 
 
@@ -242,21 +334,19 @@ album_analysis(deco_browse_t *db)
   int artist_count = 0;
   int item_count = 0;
 
-  db->db_pending_flags &= ~DB_PENDING_ALBUM_ANALYSIS;
 
   LIST_INIT(&artists);
+  db->db_contents_mask &= ~DB_CONTENTS_ALBUM;
 
   if(!(db->db_types[CONTENT_AUDIO] > 1 && 
        db->db_types[CONTENT_VIDEO] == 0 &&
        db->db_types[CONTENT_ARCHIVE] == 0 &&
        db->db_types[CONTENT_DIR] == 0 &&
        db->db_types[CONTENT_ALBUM] == 0 &&
-       db->db_types[CONTENT_PLUGIN] == 0)) 
+       db->db_types[CONTENT_PLUGIN] == 0))
     return;
-
-  TAILQ_FOREACH(di, &db->db_items, di_link) {
-    if(di->di_type != CONTENT_AUDIO)
-      continue;
+  
+  LIST_FOREACH(di, &db->db_items_per_ct[CONTENT_AUDIO], di_type_link) {
     if(di->di_album == NULL)
       goto cleanup;
 
@@ -288,16 +378,11 @@ album_analysis(deco_browse_t *db)
     LIST_INSERT_HEAD(&artists, da, da_link);
   }
 
-  prop_set_string(db->db_prop_contents, "album");
-
-  prop_nf_sort(db->db_pnf, "node.metadata.track", 0, 1, NULL, 1);
+  db->db_contents_mask |= DB_CONTENTS_ALBUM;
 
   prop_t *m = prop_create_r(db->db_prop_model, "metadata");
-  prop_t *p;
 
-  p = prop_create_r(m, "album_name");
-  prop_set_rstring(p, v);
-  prop_ref_dec(p);
+  prop_set(m, "album_name", PROP_SET_RSTRING, v);
 
   if(artist_count > 0) {
     deco_artist_t **vec = malloc(artist_count * sizeof(deco_artist_t *));
@@ -312,11 +397,9 @@ album_analysis(deco_browse_t *db)
     free(vec);
 
     if(da->da_count * 2 >= item_count) {
-      p = prop_create_r(m, "artist_name");
-      prop_set_rstring(p, da->da_artist);
-      prop_ref_dec(p);
+      prop_set(m, "album_name", PROP_SET_RSTRING, da->da_artist);
       
-      p = prop_create_r(m, "album_art");
+      prop_t *p = prop_create_r(m, "album_art");
       metadata_bind_albumart(p, da->da_artist, v);
       prop_ref_dec(p);
     }
@@ -330,6 +413,98 @@ album_analysis(deco_browse_t *db)
     free(da);
   }
 }
+
+
+/**
+ *
+ */
+static void
+video_analysis(deco_browse_t *db)
+{
+  deco_item_t *di;
+  int reasonable_video_items = 0;
+  int i;
+
+  for(i = 0; i < 2; i++) {
+    LIST_FOREACH(di, &db->db_items_per_ct[CONTENT_VIDEO], di_type_link) {
+
+      if(di->di_duration > 300) {
+	if(i == 0)
+	  reasonable_video_items++;
+	else if(i == 1 && di->di_mlv)
+	  mlv_set_lonely(di->di_mlv, reasonable_video_items < 2);
+      }
+    }
+  }
+  db->db_lonely_video_item = reasonable_video_items < 1;
+
+  
+  const char *series = NULL;
+  int season = -1;
+
+  LIST_FOREACH(di, &db->db_items_per_ct[CONTENT_VIDEO], di_type_link) {
+    if(di->di_series == NULL) {
+      series = NULL;
+      break;
+    }
+
+    if(series == NULL)
+      series = rstr_get(di->di_series);
+    else if(strcmp(series, rstr_get(di->di_series))) {
+      series = NULL;
+      break;
+    }
+  }
+
+
+  if(series != NULL) {
+
+    LIST_FOREACH(di, &db->db_items_per_ct[CONTENT_VIDEO], di_type_link) {
+      if(di->di_season == 0) {
+	season = -1;
+	break;
+      }
+
+      if(season == -1)
+	season = di->di_season;
+      else if(season != di->di_season) {
+	season = -1;
+	break;
+      }
+    }
+  }
+  
+  di = LIST_FIRST(&db->db_items_per_ct[CONTENT_VIDEO]);
+
+  prop_t *x = prop_create_r(db->db_prop_model, "season");
+  if(season != -1 && series) {
+    assert(di != NULL);
+    db->db_contents_mask |= DB_CONTENTS_TV_SEASON;
+    prop_t *y = prop_create_r(di->di_metadata, "season");
+    prop_link(y, x);
+    prop_ref_dec(y);
+  } else {
+    prop_unlink(x);
+    db->db_contents_mask &= ~DB_CONTENTS_TV_SEASON;
+  }
+  prop_ref_dec(x);
+
+
+  x = prop_create_r(db->db_prop_model, "series");
+  if(series) {
+    assert(di != NULL);
+    db->db_contents_mask |= DB_CONTENTS_TV_SERIES;
+    prop_t *y = prop_create_r(di->di_metadata, "series");
+    prop_link(y, x);
+    prop_ref_dec(y);
+  } else {
+    prop_unlink(x);
+    db->db_contents_mask &= ~DB_CONTENTS_TV_SERIES;
+  }
+  prop_ref_dec(x);
+
+}
+
 
 
 /**
@@ -412,8 +587,8 @@ di_set_url(deco_item_t *di, rstr_t *str)
       load_nfo(di);
 
       TAILQ_FOREACH(di, &db->db_items, di_link) {
-	if(di->di_type == CONTENT_VIDEO)
-	  analyze_video(di);
+	if(di->di_type == CONTENT_VIDEO && di->di_mlv != NULL)
+	  mlv_set_imdb_id(di->di_mlv, di->di_ds->ds_imdb_id ?: db->db_imdb_id);
       }
       return;
     }
@@ -430,7 +605,7 @@ static void
 di_set_album(deco_item_t *di, rstr_t *str)
 {
   rstr_set(&di->di_album, str);
-  di->di_db->db_pending_flags |= DB_PENDING_ALBUM_ANALYSIS;
+  di->di_db->db_pending_flags |= DB_PENDING_DEFERRED_ALBUM_ANALYSIS;
   deco_pendings = 1;
 }
 
@@ -442,7 +617,7 @@ static void
 di_set_artist(deco_item_t *di, rstr_t *str)
 {
   rstr_set(&di->di_artist, str);
-  di->di_db->db_pending_flags |= DB_PENDING_ALBUM_ANALYSIS;
+  di->di_db->db_pending_flags |= DB_PENDING_DEFERRED_ALBUM_ANALYSIS;
   deco_pendings = 1;
 }
 
@@ -465,7 +640,41 @@ static void
 di_set_duration(deco_item_t *di, int duration)
 {
   di->di_duration = duration;
-  analyze_item(di);
+  if(di->di_type == CONTENT_VIDEO) {
+    if(di->di_mlv == NULL)
+      analyze_video(di);
+    else
+      mlv_set_duration(di->di_mlv, di->di_duration);
+
+    di->di_db->db_pending_flags |= DB_PENDING_DEFERRED_VIDEO_ANALYSIS;
+    deco_pendings = 1;
+  }
+}
+
+
+
+/**
+ *
+ */
+static void
+di_set_series(deco_item_t *di, rstr_t *str)
+{
+  rstr_set(&di->di_series, str);
+  di->di_db->db_pending_flags |= DB_PENDING_DEFERRED_VIDEO_ANALYSIS;
+  deco_pendings = 1;
+}
+
+
+
+/**
+ *
+ */
+static void
+di_set_season(deco_item_t *di, int v)
+{
+  di->di_season = v;
+  di->di_db->db_pending_flags |= DB_PENDING_DEFERRED_VIDEO_ANALYSIS;
+  deco_pendings = 1;
 }
 
 
@@ -495,9 +704,24 @@ di_set_type(deco_item_t *di, const char *str)
     di->di_sub_duration = NULL;
   }
 
+  if(di->di_sub_series != NULL) {
+    prop_unsubscribe(di->di_sub_series);
+    rstr_set(&di->di_series, NULL);
+    di->di_sub_series = NULL;
+  }
+
+  if(di->di_sub_season != NULL) {
+    prop_unsubscribe(di->di_sub_season);
+    di->di_season = 0;
+    di->di_sub_season = NULL;
+  }
+
   db->db_types[di->di_type]--;
+  LIST_REMOVE(di, di_type_link);
+
   di->di_type = str ? type2content(str) : CONTENT_UNKNOWN;
   db->db_types[di->di_type]++;
+  LIST_INSERT_HEAD(&db->db_items_per_ct[di->di_type], di, di_type_link);
 
 
   switch(di->di_type) {
@@ -529,6 +753,26 @@ di_set_type(deco_item_t *di, const char *str)
 		     PROP_TAG_COURIER, deco_courier,
 		     NULL);
 
+    di->di_sub_series = 
+      prop_subscribe(PROP_SUB_DIRECT_UPDATE,
+		     PROP_TAG_NAME("node", "metadata", "series", "title"),
+		     PROP_TAG_CALLBACK_RSTR, di_set_series, di,
+		     PROP_TAG_NAMED_ROOT, di->di_root, "node",
+		     PROP_TAG_COURIER, deco_courier,
+		     NULL);
+
+    di->di_sub_season = 
+      prop_subscribe(PROP_SUB_DIRECT_UPDATE,
+		     PROP_TAG_NAME("node", "metadata", "season", "number"),
+		     PROP_TAG_CALLBACK_INT, di_set_season, di,
+		     PROP_TAG_NAMED_ROOT, di->di_root, "node",
+		     PROP_TAG_COURIER, deco_courier,
+		     NULL);
+
+    di->di_db->db_pending_flags |= DB_PENDING_DEFERRED_VIDEO_ANALYSIS;
+    deco_pendings = 1;
+    break;
+
   default:
     break;
   }
@@ -548,7 +792,6 @@ static void
 deco_browse_add_node(deco_browse_t *db, prop_t *p, deco_item_t *before)
 {
   deco_item_t *di = calloc(1, sizeof(deco_item_t));
-
   di->di_db = db;
   di->di_root = prop_ref_inc(p);
   di->di_metadata = prop_create_r(p, "metadata");
@@ -556,7 +799,8 @@ deco_browse_add_node(deco_browse_t *db, prop_t *p, deco_item_t *before)
 
   db->db_total++;
   di->di_type = CONTENT_UNKNOWN;
-  db->db_types[CONTENT_UNKNOWN]++;
+  db->db_types[di->di_type]++;
+  LIST_INSERT_HEAD(&db->db_items_per_ct[di->di_type], di, di_type_link);
 
   prop_tag_set(p, db, di);
 
@@ -619,6 +863,7 @@ deco_item_destroy(deco_browse_t *db, deco_item_t *di)
     stem_release(di->di_ds);
   }
   
+  LIST_REMOVE(di, di_type_link);
   db->db_types[di->di_type]--;
   db->db_total--;
   prop_ref_dec(di->di_root);
@@ -638,8 +883,8 @@ deco_item_destroy(deco_browse_t *db, deco_item_t *di)
   rstr_release(di->di_url);
   rstr_release(di->di_filename);
   
-  if(di->di_mlp != NULL)
-    metadata_unbind(di->di_mlp);
+  if(di->di_mlv != NULL)
+    mlv_unbind(di->di_mlv);
 
   free(di);
 }
@@ -649,7 +894,9 @@ deco_item_destroy(deco_browse_t *db, deco_item_t *di)
 static void
 deco_browse_del_node(deco_browse_t *db, deco_item_t *di)
 {
+  db->db_pending_flags |= DB_PENDING_DEFERRED_FULL_ANALYSIS;
   deco_item_destroy(db, di);
+  deco_pendings = 1;
 }
 
 
@@ -681,6 +928,7 @@ deco_browse_destroy(deco_browse_t *db)
   prop_ref_dec(db->db_prop_model);
   rstr_release(db->db_imdb_id);
   LIST_REMOVE(db, db_link);
+  rstr_release(db->db_title);
   free(db);
 }
 
@@ -726,6 +974,7 @@ deco_browse_node_cb(void *opaque, prop_event_t event, ...)
     
   case PROP_SET_DIR:
   case PROP_WANT_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS:
     break;
 
   case PROP_SET_VOID:
@@ -748,31 +997,40 @@ deco_browse_node_cb(void *opaque, prop_event_t event, ...)
  *
  */
 void
-decorated_browse_create(prop_t *model, struct prop_nf *pnf)
+decorated_browse_destroy(deco_browse_t *db)
 {
-  prop_t *src = prop_create(model, "source");
+  hts_mutex_lock(&deco_mutex);
+  deco_browse_destroy(db);
+  hts_mutex_unlock(&deco_mutex);
+}
 
+/**
+ *
+ */
+deco_browse_t *
+decorated_browse_create(prop_t *model, struct prop_nf *pnf, prop_t *items,
+			rstr_t *title, int flags)
+{
   hts_mutex_lock(&deco_mutex);
 
   deco_browse_t *db = calloc(1, sizeof(deco_browse_t));
   TAILQ_INIT(&db->db_items);
-  db->db_sub = prop_subscribe(PROP_SUB_TRACK_DESTROY,
+  db->db_sub = prop_subscribe(flags & DECO_FLAGS_NO_AUTO_DESTROY ? 0 :
+                              PROP_SUB_TRACK_DESTROY,
 			      PROP_TAG_CALLBACK, deco_browse_node_cb, db,
-			      PROP_TAG_ROOT, src,
+			      PROP_TAG_ROOT, items,
 			      PROP_TAG_COURIER, deco_courier,
 			      NULL);
 
-  if(db->db_sub == NULL) {
-    prop_nf_release(pnf);
-    free(db);
-  } else {
-    db->db_pnf = pnf;
-    LIST_INSERT_HEAD(&deco_browses, db, db_link);
-    db->db_prop_model = prop_ref_inc(model);
-    db->db_prop_contents = prop_ref_inc(prop_create(model, "contents"));
-  }
 
+  db->db_pnf = prop_nf_retain(pnf);
+  LIST_INSERT_HEAD(&deco_browses, db, db_link);
+  db->db_prop_model = prop_ref_inc(model);
+  db->db_prop_contents = prop_create_r(model, "contents");
+  db->db_title = rstr_dup(title);
+  db->db_flags = flags;
   hts_mutex_unlock(&deco_mutex);
+  return db;
 }
 
 
@@ -804,9 +1062,18 @@ deco_thread(void *aux)
       deco_browse_t *db;
 
       LIST_FOREACH(db, &deco_browses, db_link) {
-	if(db->db_pending_flags & DB_PENDING_ALBUM_ANALYSIS)
-	  album_analysis(db);
-	db->db_pending_flags = 0;
+	if(db->db_pending_flags) {
+
+	  if(db->db_pending_flags & DB_PENDING_DEFERRED_ALBUM_ANALYSIS)
+	    album_analysis(db);
+
+	  if(db->db_pending_flags & DB_PENDING_DEFERRED_VIDEO_ANALYSIS)
+	    video_analysis(db);
+
+	  db->db_pending_flags = 0;
+	  update_contents(db);
+	}
+
       }
     }
   }

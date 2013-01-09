@@ -28,7 +28,7 @@
 #include "htsmsg/htsmsg_xml.h"
 #include "media.h"
 #include "misc/dbl.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "i18n.h"
 #include "video_overlay.h"
 #include "vobsub.h"
@@ -432,9 +432,9 @@ subtitles_create(const char *path, char *buf, size_t len)
       len -= 3;
     }
 
-    if(is_srt(buf, len))
+    if(is_srt(b0, len))
       s = load_srt(path, b0, len, force_utf8);
-    if(is_ass(buf, len))
+    if(is_ass(b0, len))
       s = load_ssa(path, b0, len);
   }
 

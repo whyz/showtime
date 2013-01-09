@@ -68,6 +68,20 @@ event_create_int(event_type_t type, int sym)
 /**
  *
  */
+void *
+event_create_int3(event_type_t type, int v1, int v2, int v3)
+{
+  event_int3_t *e = event_create(type, sizeof(event_int3_t));
+  e->val1 = v1;
+  e->val2 = v2;
+  e->val3 = v3;
+  return e;
+}
+
+
+/**
+ *
+ */
 void
 event_addref(event_t *e)
 {
@@ -96,6 +110,7 @@ static struct strtab actionnames[] = {
   { "Right",                 ACTION_RIGHT },
   { "Activate",              ACTION_ACTIVATE },
   { "Enter",                 ACTION_ENTER },
+  { "Submit",                ACTION_SUBMIT },
   { "Ok",                    ACTION_OK },
   { "Cancel",                ACTION_CANCEL },
   { "Backspace",             ACTION_BS },
@@ -132,8 +147,6 @@ static struct strtab actionnames[] = {
   { "NextTrack",             ACTION_SKIP_FORWARD },
   { "SeekForward",           ACTION_SEEK_FORWARD },
   { "SeekReverse",           ACTION_SEEK_BACKWARD },
-  { "SeekFastForward",       ACTION_SEEK_FAST_FORWARD },
-  { "SeekFastReverse",       ACTION_SEEK_FAST_BACKWARD },
 
   { "VolumeUp",              ACTION_VOLUME_UP },
   { "VolumeDown",            ACTION_VOLUME_DOWN },
@@ -169,6 +182,8 @@ static struct strtab actionnames[] = {
   { "SubtitleTrack",         ACTION_CYCLE_SUBTITLE },
 
   { "ReloadData",            ACTION_RELOAD_DATA },
+  { "Playqueue",             ACTION_PLAYQUEUE },
+  { "Sysinfo",               ACTION_SYSINFO },
 
 };
 
@@ -445,6 +460,18 @@ event_to_prop(prop_t *p, event_t *e)
  *
  */
 void
+event_to_ui(event_t *e)
+{
+  event_to_prop(prop_get_by_name(PNVEC("global", "ui", "eventSink"),
+				 1, NULL), e);
+  event_release(e);
+}
+
+
+/**
+ *
+ */
+void
 event_dispatch(event_t *e)
 {
   prop_t *p;
@@ -471,9 +498,9 @@ event_dispatch(event_t *e)
   } else if(event_is_action(e, ACTION_NAV_BACK) ||
 	    event_is_action(e, ACTION_NAV_FWD) ||
 	    event_is_action(e, ACTION_HOME) ||
+	    event_is_action(e, ACTION_PLAYQUEUE) ||
 	    event_is_action(e, ACTION_RELOAD_DATA) ||
 	    event_is_type(e, EVENT_OPENURL)) {
-
     event_to_prop(prop_get_by_name(PNVEC("global", "nav", "eventsink"),
 				   1, NULL), e);
 
@@ -490,9 +517,7 @@ event_dispatch(event_t *e)
     prop_toggle_int(p);
     prop_ref_dec(p);
 
-  } else if(event_is_action(e, ACTION_SEEK_FAST_BACKWARD) ||
-	    event_is_action(e, ACTION_SEEK_BACKWARD) ||
-	    event_is_action(e, ACTION_SEEK_FAST_FORWARD) ||
+  } else if(event_is_action(e, ACTION_SEEK_BACKWARD) ||
 	    event_is_action(e, ACTION_SEEK_FORWARD) ||
 	    event_is_action(e, ACTION_PLAYPAUSE) ||
 	    event_is_action(e, ACTION_PLAY) ||
@@ -508,10 +533,10 @@ event_dispatch(event_t *e)
 	    event_is_action(e, ACTION_PREV_CHANNEL) ||
 	    event_is_action(e, ACTION_CYCLE_AUDIO) ||
 	    event_is_action(e, ACTION_CYCLE_SUBTITLE) ||
+	    event_is_type(e, EVENT_DELTA_SEEK_REL) || 
 	    event_is_type(e, EVENT_SELECT_AUDIO_TRACK) || 
 	    event_is_type(e, EVENT_SELECT_SUBTITLE_TRACK)
 	    ) {
-
     event_to_prop(prop_get_by_name(PNVEC("global", "media", "eventsink"),
 				   1, NULL), e);
   } else if(event_is_type(e, EVENT_PLAYTRACK)) {
@@ -529,20 +554,20 @@ event_dispatch(event_t *e)
  */
 const static int action_from_fkey[13][2] = {
   { 0, 0 },
-  { ACTION_MENU,             0 },
+  { ACTION_MENU,             ACTION_PLAYQUEUE },
   { ACTION_SHOW_MEDIA_STATS, 0 },
   { ACTION_ITEMMENU,         0 },
   { ACTION_LOGWINDOW,        ACTION_ENABLE_SCREENSAVER },
 
   { ACTION_RELOAD_UI,        ACTION_RELOAD_DATA },
-  { 0, 0 },
+  { ACTION_SYSINFO, 0 },
   { 0, 0 },
   { 0, 0 },
 
-  { ACTION_SWITCH_VIEW,      0 },
-  { 0, 0 },
-  { ACTION_FULLSCREEN_TOGGLE,      0 },
-  { 0, 0 },
+  { ACTION_SWITCH_VIEW,       0 },
+  { 0,                        ACTION_VOLUME_MUTE_TOGGLE },
+  { ACTION_FULLSCREEN_TOGGLE, ACTION_VOLUME_DOWN },
+  { 0,                        ACTION_VOLUME_UP },
 };
 
 

@@ -44,6 +44,7 @@
 #include "fa_imageloader.h"
 #include "blobcache.h"
 #include "htsmsg/htsbuf.h"
+#include "fa_indexer.h"
 
 struct fa_protocol_list fileaccess_all_protocols;
 
@@ -120,7 +121,7 @@ fa_can_handle(const char *url, char *errbuf, size_t errsize)
   char *filename;
 
   // XXX: Not good, should send vpaths in here instead
-  if(!strncmp(url, "theme://", strlen("theme://")))
+  if(!strncmp(url, "skin://", strlen("skin://")))
     return 1;
 
   if((filename = fa_resolve_proto(url, &fap, NULL, errbuf, errsize)) == NULL)
@@ -211,7 +212,7 @@ fa_open_vpaths(const char *url, const char **vpaths,
   char *filename;
   fa_handle_t *fh;
 
-  if((filename = fa_resolve_proto(url, &fap, vpaths, NULL, 0)) == NULL)
+  if((filename = fa_resolve_proto(url, &fap, vpaths, errbuf, errsize)) == NULL)
     return NULL;
   
   if(flags & (FA_BUFFERED_SMALL | FA_BUFFERED_BIG))
@@ -560,6 +561,8 @@ fileaccess_init(void)
 #if ENABLE_READAHEAD_CACHE
   fa_cache_init();
 #endif
+
+  fa_indexer_init();
   return 0;
 }
 
@@ -869,12 +872,14 @@ fa_load_query(const char *url0, size_t *sizep,
     char prefix = '?';
     
     while(args[0] != NULL) {
-      htsbuf_append(&q, &prefix, 1);
-      htsbuf_append_and_escape_url(&q, args[0]);
-      htsbuf_append(&q, "=", 1);
-      htsbuf_append_and_escape_url(&q, args[1]);
+      if(args[1] != NULL) {
+	htsbuf_append(&q, &prefix, 1);
+	htsbuf_append_and_escape_url(&q, args[0]);
+	htsbuf_append(&q, "=", 1);
+	htsbuf_append_and_escape_url(&q, args[1]);
+	prefix = '&';
+      }
       args += 2;
-      prefix = '&';
     }
   }
   
@@ -885,4 +890,30 @@ fa_load_query(const char *url0, size_t *sizep,
   free(url);
   htsbuf_queue_flush(&q);
   return r;
+}
+
+
+/**
+ *
+ */
+int
+fa_read_to_htsbuf(struct htsbuf_queue *hq, fa_handle_t *fh, int maxbytes)
+{
+  const int chunksize = 4096;
+  while(maxbytes > 0) {
+    char *buf = malloc(chunksize);
+    int l = fa_read(fh, buf, chunksize);
+    if(l < 0)
+      return -1;
+
+    if(l > 0) {
+      htsbuf_append_prealloc(hq, buf, l);
+    } else {
+      free(buf);
+    }
+    if(l != chunksize)
+      return 0;
+    maxbytes -= l;
+  }
+  return -1;
 }

@@ -56,10 +56,10 @@ fa_search_destroy (fa_search_t *fas)
 {
   free(fas->fas_query);
 
+  prop_unsubscribe(fas->fas_sub);
+
   if (fas->fas_pc)
     prop_courier_destroy(fas->fas_pc);
-
-  prop_unsubscribe(fas->fas_sub);
 
   if (fas->fas_nodes)
     prop_ref_dec(fas->fas_nodes);
@@ -277,7 +277,7 @@ fa_locate_searcher (fa_search_t *fas)
       ctype = CONTENT_DIR;
       prop_set_string(prop_create(metadata, "title"), basename(buf));
     } else {
-      metadata_t *md = fa_probe_metadata(url, NULL, 0);
+      metadata_t *md = fa_probe_metadata(url, NULL, 0, NULL);
       if(md != NULL) {
 	ctype = md->md_contenttype;
 	metadata_destroy(md);

@@ -60,10 +60,12 @@ rstr_allocl(const char *in, size_t len)
 }
 
 rstr_t *
-rstr_spn(rstr_t *s, const char *set)
+rstr_spn(rstr_t *s, const char *set, int offset)
 {
   size_t len = strlen(rstr_get(s));
-  size_t l = strcspn(rstr_get(s), set);
+  if(offset >= len)
+    return rstr_dup(s);
+  size_t l = strcspn(rstr_get(s) + offset, set) + offset;
   if(l == len)
     return rstr_dup(s);
   return rstr_allocl(rstr_get(s), l);
@@ -91,6 +93,34 @@ static void __attribute__((constructor)) rstr_setup(void)
 }
 #endif
 
+
+void 
+rstr_vec_append(rstr_vec_t **rvp, rstr_t *str)
+{
+  rstr_vec_t *rv = *rvp;
+
+  if(rv == NULL) {
+    rv = malloc(sizeof(rstr_vec_t) + sizeof(rstr_t *) * 16);
+    rv->capacity = 16;
+    rv->size = 0;
+    *rvp = rv;
+  } else if(rv->size == rv->capacity) {
+    rv->capacity = rv->capacity * 2;
+    rv = realloc(rv, sizeof(rstr_vec_t) + sizeof(rstr_t *) * rv->capacity);
+    *rvp = rv;
+  }
+  rv->v[rv->size++] = rstr_dup(str);
+}
+
+
+void
+rstr_vec_free(rstr_vec_t *rv)
+{
+  int i;
+  for(i = 0; i < rv->size; i++)
+    rstr_release(rv->v[i]);
+  free(rv);
+}
 
 
 #else

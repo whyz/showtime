@@ -2,52 +2,83 @@ language: Czech
 native: Česky
 maintainer: Jirka Dutka <jirka@dutka.net>
 #
-# ./glwthemes/mono/commandmenu/cmd_root.view
+# ./glwskins/default/cmdmenu.view
 #
-id: Audio settings
-msg: Nastavení zvuku
+id: Add current page to bookmarks
+msg: Přidat k oblíbeným
 
-id: Languages
-msg: Jazyk
+id: Open settings
+msg: Otevřít nastavení
 
-id: Settings
-msg: Nastavení
-
-id: Subtitle settings
-msg: Nastavení titulků
-
-id: Video settings
-msg: Nastavení videa
+id: Remove current page from bookmarks
+msg: Odtranit z oblíbených
 
 #
-# ./glwthemes/mono/directoryviews/infobox/audio.view
+# ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
-id: Added by: %s
-msg: Zařadil: %s
+id: Exit Showtime
+# Missing translation
+msg: 
 
-id: Played %d times
-msg[0]: Přehráno jednou
-msg[1]: Přehráno %d krát
+id: Go to Home screen
+msg: Jít na úvodní stránku
+
+id: Navigation
+msg: Navigace
+
+id: Open Settings
+msg: Otevřít nastavení
+
+id: Playqueue
+msg: Fronta přehrávání 
+
+id: Power off
+# Missing translation
+msg: 
+
+id: Reload current page
+msg: Obnovit stránku
+
+id: Suspend
+# Missing translation
+msg: 
+
+id: System
+# Missing translation
+msg: 
 
 #
-# ./glwthemes/mono/directoryviews/list2/center_directory.view
+# ./glwskins/default/cmdmenu/cmdmenu_dir.view
 #
-id: %d entries
-msg[0]: %d soubor
-msg[1]: %d souborů
+id: Add '%s' to home screen
+msg: Přidat '%s' na úvodní stránku
+
+id: Remove '%s' from home screen
+msg: Odebrat '%s' z úvodní stránky
 
 #
-# ./glwthemes/mono/directoryviews/list2/center_playlist.view
+# ./glwskins/default/cmdmenu/cmdmenu_item.view
 #
-id: %d tracks
-msg[0]: %d stopa
-msg[1]: %d stop
+id: Continue from %s
+msg: Pokračovat od %s
 
-#
-# ./glwthemes/mono/directoryviews/list2/options_audio.view
-#
+id: Continue playback here
+msg: Přehrávat odsud
+
 id: Delete
 msg: Smazat
+
+id: Mark as seen
+msg: Označit jako přehrané
+
+id: Mark as unseen
+msg: Označit jako nepřehrané
+
+id: Play from beginning
+msg: Hrát od začátku
+
+id: Play until end of list
+msg: Hrát do konce seznamu
 
 id: Queue
 msg: Fronta
@@ -59,31 +90,49 @@ id: Unstar
 msg: Unstar
 
 #
-# ./glwthemes/mono/include/buttons.view
+# ./glwskins/default/cmdmenu/cmdmenu_video.view
 #
-id: Off
-msg: Vyp
+id: Audio
+msg: Audio
 
-id: On
-msg: Zap
+id: Audio settings
+msg: Nastavení zvuku
+
+id: Audio tracks
+msg: Zvukové stopy
+
+id: Seek by time
+msg: Hledat podle času
+
+id: Settings
+msg: Nastavení
+
+id: Subtitle settings
+msg: Nastavení titulků
+
+id: Subtitle tracks
+msg: Titulky
+
+id: Subtitles
+msg: Titulky
+
+id: Video
+msg: Video
+
+id: Video menu
+msg: Video menu
+
+id: Video settings
+msg: Nastavení videa
 
 #
-# ./glwthemes/mono/include/infobox.view
+# ./glwskins/default/log.view
 #
-id: Enqueue
-msg: Zařaď
+id: System log
+msg: Systémové události
 
 #
-# ./glwthemes/mono/include/popup.view
-#
-id: Cancel
-msg: Storno
-
-id: OK
-msg: OK
-
-#
-# ./glwthemes/mono/pages/about.view
+# ./glwskins/default/pages/about.view
 #
 id: Allocated by application: %d kB
 msg: Obsazeno aplikací: %d kB
@@ -137,67 +186,246 @@ id: Windowmanager: %s
 msg: Správce oken: %s
 
 #
-# ./glwthemes/mono/pages/about_top.view
+# ./glwskins/default/pages/directory.view
 #
-id: About
+id: Album
+msg: Album
+
+id: Artist
+# Missing translation
+msg: 
+
+id: Custom
+msg: Uživatelské
+
+id: Images
+msg: Obrázky
+
+id: List
+msg: Seznam
+
+id: Slideshow
+msg: Prezentace
+
+id: Tvchannels
+# Missing translation
+msg: 
+
+id: View
+msg: Pohled
+
+#
+# ./glwskins/default/pages/discovered.view
+#
+id: Discovered resources on local network
+msg: Hledám zdroje v lokální síti
+
+#
+# ./glwskins/default/pages/home.view
+#
+id: Tiled
+# Missing translation
+msg: 
+
+#
+# ./glwskins/default/pages/home_clist.view
+#
+id: About Showtime
 msg: O programu
 
-#
-# ./glwthemes/mono/pages/home_top.view
-#
-id: Home
-msg: Domů
+id: Dismiss
+msg: Zamítnout
+
+id: Plugins
+msg: Pluginy
 
 #
-# ./glwthemes/mono/pages/openerror.view
+# ./glwskins/default/pages/iteminfo/image.view
+#
+id: Camera: 
+msg: Kamera
+
+id: Date: 
+msg: Datum:
+
+#
+# ./glwskins/default/pages/iteminfo/plugin.view
+#
+id: Author: 
+msg: Autor:
+
+id: Available version: 
+msg: Dostupná verze:
+
+id: Installed version: 
+msg: Instalovaná verze:
+
+id: Showtime %s or newer is required
+msg: Je vyžadován Showtime v. %s nebo novější
+
+#
+# ./glwskins/default/pages/iteminfo/video.view
+#
+id: Duration:
+msg: Délka:
+
+id: File date:
+msg: Čas souboru:
+
+id: Genre:
+msg: Žánr:
+
+id: Metadata from
+msg: Metadata z
+
+id: Rating:
+msg: Hodnocení:
+
+id: Year:
+msg: Rok:
+
+#
+# ./glwskins/default/pages/listitems/add.view
+#
+id: Add new entry
+msg: Přidat položku
+
+#
+# ./glwskins/default/pages/listitems/bool.view
+#
+id: No
+msg: Ne
+
+id: Yes
+msg: Ano 
+
+#
+# ./glwskins/default/pages/listitems/font.view
+#
+id: Condensed
+# Missing translation
+msg: 
+
+id: Main
+# Missing translation
+msg: 
+
+id: Subs
+# Missing translation
+msg: 
+
+#
+# ./glwskins/default/pages/listitems/plugin.view
+#
+id: Install
+msg: Instalovat
+
+id: Uninstall
+msg: Odnstalovat
+
+id: Upgrade
+msg: Upgradovat
+
+#
+# ./glwskins/default/pages/openerror.view
 #
 id: Unable to open resource
 msg: Zdroj nelze otevřít 
 
 #
-# ./glwthemes/mono/pages/openerror_top.view
-#
-id: Page load error
-msg: Stránku nelze načíst
-
-#
-# ./glwthemes/mono/pages/playqueue_top.view
-#
-id: Playqueue
-msg: Fronta přehrávání 
-
-#
-# ./glwthemes/mono/pages/video.view
-#
-id: Playback status
-msg: Stav přehrávání
-
-id: Unable to start video playback
-msg: Přehrávání videa se nezdařilo
-
-#
-# ./glwthemes/mono/playdecks/dvd.view
-#
-id: Chapter %d / %d
-msg: Kapitola %d / %d
-
-id: Title %d / %d
-msg: Název %d / %d
-
-#
-# ./glwthemes/mono/playdecks/tracks.view
+# ./glwskins/default/pages/playqueue.view
 #
 id: Track %d / %d
 msg: Skladba %d / %d
 
 #
-# ./glwthemes/mono/playdecks/video.view
+# ./glwskins/default/pages/slideshow.view
+#
+id: Paused
+# Missing translation
+msg: 
+
+#
+# ./glwskins/default/pages/upgrade.view
+#
+id: An error occured during download
+msg: Při stahování došlo k chybě
+
+id: Available version:
+msg: Dostupná verze:
+
+id: Changelog for %s releases
+msg: Seznam změn verze %s
+
+id: Check for updates now
+msg: Zkontrolovat aktualizace
+
+id: Checking for updates...
+msg: Kontroluji aktualizace:
+
+id: Current version:
+msg: Současná verze:
+
+id: Download and install...
+msg: Stáhnout a nainstalovat...
+
+id: Downloading...
+msg: Stahuji...
+
+id: Installing...
+msg: Instaluji...
+
+id: New version %s is available for download
+msg: Nová verze %s je ke stažení
+
+id: No upgrade available
+msg: Upgrade není k dispozici
+
+id: Restarting Showtime in %d seconds...
+msg: Showtsime bude restartován za %d sekund...
+
+id: Retry...
+msg: Zkouším znova...
+
+id: Showtime is up to date
+msg: Showtime je aktuální
+
+id: Stable
+msg: Stabilní
+
+id: Testing
+msg: Testovací
+
+id: Unable to query for new version
+msg: Nepodařilo se zjistit novou verzi
+
+#
+# ./glwskins/default/pages/video.view
 #
 id: CPU is too slow to decode this video
 msg: CPU je příliš pomalý pro dekódování tohoto videa
 
+id: Playback status
+msg: Stav přehrávání
+
 #
-# ./glwthemes/mono/popups/auth.view
+# ./glwskins/default/pages/wideinfo/video.view
+#
+id: Seen:
+# Missing translation
+msg: 
+
+#
+# ./glwskins/default/playdecks/dvd.view
+#
+id: Chapter: %d
+msg: Kapitola:
+
+id: Title: %d
+msg: Název:
+
+#
+# ./glwskins/default/popups/auth.view
 #
 id: Domain
 msg: Doména
@@ -212,49 +440,34 @@ id: Username
 msg: Uživatel
 
 #
-# ./glwthemes/mono/screensaver.view
+# ./glwskins/default/popups/common.view
+#
+id: Cancel
+msg: Storno
+
+id: OK
+msg: OK
+
+#
+# ./glwskins/default/screensaver.view
 #
 id: No media loaded
 msg: Žádné médium
 
 #
-# ./glwthemes/mono/sysinfo.view
+# ./glwskins/default/sysinfo.view
 #
-id: Audio output
-msg: Výstup zvuku
-
-id: CPUs
-msg: CPUs
-
-id: GPU & Display
-msg: GPU a displej
-
-id: GPU Core temperature: %d / %d °
-msg: GPU - teplota jádra: %d / %d °
+id: Memory usage:
+msg: Využití paměti:
 
 #
-# ./glwthemes/mono/universe.view
+# ./glwskins/default/universe.view
 #
-id: Adjust background tint based on daytime
-msg: Nastavit barvu pozadi podle času
-
-id: Alternate list layout
-msg: Alternativní vzhled seznamu
-
 id: Audio muted
 msg: Zvuk ztišen
 
-id: Fancy UI animations
-msg: Animace rozhraní
-
 id: Master volume: %d dB
 msg: Hlasitost: %d dB
-
-id: Multilingual 'No media loaded'
-msg: Vícejazyčné 'No media loaded'
-
-id: Top bar navigation buttons
-msg: Navigační ikony na horní liště
 
 #
 # ./src/api/opensubtitles.c
@@ -266,7 +479,18 @@ id: Use opensubtitles.org
 msg: Používat opensubtitles.org
 
 #
-# ./src/arch/arch_ps3.c
+# ./src/api/tmdb.c
+#
+id: Language (ISO 639-1 code)
+# Missing translation
+msg: 
+
+id: Use original title
+# Missing translation
+msg: 
+
+#
+# ./src/arch/ps3/ps3_main.c
 #
 id: System is low on memory (%d kB RAM available)
 msg: Systém má málo paměti (%d kb RAM volných)
@@ -274,6 +498,9 @@ msg: Systém má málo paměti (%d kb RAM volných)
 #
 # ./src/audio/audio.c
 #
+id: Audio output
+msg: Výstup zvuku
+
 id: Audio/Video sync delay
 msg: Audio/Video synchronizace
 
@@ -340,11 +567,19 @@ msg: Výsledky hledání pro: %s
 #
 # ./src/backend/spotify/spotify.c
 #
+id: Albums
+# Missing translation
+msg: 
+
 id: Automatic login when Showtime starts
 msg: Automatické přihlášení při startu programu
 
 id: Collaborative
 msg: Spolupráce
+
+id: Compilations
+# Missing translation
+msg: 
 
 id: Enable Spotify
 msg: Povolit Spotify
@@ -382,6 +617,10 @@ msg: Nové přihlášení (přepnout uživatele)
 id: Search result
 msg: Výsledky hledání
 
+id: Singles
+# Missing translation
+msg: 
+
 id: Spotify friends
 msg: Spotify přátele
 
@@ -401,10 +640,13 @@ id: Starred
 msg: S hvězdičkou
 
 #
-# ./src/bookmarks.c
+# ./src/blobcache_file.c
 #
-id: Bookmarks
-msg: Oblíbené
+id: Cache cleared
+msg: Cache vymazána
+
+id: Clear cached files
+msg: Vymazat dočasné soubory
 
 #
 # ./src/fileaccess/fa_backend.c
@@ -420,6 +662,39 @@ msg: Nejde otevřít soubor: %s
 #
 id: Search using Unix locatedb
 msg: Pro hledání použít Unix locatedb
+
+#
+# ./src/fileaccess/fa_nativesmb.c
+#
+id: Access denied
+msg: Přístup zamítnut
+
+id: Account restricted
+msg: Účet omezen
+
+id: Bad network share name
+msg: Nesprávný název síťového umístnění
+
+id: Logon failure
+msg: Chyba přihlášení
+
+#
+# ./src/fileaccess/fa_scanner.c
+#
+id: Date
+msg: Datum
+
+id: Filename
+msg: Název souboru
+
+id: Show only supported files
+msg: Zobrazit jen podporované soubory
+
+id: Sort folders first
+msg: Adresáře na začátek
+
+id: Sort on
+msg: Řadit podle
 
 #
 # ./src/fileaccess/fa_spotlight.c
@@ -441,6 +716,9 @@ msg: Jazyk
 
 id: Language codes should be configured as three character ISO codes, example (eng, swe, fra)
 msg: Tříznakový ISO kód jazyka, např. (eng, swe, cze)
+
+id: Languages
+msg: Jazyk
 
 id: Preferred languages
 msg: Výchozí jazyk
@@ -488,6 +766,15 @@ id: Keymapper
 msg: Ovládání
 
 #
+# ./src/keyring.c
+#
+id: Forget remembered passwords
+msg: Vymazat uložená hesla
+
+id: Rembered passwords erased
+msg: Uložená hesla vymazána
+
+#
 # ./src/media.c
 #
 id: Align subtitles on video frame
@@ -508,29 +795,234 @@ msg: Video zoom
 #
 # ./src/metadata/metadata.c
 #
+id: Automatic
+msg: Automaticky
+
+id: Custom search query
+msg: Uživatelské hledání
+
+id: Custom title
+# Missing translation
+msg: 
+
 id: Embedded in file
 msg: Vloženo v souboru
+
+id: Enabled
+msg: Povoleno
+
+id: IMDb ID
+msg: IMDb ID
+
+id: Metadata
+msg: Metadata
+
+id: Metadata configuration and provider settings
+msg: Nastavení metadat a poskytovatele
+
+id: Metadata loaded from '%s' using %s
+msg: Metadata získána z '%s' pomocí %s
+
+id: Metadata search
+msg: Hledání metadat
+
+id: Metadata source
+msg: Zdroj metadat
+
+id: Movie
+msg: Film
+
+id: No data found
+msg: Data nenalezena
+
+id: None
+msg: Nic
+
+id: Providers for Music
+msg: Poskytovatelé pro hudbu
+
+id: Providers for Video
+# Missing translation
+msg: 
+
+id: Refresh metadata
+msg: Obnoit metadata
 
 id: Track %d
 msg: Track %d
 
+id: custom IMDb ID
+msg: uživatelské IMDb ID
+
+id: custom query
+msg: uživatelský dotaz
+
+id: filename
+msg: název souboru
+
+id: filename as TV episode
+# Missing translation
+msg: 
+
+id: folder name
+msg: název adresáře
+
+#
+# ./src/metadata/metadb.c
+#
+id: %d items deleted
+# Missing translation
+msg: 
+
+id: Clear all metadata
+# Missing translation
+msg: 
+
+id: Clearing all metadata means losing <b>all</b> information about:\n\nIf a track/movie has been seen\nNumber of times a track/movie has been played\nPlayback resume position\n\nIt will also erase the metadata cached from external sources such as themoviedb.org, etc\n\nAre you sure you proceed?
+# Missing translation
+msg: 
+
 #
 # ./src/navigator.c
 #
+id: Add and remove items on homepage
+# Missing translation
+msg: 
+
+id: Added new bookmark: %s
+msg: Přidána záložka: %s
+
+id: Bookmarks
+msg: Oblíbené
+
+id: Music
+msg: Hudba
+
 id: No handler for URL
 msg: Nelze zpracovat URL
+
+id: Other
+msg: Ostatní
+
+id: Photos
+msg: Snimky
+
+id: Removed bookmark: %s
+msg: Odstraněna záložka: %s
+
+id: TV
+msg: TV
+
+id: Title
+msg: Název
+
+id: Type
+msg: Typ
+
+id: URL
+msg: URL
 
 #
 # ./src/plugins.c
 #
-id: Invalud URI
-msg: Neplatné URI
+id: Alternate plugin Repository URL
+msg: URL náhradního úložiště pluginů
 
-id: Plugin ID %s does not exist
-msg: Plugin s ID %s neexistuje
+id: Automatically upgrade plugins
+msg: Automaticky upgradovat pluginy
 
-id: Plugin ID %s have no download URL
-msg: Plugin s ID %s nemá URL pro stažení
+id: Available plugins
+msg: Dostupné pluginy
+
+id: Background
+# Missing translation
+msg: 
+
+id: Beta testing passwords
+# Missing translation
+msg: 
+
+id: Browse available plugins
+msg: Prohlížet dostupné pluginy
+
+id: Browsing
+# Missing translation
+msg: 
+
+id: Cloud services
+# Missing translation
+msg: 
+
+id: Corrupt plugin bundle
+msg: Svazek poškozených pluginů
+
+id: Default
+# Missing translation
+msg: 
+
+id: Disk write error
+msg: Chyba při zápisu na disk
+
+id: Downloading
+msg: Stahuji
+
+id: File open error
+msg: Chyba při otvírání souboru
+
+id: Home page
+# Missing translation
+msg: 
+
+id: Installed plugins
+msg: Nainstalované pluginy
+
+id: Installed version higher than available
+# Missing translation
+msg: 
+
+id: Installing
+msg: Instaluji
+
+id: List of albums
+# Missing translation
+msg: 
+
+id: Loading screen
+# Missing translation
+msg: 
+
+id: Movies
+# Missing translation
+msg: 
+
+id: Music streaming
+# Missing translation
+msg: 
+
+id: Not installable
+msg: Nelze nainstalovat
+
+id: Not installed
+msg: Nenainstalováno
+
+id: Not upgradable
+msg: Nelze aktualizovat
+
+id: Online TV
+# Missing translation
+msg: 
+
+id: Preferred views from plugins
+# Missing translation
+msg: 
+
+id: Screen saver
+# Missing translation
+msg: 
+
+id: TV channels
+# Missing translation
+msg: 
 
 id: Unable to load plugin.json: %s
 msg: Nelze načíst plugin.json: %s
@@ -538,8 +1030,26 @@ msg: Nelze načíst plugin.json: %s
 id: Unable to load plugin.json: Malformed JSON
 msg: Nelze načíst plugin.json: nesprávné JSON
 
-id: Unable to request plugin repository: %s
-msg: Neúspěšný požadavek na repozitář pluginů: %s
+id: Uncategorized
+# Missing translation
+msg: 
+
+id: Up to date
+msg: Aktuální
+
+id: Upgradable
+msg: Dostupný upgrade
+
+id: Upgraded plugin %s to version %s
+msg: Plugin %s upgradován na verzi %s
+
+id: User interface extensions
+# Missing translation
+msg: 
+
+id: Video streaming
+# Missing translation
+msg: 
 
 #
 # ./src/runcontrol.c
@@ -547,20 +1057,29 @@ msg: Neúspěšný požadavek na repozitář pluginů: %s
 id: Automatic standby
 msg: Automatické vypnutí
 
-id: Run control
-msg: Run control
+id: Logout
+msg: Odhlásit
+
+id: Open shell
+msg: Příkazová řádka
+
+id: Power off system
+msg: Vyonout systém
+
+id: Starting and stopping Showtime
+msg: Start a ukončení Showtime
 
 #
 # ./src/sd/sd.c
 #
-id: Enabled
-msg: Povoleno
-
 id: Name
 msg: Název
 
-id: Type
-msg: Typ
+#
+# ./src/service.c
+#
+id: Local network
+msg: Místní síť
 
 #
 # ./src/settings.c
@@ -568,18 +1087,62 @@ msg: Typ
 id: Applications and installed plugins
 msg: Aplikace a nainstalované doplňky
 
+id: Developer settings
+msg: Nastavení pro vývojáře
+
 id: Discovered media sources
 msg: Vyhledat zdroje videa a zvuku
+
+id: Fonts and user interface styling
+# Missing translation
+msg: 
+
+id: General
+msg: Obecné
 
 id: Global settings
 msg: Hlavní nastavení
 
-#
-# ./src/ui/glw/glw.c
-#
-id: Display and user interface
-msg: Displej a uživatelské rozhraní
+id: Look and feel
+# Missing translation
+msg: 
 
+id: Settings useful for developers
+msg: Nastavení pro vývojáře
+
+id: System related settings
+msg: Systémová nastavení
+
+#
+# ./src/text/fontstash.c
+#
+id: Narrow text
+# Missing translation
+msg: 
+
+id: Unable to load %s -- %s
+# Missing translation
+msg: 
+
+id: Unable to open %s for writing
+# Missing translation
+msg: 
+
+id: Unable to write to %s
+# Missing translation
+msg: 
+
+id: Use font %s for
+# Missing translation
+msg: 
+
+id: User interface
+# Missing translation
+msg: 
+
+#
+# ./src/ui/glw/glw_settings.c
+#
 id: Horizontal underscan
 msg: Horizontální podscan
 
@@ -595,9 +1158,6 @@ msg: Vertikální podscan
 #
 # ./src/ui/glw/glw_x11.c
 #
-id: Fullscreen mode
-msg: Celá obrazovka
-
 id: Map mouse wheel to up/down
 msg: Kolečko myši posouvá nahoru/dolů
 
@@ -615,6 +1175,24 @@ msg: Přepnout ihned do tohoto režimu
 
 id: Video modes
 msg: Režimy videa
+
+#
+# ./src/upgrade.c
+#
+id: Notify about upgrades
+msg: Upozornit na aktualizace
+
+id: Open download page
+msg: Otevřít stránku s downloady
+
+id: Showtime version %s is available
+msg: Je dostupný Showtime verze %s 
+
+id: Software upgrade
+msg: Upgrade aplikace
+
+id: Upgrade to releases from
+msg: Upgradovat na vydání z
 
 #
 # ./src/upnp/upnp.c
@@ -659,16 +1237,13 @@ msg: Unable to query Cell codec. Error 0x%x
 # ./src/video/video_settings.c
 #
 id: 1080
-# Missing translation
-msg: 
+msg: 1080
 
 id: 576
-# Missing translation
-msg: 
+msg: 576
 
 id: 720
-# Missing translation
-msg: 
+msg: 720
 
 id: Always try to select a subtitle
 msg: Vždy zkusit vybrat titulky
@@ -677,8 +1252,7 @@ id: Auto
 msg: Auto
 
 id: Automatically play next video in list
-# Missing translation
-msg: 
+msg: Automaticky přehrát další video v seznamu
 
 id: Center
 msg: Střed
@@ -688,6 +1262,9 @@ msg: Barva
 
 id: Count video as played when reaching
 msg: Považovat video za přehrané po dosažení
+
+id: Enable VDA
+msg: Povolit VDA
 
 id: Enable VDPAU
 msg: Povolit VDPAU
@@ -708,15 +1285,13 @@ id: Left
 msg: Levý
 
 id: Maximum resolution for deinterlacer
-# Missing translation
-msg: 
-
-id: No
-msg: Ne
+msg: Maximální rozlišení pro deinterlacer
 
 id: No limit
-# Missing translation
-msg: 
+msg: Bez omezení
+
+id: Off
+msg: Vyp
 
 id: Outline color
 msg: Barva obrysu
@@ -725,8 +1300,7 @@ id: Outline size
 msg: Velikost obrysu
 
 id: Preferred VDPAU deinterlacer method
-# Missing translation
-msg: 
+msg: Preferovaná metoda VDPAU deinterlaceru
 
 id: Resume video playback
 msg: Obnovit přehrávání
@@ -758,23 +1332,15 @@ msg: Velikost a pozice titulků
 id: Subtitle styling
 msg: Styl titulků
 
-id: Subtitles
-msg: Titulky
-
 id: Temporal
-# Missing translation
-msg: 
+msg: Temporální
 
 id: Temporal/Spatial
-# Missing translation
-msg: 
+msg: Temporální/Prostorový
 
 id: Video acceleration and display behaviour
 msg: Video akcelerace a nastavení displeje
 
 id: Video playback
 msg: Přehrávání videa
-
-id: Yes
-msg: Ano 
 

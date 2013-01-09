@@ -74,7 +74,7 @@ layout(glw_clist_t *l, glw_rctx_t *rc)
     const int tpos = ypos - l->current_pos + rc->rc_height * l->center;
     
     if(c->glw_parent_inited) {
-      c->glw_parent_pos = GLW_LP(6, c->glw_parent_pos, tpos);
+      glw_lp(&c->glw_parent_pos, w->glw_root, tpos, 0.25);
       lptrail = 1;
     } else {
       c->glw_parent_pos = tpos;
@@ -98,8 +98,9 @@ layout(glw_clist_t *l, glw_rctx_t *rc)
   }
 
   if(lptrail)
-    l->trail = GLW_LP(6, l->trail, 
-		      ypos - l->current_pos + rc->rc_height * l->center);
+    glw_lp(&l->trail, w->glw_root, 
+	   ypos - l->current_pos + rc->rc_height * l->center,
+	   0.25);
   else
     l->trail = ypos - l->current_pos + rc->rc_height * l->center;
 
@@ -198,6 +199,7 @@ signal_handler(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
     break;
 
   case GLW_SIGNAL_FOCUS_CHILD_INTERACTIVE:
+    w->glw_flags2 &= ~GLW2_FLOATING_FOCUS;
     return 0;
 
   case GLW_SIGNAL_CHILD_CREATED:

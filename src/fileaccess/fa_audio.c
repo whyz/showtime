@@ -84,12 +84,12 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
   media_buf_t *mb = NULL;
   media_queue_t *mq;
   event_ts_t *ets;
-  int64_t ts, seekbase = 0;
+  int64_t ts;
   media_codec_t *cw;
   event_t *e;
   int registered_play = 0;
 
-  mp_set_playstatus_by_hold(mp, hold, NULL);
+  mp->mp_seek_base = 0;
 
   fa_handle_t *fh = fa_open_ex(url, errbuf, errlen, FA_BUFFERED_SMALL, NULL);
   if(fh == NULL)
@@ -132,7 +132,7 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
   TRACE(TRACE_DEBUG, "Audio", "Starting playback of %s", url);
 
   mp_configure(mp, MP_PLAY_CAPS_SEEK | MP_PLAY_CAPS_PAUSE,
-	       MP_BUFFER_SHALLOW);
+	       MP_BUFFER_SHALLOW, fctx->duration);
 
   mp->mp_audio.mq_stream = -1;
   mp->mp_video.mq_stream = -1;
@@ -223,14 +223,10 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
       memcpy(mb->mb_data, pkt.data, pkt.size);
 
       if(mb->mb_pts != AV_NOPTS_VALUE) {
-	if(fctx->start_time == AV_NOPTS_VALUE)
-	  mb->mb_time = mb->mb_pts;
-	else
-	  mb->mb_time = mb->mb_pts - fctx->start_time;
-      } else
-	mb->mb_time = AV_NOPTS_VALUE;
-
-      mb->mb_send_pts = 1;
+        if(fctx->start_time != AV_NOPTS_VALUE)
+          mb->mb_delta =  fctx->start_time;
+	mb->mb_drive_clock = 1;
+      }
 
       av_free_packet(&pkt);
     }
@@ -260,13 +256,12 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
       mp_flush(mp, 0);
       break;
 
-    } else if(event_is_type(e, EVENT_CURRENT_PTS)) {
+    } else if(event_is_type(e, EVENT_CURRENT_TIME)) {
 
       ets = (event_ts_t *)e;
-      seekbase = ets->ts;
 
       if(registered_play == 0) {
-	if(ets->ts - fctx->start_time > METADB_AUDIO_PLAY_THRESHOLD) {
+	if(ets->ts > METADB_AUDIO_PLAY_THRESHOLD) {
 	  registered_play = 1;
 	  metadb_register_play(url, 1, CONTENT_AUDIO);
 	}
@@ -281,43 +276,9 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
       av_seek_frame(fctx, -1, ts, AVSEEK_FLAG_BACKWARD);
       seekflush(mp, &mb);
       
-    } else if(event_is_action(e, ACTION_SEEK_FAST_BACKWARD)) {
-
-      av_seek_frame(fctx, -1, seekbase - 60000000, AVSEEK_FLAG_BACKWARD);
-      seekflush(mp, &mb);
-
-    } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
-
-      av_seek_frame(fctx, -1, seekbase - 15000000, AVSEEK_FLAG_BACKWARD);
-      seekflush(mp, &mb);
-
-    } else if(event_is_action(e, ACTION_SEEK_FAST_FORWARD)) {
-
-      av_seek_frame(fctx, -1, seekbase + 60000000, 0);
-      seekflush(mp, &mb);
-
-    } else if(event_is_action(e, ACTION_SEEK_FORWARD)) {
-
-      av_seek_frame(fctx, -1, seekbase + 15000000, 0);
-      seekflush(mp, &mb);
-
-    } else if(event_is_action(e, ACTION_PLAYPAUSE) ||
-	      event_is_action(e, ACTION_PLAY) ||
-	      event_is_action(e, ACTION_PAUSE)) {
-
-      hold = action_update_hold_by_event(hold, e);
-      mp_send_cmd_head(mp, mq, hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
-      mp_set_playstatus_by_hold(mp, hold, NULL);
-
-    } else if(event_is_type(e, EVENT_INTERNAL_PAUSE)) {
-
-      hold = 1;
-      mp_send_cmd_head(mp, mq, MB_CTRL_PAUSE);
-      mp_set_playstatus_by_hold(mp, hold, e->e_payload);
-
     } else if(event_is_action(e, ACTION_SKIP_BACKWARD)) {
 
-      if(seekbase < 1500000)
+      if(mp->mp_seek_base < 1500000)
 	goto skip;
 
       av_seek_frame(fctx, -1, 0, AVSEEK_FLAG_BACKWARD);
@@ -337,12 +298,6 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
 
   media_codec_deref(cw);
   media_format_deref(fw);
-
-  if(hold) { 
-    // If we were paused, release playback again.
-    mp_send_cmd(mp, mq, MB_CTRL_PLAY);
-    mp_set_playstatus_by_hold(mp, 0, NULL);
-  }
 
   return e;
 }

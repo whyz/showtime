@@ -28,6 +28,7 @@
 #include "text/text.h"
 
 #include "glw.h"
+#include "glw_settings.h"
 #include "glw_text_bitmap.h"
 #include "glw_texture.h"
 #include "glw_view.h"
@@ -36,12 +37,19 @@
 static void glw_focus_init_widget(glw_t *w, float weight);
 static void glw_focus_leave(glw_t *w);
 static void glw_root_set_hover(glw_root_t *gr, glw_t *w);
+static void glw_eventsink(void *opaque, prop_event_t event, ...);
 
 const float glw_identitymtx[16] = {
   1,0,0,0,
   0,1,0,0,
   0,0,1,0,
   0,0,0,1};
+
+
+static void glw_osk_open(glw_root_t *gr, const char *title, const char *input,
+			 glw_t *w, int password);
+
+
 
 /*
  *
@@ -89,6 +97,19 @@ top_event_handler(glw_t *w, void *opaque, glw_signal_t sig, void *extra)
 
   if(event_is_action(e, ACTION_ENABLE_SCREENSAVER)) {
     gr->gr_screensaver_force_enable = 1;
+
+  } else if(event_is_action(e, ACTION_NAV_BACK) ||
+	    event_is_action(e, ACTION_NAV_FWD) ||
+	    event_is_action(e, ACTION_HOME) ||
+	    event_is_action(e, ACTION_PLAYQUEUE) ||
+	    event_is_action(e, ACTION_RELOAD_DATA) ||
+	    event_is_type(e, EVENT_OPENURL)) {
+
+    prop_t *p = prop_get_by_name(PNVEC("nav", "eventsink"), 0,
+                                 PROP_TAG_ROOT, gr->gr_prop_nav,
+                                 NULL);
+    prop_send_ext_event(p, e);
+    prop_ref_dec(p);
   } else {
     event_addref(e);
     event_dispatch(e);
@@ -97,192 +118,65 @@ top_event_handler(glw_t *w, void *opaque, glw_signal_t sig, void *extra)
   return 1;
 }
 
-
-
-/**
- * Save settings
- */
-void 
-glw_settings_save(void *opaque, htsmsg_t *msg)
-{
-  glw_root_t *gr = opaque;
-
-  assert(msg == gr->gr_settings_store);
-  htsmsg_store_save(msg, "displays/%s", gr->gr_settings_instance);
-}
-
-
 /**
  *
  */
 static void
-glw_set_screensaver_delay(void *opaque, int v)
+glw_update_sizes(glw_root_t *gr)
 {
-  glw_root_t *gr = opaque;
+  int val;
+  int base_size = gr->gr_height / 35; // 35 is just something
 
-  gr->gr_screensaver_delay = v;
-}
-
-
-/**
- *
- */
-void
-glw_update_size(glw_root_t *gr)
-{
-  int v = gr->gr_base_size + gr->gr_user_size;
-  v = GLW_CLAMP(v, 14, 40);
-
-  if(gr->gr_current_size == v)
-    return;
-  gr->gr_current_size = v;
-
-  prop_set_int(gr->gr_prop_size, v);
-  glw_text_flush(gr);
-  glw_icon_flush(gr);
-  TRACE(TRACE_DEBUG, "GLW", "UI size scale changed to %d", v);
-}
-
-
-/**
- *
- */
-static void
-glw_change_user_size(void *opaque, int v)
-{
-  glw_root_t *gr = opaque;
-  gr->gr_user_size = v;
-  glw_update_size(gr);
-}
-
-
-/**
- *
- */
-static void
-glw_change_underscan_h(void *opaque, int v)
-{
-  glw_root_t *gr = opaque;
-
-  v += gr->gr_base_underscan_h;
-  v = GLW_CLAMP(v, 0, 100);
-  prop_set_int(gr->gr_prop_underscan_h, v);
-  gr->gr_underscan_h = v;
-}
-
-
-/**
- *
- */
-static void
-glw_change_underscan_v(void *opaque, int v)
-{
-  glw_root_t *gr = opaque;
-
-  v += gr->gr_base_underscan_v;
-  v = GLW_CLAMP(v, 0, 100);
-  prop_set_int(gr->gr_prop_underscan_v, v);
-  gr->gr_underscan_v = v;
-}
-
-
-
-
-/**
- *
- */
-static void
-glw_init_settings(glw_root_t *gr, const char *instance,
-		  const char *instance_title)
-{
-  prop_t *r = gr->gr_uii.uii_prop;
-
-  if(gr->gr_base_size == 0)
-    gr->gr_base_size = 20;
-
-  gr->gr_settings_instance = strdup(instance);
-
-  gr->gr_settings_store = htsmsg_store_load("displays/%s", instance);
+  val = GLW_CLAMP(base_size + glw_settings.gs_size, 14, 40);
   
-  if(gr->gr_settings_store == NULL)
-    gr->gr_settings_store = htsmsg_create_map();
-
-  if(instance_title) {
-    char title[256];
-    snprintf(title, sizeof(title), "Display and user interface on screen %s",
-	     instance_title);
-
-    gr->gr_settings = settings_add_dir_cstr(NULL, title,
-					    "display", NULL, NULL, NULL);
-
-  } else {
-    gr->gr_settings = settings_add_dir(NULL, 
-				       _p("Display and user interface"),
-				       "display", NULL, NULL, NULL);
-
+  if(gr->gr_current_size != val) {
+    gr->gr_current_size = val;
+    prop_set(gr->gr_prop_ui, "size", PROP_SET_INT, val);
+    glw_text_flush(gr);
+    glw_icon_flush(gr);
+    TRACE(TRACE_DEBUG, "GLW", "UI size scale changed to %d", val);
   }
 
-  gr->gr_prop_size = prop_create(r, "size");
-  gr->gr_prop_underscan_h = prop_create(r, "underscan_h");
-  gr->gr_prop_underscan_v = prop_create(r, "underscan_v");
+  val = GLW_CLAMP(gr->gr_base_underscan_h + glw_settings.gs_underscan_h,
+		  0, 100);
+
+  if(gr->gr_underscan_h != val) {
+    prop_set(gr->gr_prop_ui, "underscan_h", PROP_SET_INT, val);
+    gr->gr_underscan_h = val;
+  }
 
 
-  gr->gr_setting_size =
-    settings_create_int(gr->gr_settings, "size",
-			_p("Userinterface size"), 0,
-			gr->gr_settings_store, -10, 30, 1,
-			glw_change_user_size, gr,
-			SETTINGS_INITIAL_UPDATE, "px", gr->gr_courier,
-			glw_settings_save, gr);
+  val = GLW_CLAMP(gr->gr_base_underscan_v + glw_settings.gs_underscan_v,
+		  0, 100);
 
-  gr->gr_setting_underscan_h =
-    settings_create_int(gr->gr_settings, "underscan_h",
-			_p("Horizontal underscan"), 0,
-			gr->gr_settings_store, -100, +100, 1,
-			glw_change_underscan_h, gr,
-			SETTINGS_INITIAL_UPDATE, "px", gr->gr_courier,
-			glw_settings_save, gr);
-
-  gr->gr_setting_underscan_v =
-    settings_create_int(gr->gr_settings, "underscan_v",
-			_p("Vertical underscan"), 0,
-			gr->gr_settings_store, -100, +100, 1,
-			glw_change_underscan_v, gr,
-			SETTINGS_INITIAL_UPDATE, "px", gr->gr_courier,
-			glw_settings_save, gr);
-
-
-  gr->gr_setting_screensaver =
-    settings_create_int(gr->gr_settings, "screensaver",
-			_p("Screensaver delay"),
-			10, gr->gr_settings_store, 1, 60, 1,
-			glw_set_screensaver_delay, gr,
-			SETTINGS_INITIAL_UPDATE, " min", gr->gr_courier,
-			glw_settings_save, gr);
-
-
-  gr->gr_pointer_visible    = prop_create(r, "pointerVisible");
-  gr->gr_is_fullscreen      = prop_create(r, "fullscreen");
-  gr->gr_screensaver_active = prop_create(r, "screensaverActive");
-  gr->gr_prop_width         = prop_create(r, "width");
-  gr->gr_prop_height        = prop_create(r, "height");
-
-  prop_set_int(gr->gr_screensaver_active, 0);
+  if(gr->gr_underscan_v != val) {
+    prop_set(gr->gr_prop_ui, "underscan_v", PROP_SET_INT, val);
+    gr->gr_underscan_v = val;
+  }
 }
+
 
 /**
  *
  */
 int
-glw_init(glw_root_t *gr, const char *theme,
-	 ui_t *ui, int primary, 
-	 const char *instance, const char *instance_title)
+glw_init(glw_root_t *gr)
 {
-  char themebuf[PATH_MAX];
-  if(theme == NULL) {
-    snprintf(themebuf, sizeof(themebuf),
-	     "%s/glwthemes/"SHOWTIME_GLW_DEFAULT_THEME, showtime_dataroot());
-    theme = themebuf;
+  char skinbuf[PATH_MAX];
+  const char *skin = gconf.skin;
+
+  assert(glw_settings.gs_settings != NULL);
+
+  if(prop_set_parent(gr->gr_prop_ui, prop_get_global()))
+    abort();
+
+  if(prop_set_parent(gr->gr_prop_nav, prop_get_global()))
+    abort();
+
+  if(skin == NULL) {
+    snprintf(skinbuf, sizeof(skinbuf),
+	     "%s/glwskins/"SHOWTIME_GLW_DEFAULT_SKIN, showtime_dataroot());
+    skin = skinbuf;
   }
   hts_mutex_init(&gr->gr_mutex);
   gr->gr_courier = prop_courier_create_passive();
@@ -290,23 +184,40 @@ glw_init(glw_root_t *gr, const char *theme,
   gr->gr_clone_pool = pool_create("glwclone", sizeof(glw_clone_t),
 				  POOL_ZERO_MEM);
 
-  gr->gr_vpaths[0] = "theme";
-  gr->gr_vpaths[1] = strdup(theme);
-  gr->gr_vpaths[2] = NULL;
+  gr->gr_skin = strdup(skin);
 
-  gr->gr_uii.uii_ui = ui;
+  gr->gr_vpaths[0] = "skin";
+  gr->gr_vpaths[1] = gr->gr_skin;
+  gr->gr_vpaths[2] = NULL;
 
   gr->gr_font_domain = freetype_get_context();
 
   glw_text_bitmap_init(gr);
-  glw_init_settings(gr, instance, instance_title);
+
+  gr->gr_pointer_visible    = prop_create(gr->gr_prop_ui, "pointerVisible");
+  gr->gr_is_fullscreen      = prop_create(gr->gr_prop_ui, "fullscreen");
+  gr->gr_screensaver_active = prop_create(gr->gr_prop_ui, "screensaverActive");
+  gr->gr_prop_width         = prop_create(gr->gr_prop_ui, "width");
+  gr->gr_prop_height        = prop_create(gr->gr_prop_ui, "height");
+
+  prop_set_int(gr->gr_screensaver_active, 0);
+
+  gr->gr_evsub =
+    prop_subscribe(0,
+		   PROP_TAG_CALLBACK, glw_eventsink, gr,
+		   PROP_TAG_NAME("ui", "eventSink"),
+		   PROP_TAG_ROOT, gr->gr_prop_ui,
+		   PROP_TAG_COURIER, gr->gr_courier,
+		   NULL);
 
   TAILQ_INIT(&gr->gr_destroyer_queue);
   glw_tex_init(gr);
 
   gr->gr_framerate = 60;
   gr->gr_frameduration = 1000000 / gr->gr_framerate;
-  uii_register(&gr->gr_uii, primary);
+  gr->gr_ui_start = showtime_get_ts();
+
+  gr->gr_open_osk = glw_osk_open;
 
   return 0;
 }
@@ -318,8 +229,21 @@ glw_init(glw_root_t *gr, const char *theme,
 void
 glw_fini(glw_root_t *gr)
 {
+  if(gr->gr_osk_widget != NULL) {
+    glw_unref(gr->gr_osk_widget);
+    prop_unsubscribe(gr->gr_osk_text_sub);
+    prop_unsubscribe(gr->gr_osk_ev_sub);
+  }
+
+  glw_text_bitmap_fini(gr);
+  rstr_release(gr->gr_default_font);
+  glw_tex_fini(gr);
+  free(gr->gr_skin);
+  prop_unsubscribe(gr->gr_evsub);
   pool_destroy(gr->gr_token_pool);
   pool_destroy(gr->gr_clone_pool);
+  prop_courier_destroy(gr->gr_courier);
+  hts_mutex_destroy(&gr->gr_mutex);
 }
 
 
@@ -343,14 +267,14 @@ glw_unload_universe(glw_root_t *gr)
 void
 glw_load_universe(glw_root_t *gr)
 {
-  prop_t *page = prop_create(gr->gr_uii.uii_prop, "root");
+  prop_t *page = prop_create(gr->gr_prop_ui, "root");
   glw_unload_universe(gr);
 
-  rstr_t *universe = rstr_alloc("theme://universe.view");
+  rstr_t *universe = rstr_alloc("skin://universe.view");
 
   gr->gr_universe = glw_view_create(gr,
 				    universe, NULL, page,
-				    NULL, NULL, NULL, 0);
+				    NULL, NULL, NULL, 0, 1);
 
   rstr_release(universe);
 
@@ -480,9 +404,10 @@ static int
 glw_screensaver_is_active(glw_root_t *gr)
 {
   return gr->gr_screensaver_force_enable ||
-    (gr->gr_is_fullscreen && gr->gr_framerate && gr->gr_screensaver_delay &&
+    (gr->gr_is_fullscreen && gr->gr_framerate &&
+     glw_settings.gs_screensaver_delay &&
      (gr->gr_screensaver_counter > 
-      gr->gr_screensaver_delay * gr->gr_framerate * 60));
+      glw_settings.gs_screensaver_delay * gr->gr_framerate * 60));
 }
 
 
@@ -520,27 +445,27 @@ glw_prepare_frame(glw_root_t *gr, int flags)
 {
   glw_t *w;
 
-  int v = gr->gr_height / 35;
-  if(gr->gr_base_size != v) {
-    gr->gr_base_size = v;
-    glw_update_size(gr);
-  }
+  glw_update_sizes(gr);
 
   gr->gr_frame_start = showtime_get_ts();
+  gr->gr_frame_start_avtime = showtime_get_avtime();
+  gr->gr_time = (gr->gr_frame_start - gr->gr_ui_start) / 1000000.0;
 
-  if((gr->gr_frames & 0x7f) == 0) {
+  if(!(flags & GLW_NO_FRAMERATE_UPDATE)) {
 
-    if(gr->gr_hz_sample) {
-      int64_t d = gr->gr_frame_start - gr->gr_hz_sample;
+    if((gr->gr_frames & 0x7f) == 0) {
 
-      double hz = 128000000.0 / d;
+      if(gr->gr_hz_sample) {
+	int64_t d = gr->gr_frame_start - gr->gr_hz_sample;
 
-      prop_set_float(prop_create(gr->gr_uii.uii_prop, "framerate"), hz);
-      gr->gr_framerate = hz;
+	double hz = 128000000.0 / d;
+
+	prop_set_float(prop_create(gr->gr_prop_ui, "framerate"), hz);
+	gr->gr_framerate = hz;
+      }
+      gr->gr_hz_sample = gr->gr_frame_start;
     }
-    gr->gr_hz_sample = gr->gr_frame_start;
   }
-
   gr->gr_frames++;
 
   gr->gr_screensaver_counter++;
@@ -903,14 +828,31 @@ glw_retire_child(glw_t *w)
 void
 glw_move(glw_t *w, glw_t *b)
 {
-  TAILQ_REMOVE(&w->glw_parent->glw_childs, w, glw_parent_link);
+  glw_t *p = w->glw_parent;
+
+  int was_first = TAILQ_FIRST(&p->glw_childs) == w && w == p->glw_focused;
+
+  TAILQ_REMOVE(&p->glw_childs, w, glw_parent_link);
 
   if(b == NULL) {
-    TAILQ_INSERT_TAIL(&w->glw_parent->glw_childs, w, glw_parent_link);
+    TAILQ_INSERT_TAIL(&p->glw_childs, w, glw_parent_link);
   } else {
     TAILQ_INSERT_BEFORE(b, w, glw_parent_link);
   }
-  glw_signal0(w->glw_parent, GLW_SIGNAL_CHILD_MOVED, w);
+  if(p->glw_flags2 & GLW2_FLOATING_FOCUS) {
+    if(w == TAILQ_FIRST(&p->glw_childs)) {
+      glw_t *w2 = TAILQ_NEXT(w, glw_parent_link);
+      if(w2 != NULL && p->glw_focused == w2) {
+	glw_t *c = glw_focus_by_path(w);
+	glw_focus_set(c->glw_root, c, GLW_FOCUS_SET_AUTOMATIC_FF);
+      }
+    } else if(was_first) {
+      glw_t *w2 = TAILQ_FIRST(&p->glw_childs);
+      glw_t *c = glw_focus_by_path(w2);
+      glw_focus_set(c->glw_root, c, GLW_FOCUS_SET_AUTOMATIC_FF);
+    }
+  }
+  glw_signal0(p, GLW_SIGNAL_CHILD_MOVED, w);
 }
 
 
@@ -1066,7 +1008,8 @@ glw_focus_set(glw_root_t *gr, glw_t *w, int how)
 
   gr->gr_focus_work = 1;
 
-  if(how == GLW_FOCUS_SET_AUTOMATIC) {
+  if(how == GLW_FOCUS_SET_AUTOMATIC ||
+     how == GLW_FOCUS_SET_AUTOMATIC_FF) {
     sig = GLW_SIGNAL_FOCUS_CHILD_AUTOMATIC;
   } else {
     sig = GLW_SIGNAL_FOCUS_CHILD_INTERACTIVE;
@@ -1098,13 +1041,18 @@ glw_focus_set(glw_root_t *gr, glw_t *w, int how)
 	 * insert entries in random order
 	 */
 	int ff = p->glw_flags2 & GLW2_FLOATING_FOCUS && 
-	  x == TAILQ_FIRST(&p->glw_childs) && 
-	  TAILQ_NEXT(x, glw_parent_link) == p->glw_focused;
+	  (x == TAILQ_FIRST(&p->glw_childs) ||
+           how == GLW_FOCUS_SET_AUTOMATIC_FF);
 
 	if(y == NULL || how == GLW_FOCUS_SET_INTERACTIVE ||
 	   weight > y->glw_focus_weight || 
 	   (ff && weight == y->glw_focus_weight)) {
 	  x->glw_parent->glw_focused = x;
+#if 0
+          printf("Signal %s child %p focused %d %f %f %d\n", 
+                 x->glw_parent->glw_class->gc_name,
+                 x, how, weight, w->glw_focus_weight, ff);
+#endif
 	  glw_signal0(x->glw_parent, sig, x);
 	} else {
 	  /* Other path outranks our weight, stop now */
@@ -1128,7 +1076,6 @@ glw_focus_set(glw_root_t *gr, glw_t *w, int how)
 
   gr->gr_current_focus = w;
   gr->gr_delayed_focus_leave = 0;
-
 #if 0
   glw_t *h = w;
   while(h->glw_parent != NULL) {
@@ -1345,8 +1292,9 @@ void
 glw_focus_open_path_close_all_other(glw_t *w)
 {
   glw_t *c;
+  glw_t *p = w->glw_parent;
 
-  TAILQ_FOREACH(c, &w->glw_parent->glw_childs, glw_parent_link) {
+  TAILQ_FOREACH(c, &p->glw_childs, glw_parent_link) {
     if(c == w)
       continue;
     c->glw_flags |= GLW_FOCUS_BLOCKED;
@@ -1360,6 +1308,12 @@ glw_focus_open_path_close_all_other(glw_t *w)
 
   if(c != NULL)
     glw_focus_set(w->glw_root, c, GLW_FOCUS_SET_AUTOMATIC);
+  else if(p->glw_parent->glw_focused == p && 
+	  w->glw_root->gr_current_focus == NULL) {
+    glw_t *r = glw_focus_crawl1(w, 1);
+    if(r != NULL)
+      glw_focus_set(w->glw_root, r, GLW_FOCUS_SET_AUTOMATIC);
+  }
 }
 
 
@@ -1753,36 +1707,37 @@ glw_kill_screensaver(glw_root_t *gr)
 /**
  *
  */
-void
-glw_dispatch_event(uii_t *uii, event_t *e)
+static void
+glw_dispatch_event(glw_root_t *gr, event_t *e)
 {
-  glw_root_t *gr = (glw_root_t *)uii;
   int r;
 
   runcontrol_activity();
 
-  glw_lock(gr);
- 
-  if(e->e_type_x == EVENT_KEYDESC) {
-    event_t *e2;
-    
-    if(glw_event(gr, e)) {
-      glw_unlock(gr);
-      return; // Was consumed
-    }
-
-    e2 = keymapper_resolve(e->e_payload);
-
-    glw_unlock(gr);
-
-    if(e2 != NULL)
-      uii->uii_ui->ui_dispatch_event(uii, e2);
+  if(e->e_type_x == EVENT_STOP_UI) {
+    gr->gr_stop = 1;
     return;
   }
 
-  if(!(event_is_action(e, ACTION_SEEK_FAST_BACKWARD) ||
-       event_is_action(e, ACTION_SEEK_BACKWARD) ||
-       event_is_action(e, ACTION_SEEK_FAST_FORWARD) ||
+  if(e->e_type_x == EVENT_REPAINT_UI) {
+    glw_text_flush(gr);
+    return;
+  }
+    
+  if(e->e_type_x == EVENT_KEYDESC) {
+    event_t *e2;
+    
+    if(glw_event(gr, e))
+      return; // Was consumed
+
+    e2 = keymapper_resolve(e->e_payload);
+
+    if(e2 != NULL)
+      glw_inject_event(gr, e2);
+    return;
+  }
+
+  if(!(event_is_action(e, ACTION_SEEK_BACKWARD) ||
        event_is_action(e, ACTION_SEEK_FORWARD) ||
        event_is_action(e, ACTION_PLAYPAUSE) ||
        event_is_action(e, ACTION_PLAY) ||
@@ -1807,38 +1762,86 @@ glw_dispatch_event(uii_t *uii, event_t *e)
      )) {
     
     if(glw_kill_screensaver(gr)) {
-      glw_unlock(gr);
       return;
     }
   }
 
   if(event_is_action(e, ACTION_RELOAD_UI)) {
     glw_load_universe(gr);
-    glw_unlock(gr);
     return;
 
   } else if(event_is_action(e, ACTION_ZOOM_UI_INCR)) {
 
-    settings_add_int(gr->gr_setting_size, 1);
-    glw_unlock(gr);
+    glw_settings_adj_size(1);
     return;
 
   } else if(event_is_action(e, ACTION_ZOOM_UI_DECR)) {
 
-    settings_add_int(gr->gr_setting_size, -1);
-    glw_unlock(gr);
+    glw_settings_adj_size(-1);
     return;
 
   }
 
   r = glw_event(gr, e);
-  glw_unlock(gr);
 
   if(!r) {
     event_addref(e);
     event_dispatch(e);
   }
 }
+
+/**
+ *
+ */
+static void
+glw_eventsink(void *opaque, prop_event_t event, ...)
+{
+  glw_root_t *gr = opaque;
+  va_list ap;
+  event_t *e;
+  va_start(ap, event);
+
+  switch(event) {
+  case PROP_EXT_EVENT:
+    e = va_arg(ap, event_t *);
+    glw_dispatch_event(gr, e);
+    break;
+
+  default:
+    break;
+  }
+  va_end(ap);
+}
+
+
+/**
+ *
+ */
+void
+glw_inject_event(glw_root_t *gr, event_t *e)
+{
+  prop_t *p;
+
+  if(gr->gr_current_focus == NULL && 
+     (event_is_action(e, ACTION_NAV_BACK) ||
+      event_is_action(e, ACTION_NAV_FWD) ||
+      event_is_action(e, ACTION_HOME) ||
+      event_is_action(e, ACTION_PLAYQUEUE) ||
+      event_is_action(e, ACTION_RELOAD_DATA) ||
+      event_is_type(e, EVENT_OPENURL))) {
+    p = prop_get_by_name(PNVEC("nav", "eventsink"), 0,
+			 PROP_TAG_ROOT, gr->gr_prop_nav,
+			 NULL);
+  } else {
+    p = prop_get_by_name(PNVEC("ui", "eventSink"), 0,
+			 PROP_TAG_ROOT, gr->gr_prop_ui,
+			 NULL);
+  }
+  prop_send_ext_event(p, e);
+  event_release(e);
+  prop_ref_dec(p);
+}
+
 
 const glw_vertex_t align_vertices[] = 
   {
@@ -1897,6 +1900,11 @@ glw_conf_constraints(glw_t *w, int x, int y, float weight, int conf)
     w->glw_req_weight = weight;
     w->glw_flags |= GLW_CONSTRAINT_W;
     break;
+
+  case GLW_CONSTRAINT_CONF_D:
+    w->glw_flags |= GLW_CONSTRAINT_D;
+    break;
+
   default:
     abort();
   }
@@ -1950,12 +1958,13 @@ glw_set_constraints(glw_t *w, int x, int y, float weight, int flags)
     }
   }
     
-  if(fc & GLW_CONSTRAINT_F) {
-    ch = 1;
-    w->glw_flags = 
-      (w->glw_flags & ~GLW_CONSTRAINT_F) | (flags & GLW_CONSTRAINT_F);
+  if(!(w->glw_flags & GLW_CONSTRAINT_CONF_D)) {
+    if(fc & GLW_CONSTRAINT_D) {
+      ch = 1;
+      w->glw_flags = 
+	(w->glw_flags & ~GLW_CONSTRAINT_D) | (flags & GLW_CONSTRAINT_D);
+    }
   }
-  
   if(ch && w->glw_parent != NULL)
     glw_signal0(w->glw_parent, GLW_SIGNAL_CHILD_CONSTRAINTS_CHANGED, w);
 }
@@ -1993,11 +2002,14 @@ glw_clear_constraints(glw_t *w)
     }
   }
 
-  if(w->glw_flags & GLW_CONSTRAINT_F) {
-    w->glw_flags &= ~GLW_CONSTRAINT_F;
-    ch = 1;
+
+  if(!(w->glw_flags & GLW_CONSTRAINT_CONF_D)) {
+    if(w->glw_flags & GLW_CONSTRAINT_D) {
+      w->glw_flags &= ~GLW_CONSTRAINT_D;
+      ch = 1;
+    }
   }
-  
+
   if(!ch)
     return;
 
@@ -2336,4 +2348,109 @@ glw_widget_unproject(Mtx m, float *xp, float *yp, const Vec3 p, const Vec3 dir)
   *xp = glw_vec3_extract(out, 0);
   *yp = glw_vec3_extract(out, 1);
   return 1;
+}
+
+
+/**
+ *
+ */
+static void
+glw_osk_text(void *opaque, const char *str)
+{
+  glw_root_t *gr = opaque;
+  glw_t *w = gr->gr_osk_widget;
+  if(w != NULL) {
+    w->glw_class->gc_update_text(w, str);
+  }
+}
+
+/**
+ *
+ */
+static void
+glw_osk_ok(glw_root_t *gr)
+{
+  glw_t *w = gr->gr_osk_widget;
+  if(w != NULL) {
+    event_t *e = event_create_action(ACTION_SUBMIT);
+    glw_event_to_widget(w, e, 0);
+    event_release(e);
+
+    glw_unref(gr->gr_osk_widget);
+    prop_unsubscribe(gr->gr_osk_text_sub);
+    prop_unsubscribe(gr->gr_osk_ev_sub);
+
+    gr->gr_osk_widget = NULL;
+    gr->gr_osk_text_sub = NULL;
+    gr->gr_osk_ev_sub = NULL;
+  }
+
+  prop_t *osk = prop_create(gr->gr_prop_ui, "osk");
+  prop_set(osk, "show", PROP_SET_INT, 0);
+
+  
+}
+
+
+
+
+/**
+ *
+ */
+static void 
+glw_osk_event(void *opaque, prop_event_t event, ...)
+{
+  va_list ap;
+  
+  if(event != PROP_EXT_EVENT)
+    return;
+  
+  va_start(ap, event);
+  event_t *e = va_arg(ap, event_t *);
+  va_end(ap);
+
+  if(event_is_action(e, ACTION_OK)) {
+    glw_osk_ok(opaque);
+  }
+}
+
+
+/**
+ *
+ */
+static void
+glw_osk_open(glw_root_t *gr, const char *title, const char *input,
+	     glw_t *w, int password)
+{
+  prop_t *osk = prop_create(gr->gr_prop_ui, "osk");
+
+  if(gr->gr_osk_widget != NULL) {
+    glw_unref(gr->gr_osk_widget);
+    prop_unsubscribe(gr->gr_osk_text_sub);
+    prop_unsubscribe(gr->gr_osk_ev_sub);
+  }
+  
+  prop_set(osk, "title", PROP_SET_STRING, title);
+  prop_set(osk, "text",  PROP_SET_STRING, input);
+  prop_set(osk, "password", PROP_SET_INT, password);
+  prop_set(osk, "show", PROP_SET_INT, 1);
+
+  gr->gr_osk_widget = w;
+  glw_ref(w);
+
+  gr->gr_osk_text_sub =
+    prop_subscribe(0,
+		   PROP_TAG_CALLBACK_STRING, glw_osk_text, gr,
+		   PROP_TAG_NAME("ui", "osk", "text"),
+		   PROP_TAG_ROOT, gr->gr_prop_ui,
+		   PROP_TAG_COURIER, gr->gr_courier,
+		   NULL);
+
+  gr->gr_osk_ev_sub =
+    prop_subscribe(0,
+		   PROP_TAG_CALLBACK, glw_osk_event, gr,
+		   PROP_TAG_NAME("ui", "osk", "eventSink"),
+		   PROP_TAG_ROOT, gr->gr_prop_ui,
+		   PROP_TAG_COURIER, gr->gr_courier,
+		   NULL);
 }

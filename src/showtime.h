@@ -16,16 +16,26 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef SHOWTIME_H
-#define SHOWTIME_H
+#pragma once
+
+#include "config.h"
 
 #include <inttypes.h>
 #include <stdarg.h>
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
+
 #include "htsmsg/htsmsg_store.h"
 #include "arch/threads.h"
 #include "misc/rstr.h"
+
+
+void parse_opts(int argc, char **argv);
+
+void showtime_init(void);
+
+void showtime_fini(void);
 
 extern void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 
@@ -72,6 +82,8 @@ uint32_t showtime_get_version_int(void);
 uint32_t showtime_parse_version_int(const char *str);
 
 extern int64_t showtime_get_ts(void);
+
+extern int64_t showtime_get_avtime(void);
 
 extern const char *showtime_get_system_type(void);
 
@@ -138,6 +150,8 @@ static inline const char *mystrbegins(const char *s1, const char *s2)
   return s1;
 }
 
+void my_localtime(const time_t *timep, struct tm *tm);
+
 /*
  * Memory allocation wrappers
  * These are used whenever the caller can deal with failure 
@@ -145,7 +159,7 @@ static inline const char *mystrbegins(const char *s1, const char *s2)
  * OOM conditions
  */
 
-#if ENABLE_TLSF
+#if defined(ENABLE_TLSF) && defined(PS3)
 
 void *mymalloc(size_t size);
 
@@ -153,11 +167,18 @@ void *myrealloc(void *ptr, size_t size);
 
 void *mycalloc(size_t count, size_t size);
 
+void *mymemalign(size_t align, size_t size);
+
 #else
 
 #define mymalloc(size) malloc(size)
 #define myrealloc(ptr, size) realloc(ptr, size)
 #define mycalloc(count, size) calloc(count, size)
+static inline void *mymemalign(size_t align, size_t size)
+{
+  void *p;
+  return posix_memalign(&p, align, size) ? NULL : p;
+}
 
 #endif
 
@@ -174,14 +195,97 @@ void *shutdown_hook_add(void (*fn)(void *opaque, int exitcode), void *opaque,
 #define SHOWTIME_EXIT_RESTART  13
 #define SHOWTIME_EXIT_SHELL    14
 
-extern char *showtime_cache_path;
-extern char *showtime_persistent_path;
-extern char *showtime_path;
 
+
+typedef struct gconf {
+  int exit_code;
+
+
+  char *dirname;   // Directory where executable resides
+  char *binary;    // Executable itself
+
+  char *cache_path;
+  char *persistent_path;
+
+  int concurrency;
+  int trace_level;
+  int trace_to_syslog;
+  int listen_on_stdin;
+  int ffmpeglog;
+  int noui;
+  int fullscreen;
+
+#if ENABLE_SERDEV
+  int enable_serdev;
+#endif
+
+  int can_standby;
+  int can_poweroff;
+  int can_open_shell;
+  int can_logout;
+  int can_restart;
+  int can_not_exit;
+
+  int disable_upnp;
+  int disable_sd;
+
+
+  int enable_bin_replace;
+  int enable_omnigrade;
+  int enable_http_debug;
+  int disable_http_reuse;
+
+  const char *devplugin;
+  const char *plugin_repo;
+  const char *load_jsfile;
+
+  const char *initial_url;
+  const char *initial_view;
+
+  char *ui;
+  char *skin;
+
+
+  struct prop *settings_apps;
+  struct prop *settings_sd;
+  struct prop *settings_general;
+  struct prop *settings_dev;
+  struct prop_concat *settings_look_and_feel;
+
+  hts_mutex_t state_mutex;
+  hts_cond_t state_cond;
+
+  int state_plugins_loaded;
+
+} gconf_t;
+
+extern gconf_t gconf;
 
 /* From version.c */
 extern const char *htsversion;
 extern const char *htsversion_full;
 
 
-#endif /* SHOWTIME_H */
+typedef struct inithelper {
+  struct inithelper *next;
+  enum {
+    INIT_GROUP_API,
+    INIT_GROUP_IPC,
+  } group;
+  void (*fn)(void);
+} inithelper_t;
+
+extern inithelper_t *inithelpers;
+
+#define INITME(group_, func_)					   \
+  static inithelper_t HTS_JOIN(inithelper, __LINE__) = {	   \
+    .group = group_,						   \
+    .fn = func_							   \
+  };								   \
+  static void  __attribute__((constructor))			   \
+  HTS_JOIN(inithelperctor, __LINE__)(void)			   \
+  {								   \
+    inithelper_t *ih = &HTS_JOIN(inithelper, __LINE__);		   \
+    ih->next = inithelpers;					   \
+    inithelpers = ih;						   \
+  }

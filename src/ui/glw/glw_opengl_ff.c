@@ -73,7 +73,9 @@ ff_render(struct glw_root *gr,
 	  int num_vertices,
 	  const uint16_t *indices,
 	  int num_triangles,
-	  int flags)
+	  int flags,
+	  glw_program_t *p,
+	  const glw_rctx_t *rc)
 {
   glw_backend_root_t *gbr = &gr->gr_be;
   float r,g,b;
@@ -165,7 +167,7 @@ glw_opengl_ff_init(glw_root_t *gr)
   glLoadMatrixf(projection);
   glMatrixMode(GL_MODELVIEW);
   
-  prop_set_string(prop_create(gr->gr_uii.uii_prop, "rendermode"),
+  prop_set_string(prop_create(gr->gr_prop_ui, "rendermode"),
 		  "OpenGL fixed function");
   return 0;
 }

@@ -63,7 +63,7 @@ glw_bar_render(glw_t *w, const glw_rctx_t *rc)
   }
   if(a > 0.01) {
     glw_renderer_draw(&gb->gb_gr, w->glw_root, rc,
-		      NULL, NULL, NULL, a, 0);
+		      NULL, NULL, NULL, a, 0, NULL);
   }
 }
 
@@ -147,6 +147,8 @@ glw_bar_set(glw_t *w, va_list ap)
     switch(attrib) {
     case GLW_ATTRIB_FILL:
       gb->gb_fill = va_arg(ap, double);
+      if(gb->gb_fill > 1)
+	gb->gb_fill = 1;
       gb->gb_update = 1;
       break;
 

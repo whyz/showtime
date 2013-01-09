@@ -25,9 +25,10 @@
 #include <unistd.h>
 #include <stdio.h>
 
+#include <sqlite3.h>
+
 #include "config.h"
 #include "showtime.h"
-#include "ext/sqlite/sqlite3.h"
 #include "prop/prop.h"
 #include "db/db_support.h"
 #include "kvstore.h"
@@ -71,12 +72,11 @@ void
 kvstore_init(void)
 {
   sqlite3 *db;
-  extern char *showtime_persistent_path;
   char buf[256];
 
-  snprintf(buf, sizeof(buf), "%s/kvstore", showtime_persistent_path);
+  snprintf(buf, sizeof(buf), "%s/kvstore", gconf.persistent_path);
   mkdir(buf, 0770);
-  snprintf(buf, sizeof(buf), "%s/kvstore/kvstore.db", showtime_persistent_path);
+  snprintf(buf, sizeof(buf), "%s/kvstore/kvstore.db", gconf.persistent_path);
 
   //  unlink(buf);
 
@@ -114,15 +114,11 @@ get_url(void *db, const char *url, uint64_t *id)
   int rc;
   sqlite3_stmt *stmt;
 
-  rc = db_prepare(db,
-		  "SELECT id FROM url WHERE url=?1",
-		  -1, &stmt, NULL);
+  rc = db_prepare(db, &stmt,
+		  "SELECT id FROM url WHERE url=?1");
   
-  if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
+  if(rc != SQLITE_OK)
     return rc;
-  }
 
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
       
@@ -139,15 +135,13 @@ get_url(void *db, const char *url, uint64_t *id)
   } else if(rc == SQLITE_DONE) {
     sqlite3_finalize(stmt);
 
-    rc = db_prepare(db,
-		    "INSERT INTO url ('url') VALUES (?1)",
-		    -1, &stmt, NULL);
+    rc = db_prepare(db, &stmt,
+		    "INSERT INTO url ('url') VALUES (?1)");
+		    
     
-    if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
+    if(rc != SQLITE_OK)
       return rc;
-    }
+
     sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
 
     rc = db_step(stmt);
@@ -210,32 +204,28 @@ kv_value_cb(void *opaque, prop_event_t event, ...)
     }
     
     if(event == PROP_SET_VOID) {
-      rc = db_prepare(db,
+      rc = db_prepare(db, &stmt,
 		      "DELETE FROM url_kv "
 		      "WHERE url_id = ?1 "
 		      "AND domain = ?4 "
-		      "AND key = ?2"
-		      , -1, &stmt, NULL);
+		      "AND key = ?2");
     } else {
 
-      rc = db_prepare(db,
+      rc = db_prepare(db, &stmt,
 		      "INSERT OR REPLACE INTO url_kv "
 		      "(url_id, domain, key, value) "
 		      "VALUES "
-		      "(?1, ?4, ?2, ?3)",
-		      -1, &stmt, NULL);
+		      "(?1, ?4, ?2, ?3)");
     }
 
     if(rc != SQLITE_OK) {
-      TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	    __FUNCTION__, __LINE__);
       db_rollback(db);
       kvstore_close(db);
       return;
     }
 
     sqlite3_bind_int64(stmt, 1, kpb->kpb_id);
-    sqlite3_bind_int(stmt, 4, KVSTORE_PAGE_DOMAIN_PROP);
+    sqlite3_bind_int(stmt, 4, KVSTORE_DOMAIN_PROP);
 
     va_copy(apx, ap);
 
@@ -363,22 +353,20 @@ kv_prop_bind_create(prop_t *p, const char *url)
   if(db == NULL)
     return;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt, 
 		  "SELECT id,key,value "
 		  "FROM url "
 		  "LEFT OUTER JOIN url_kv ON id = url_id "
 		  "WHERE url=?1 "
-		  "AND domain=?2 "
-		  , -1, &stmt, NULL);
+		  "AND domain=?2");
+		  
 
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     kvstore_close(db);
     return;
   }
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-  sqlite3_bind_int(stmt, 2, KVSTORE_PAGE_DOMAIN_PROP);
+  sqlite3_bind_int(stmt, 2, KVSTORE_DOMAIN_PROP);
 
   while(db_step(stmt) == SQLITE_ROW) {
     if(id == -1)
@@ -433,18 +421,16 @@ kv_url_opt_get(void *db, const char *url, int domain, const char *key)
   if(db == NULL)
     return NULL;
 
-  rc = db_prepare(db, 
+  rc = db_prepare(db, &stmt, 
 		  "SELECT value "
 		  "FROM url, url_kv "
 		  "WHERE url=?1 "
 		  "AND key = ?2 "
 		  "AND domain = ?3 "
 		  "AND url.id = url_id"
-		  , -1, &stmt, NULL);
+		  );
 
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     return NULL;
   }
   sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
@@ -529,17 +515,15 @@ kv_url_opt_set(const char *url, int domain, const char *key,
     return;
   }
 
-  rc = db_prepare(db,
+  rc = db_prepare(db, &stmt,
 		  "INSERT OR REPLACE INTO url_kv "
 		  "(url_id, key, value, domain) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4)",
-		  -1, &stmt, NULL);
+		  "(?1, ?2, ?3, ?4)"
+		  );
 
 
   if(rc != SQLITE_OK) {
-    TRACE(TRACE_ERROR, "SQLITE", "SQL Error at %s:%d",
-	  __FUNCTION__, __LINE__);
     db_rollback(db);
     kvstore_close(db);
     return;

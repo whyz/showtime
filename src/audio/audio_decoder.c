@@ -24,6 +24,7 @@
 #include <math.h>
 
 #include <libavcodec/avcodec.h>
+#include <libavutil/audioconvert.h>
 
 #include "showtime.h"
 #include "audio_decoder.h"
@@ -233,10 +234,6 @@ ad_thread(void *aux)
       silence_start_pts = AV_NOPTS_VALUE;
       break;
 
-    case MB_END:
-      mp_set_current_time(mp, AV_NOPTS_VALUE);
-      break;
-
     default:
       abort();
     }
@@ -276,11 +273,11 @@ audio_deliver_passthru(media_buf_t *mb, audio_decoder_t *ad, int format,
 }
 
 static const size_t sample_fmt_to_size[] = {
-  [SAMPLE_FMT_U8]  = sizeof(uint8_t),
-  [SAMPLE_FMT_S16] = sizeof(int16_t),
-  [SAMPLE_FMT_S32] = sizeof(int32_t),
-  [SAMPLE_FMT_FLT] = sizeof(float),
-  [SAMPLE_FMT_DBL] = sizeof(double),
+  [AV_SAMPLE_FMT_U8]  = sizeof(uint8_t),
+  [AV_SAMPLE_FMT_S16] = sizeof(int16_t),
+  [AV_SAMPLE_FMT_S32] = sizeof(int32_t),
+  [AV_SAMPLE_FMT_FLT] = sizeof(float),
+  [AV_SAMPLE_FMT_DBL] = sizeof(double),
 };
 
 /**
@@ -305,15 +302,8 @@ ad_decode_buf(audio_decoder_t *ad, media_pipe_t *mp, media_queue_t *mq,
       ad->ad_do_flush = 0;
       if(mp_is_primary(mp))
 	ad->ad_send_flush = 1;
-    } else if(mb->mb_time != AV_NOPTS_VALUE)
-      mp_set_current_time(mp, mb->mb_time);
-
-    if(mb->mb_send_pts && mb->mb_pts != AV_NOPTS_VALUE) {
-      event_ts_t *ets = event_create(EVENT_CURRENT_PTS, sizeof(event_ts_t));
-      ets->ts = mb->mb_pts;
-      mp_enqueue_event(mp, &ets->h);
-      event_release(&ets->h);
-    }
+    } else if(mb->mb_drive_clock)
+      mp_set_current_time(mp, mb->mb_pts, mb->mb_epoch, mb->mb_delta);
 
     frames = mb->mb_size / sizeof(int16_t) / mb->mb_channels;
 
@@ -379,15 +369,8 @@ ad_decode_buf(audio_decoder_t *ad, media_pipe_t *mp, media_queue_t *mq,
       ad->ad_do_flush = 0;
       if(mp_is_primary(mp))
 	ad->ad_send_flush = 1;
-    } else if(mb->mb_time != AV_NOPTS_VALUE)
-      mp_set_current_time(mp, mb->mb_time);
-
-    if(mb->mb_send_pts && mb->mb_pts != AV_NOPTS_VALUE) {
-      event_ts_t *ets = event_create(EVENT_CURRENT_PTS, sizeof(event_ts_t));
-      ets->ts = pts;
-      mp_enqueue_event(mp, &ets->h);
-      event_release(&ets->h);
-    }
+    } else if(mb->mb_drive_clock)
+      mp_set_current_time(mp, mb->mb_pts, mb->mb_epoch, mb->mb_delta);
 
     if(audio_mode_stereo_only(am) &&
        cw->codec_id != CODEC_ID_TRUEHD &&
@@ -446,7 +429,7 @@ ad_decode_buf(audio_decoder_t *ad, media_pipe_t *mp, media_queue_t *mq,
 	audio_fifo_reinsert(thefifo, &ad->ad_hold_queue);
 
 
-	if(ctx->sample_fmt == SAMPLE_FMT_FLT && am->am_float && 
+	if(ctx->sample_fmt == AV_SAMPLE_FMT_FLT && am->am_float && 
 	   (am->am_sample_rates & AM_SR_ANY ||
 	    audio_rateflag_from_rate(rate) & am->am_sample_rates) &&
 	   channels_to_format(channels) & am->am_formats) {
@@ -461,21 +444,21 @@ ad_decode_buf(audio_decoder_t *ad, media_pipe_t *mp, media_queue_t *mq,
 	  default:
 	    return;
 
-	  case SAMPLE_FMT_U8:
+	  case AV_SAMPLE_FMT_U8:
 	    for(i = frames - 1; i >= 0; i--)
 	      ad->ad_outbuf[i] = (((uint8_t *)ad->ad_outbuf)[i] - 0x80) << 8;
 	    break;
-	  case SAMPLE_FMT_S16:
+	  case AV_SAMPLE_FMT_S16:
 	    break;
-	  case SAMPLE_FMT_S32:
+	  case AV_SAMPLE_FMT_S32:
 	    for(i = 0; i < frames; i++)
 	      ad->ad_outbuf[i] = ((int32_t *)ad->ad_outbuf)[i] >> 16;
 	    break;
-	  case SAMPLE_FMT_FLT:
+	  case AV_SAMPLE_FMT_FLT:
 	    for(i = 0; i < frames; i++)
 	      ad->ad_outbuf[i] = rintf(((float *)ad->ad_outbuf)[i] * 32768);
 	    break;
-	  case SAMPLE_FMT_DBL:
+	  case AV_SAMPLE_FMT_DBL:
 	    for(i = 0; i < frames; i++)
 	      ad->ad_outbuf[i] = rint(((double *)ad->ad_outbuf)[i] * 32768);
 	    break;
@@ -496,14 +479,14 @@ ad_decode_buf(audio_decoder_t *ad, media_pipe_t *mp, media_queue_t *mq,
 
 
 static struct strtab chnames[] = {
-  { "Left",        CH_FRONT_LEFT },
-  { "Right",       CH_FRONT_RIGHT },
-  { "Center",      CH_FRONT_CENTER },
-  { "LFE",         CH_LOW_FREQUENCY },
-  { "Back Left",   CH_BACK_LEFT },
-  { "Back Right",  CH_BACK_RIGHT },
-  { "Side Left",   CH_SIDE_LEFT },
-  { "Side Right",  CH_SIDE_RIGHT }
+  { "Left",        AV_CH_FRONT_LEFT },
+  { "Right",       AV_CH_FRONT_RIGHT },
+  { "Center",      AV_CH_FRONT_CENTER },
+  { "LFE",         AV_CH_LOW_FREQUENCY },
+  { "Back Left",   AV_CH_BACK_LEFT },
+  { "Back Right",  AV_CH_BACK_RIGHT },
+  { "Side Left",   AV_CH_SIDE_LEFT },
+  { "Side Right",  AV_CH_SIDE_RIGHT }
 };
 
 
@@ -529,10 +512,10 @@ astats(audio_decoder_t *ad, media_pipe_t *mp, int64_t pts, int epoch,
     return;
 
   if(chlayout == 0 && channels == 1)
-    chlayout = CH_LAYOUT_MONO;
+    chlayout = AV_CH_LAYOUT_MONO;
 
   if(chlayout == 0 && channels == 2)
-    chlayout = CH_LAYOUT_STEREO;
+    chlayout = AV_CH_LAYOUT_STEREO;
 
   if(mp->mp_cur_channels != channels || mp->mp_cur_chlayout != chlayout) {
     mp->mp_cur_chlayout = chlayout;

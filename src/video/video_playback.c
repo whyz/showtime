@@ -29,6 +29,8 @@
 #include "backend/backend.h"
 #include "notifications.h"
 #include "htsmsg/htsmsg_json.h"
+#include "fileaccess/fileaccess.h"
+#include "misc/str.h"
 
 static hts_mutex_t video_queue_mutex;
 
@@ -39,10 +41,10 @@ TAILQ_HEAD(video_queue_entry_queue, video_queue_entry);
 /**
  *
  */
-typedef struct video_queue {
+struct video_queue {
   prop_sub_t *vq_node_sub;
   struct video_queue_entry_queue vq_entries;
-} video_queue_t;
+};
 
 
 /**
@@ -58,14 +60,147 @@ typedef struct video_queue_entry {
 } video_queue_entry_t;
 
 
+LIST_HEAD(vsource_list, vsource);
+
 /**
  *
  */
 typedef struct vsource {
-  const char *vs_url;
-  const char *vs_mimetype;
+  LIST_ENTRY(vsource) vs_link;
+  char *vs_url;
+  char *vs_mimetype;
   int vs_bitrate;
 } vsource_t;
+
+
+/**
+ *
+ */
+static int
+vs_cmp(const vsource_t *a, const vsource_t *b)
+{
+  return b->vs_bitrate - a->vs_bitrate;
+}
+
+
+/**
+ *
+ */
+static void
+vsource_insert(struct vsource_list *list, 
+	       const char *url, const char *mimetype, int bitrate)
+{
+  if(backend_canhandle(url) == NULL)
+    return;
+
+  vsource_t *vs = malloc(sizeof(vsource_t));
+  vs->vs_bitrate = bitrate;
+  vs->vs_url = strdup(url);
+  vs->vs_mimetype = mimetype ? strdup(mimetype) : NULL;
+  LIST_INSERT_SORTED(list, vs, vs_link, vs_cmp);
+}
+
+
+/**
+ *
+ */
+static void
+vsource_remove(struct vsource_list *list, const char *url)
+{
+  vsource_t *vs;
+  LIST_FOREACH(vs, list, vs_link) {
+    if(!strcmp(vs->vs_url, url)) {
+      LIST_REMOVE(vs, vs_link);
+      free(vs->vs_url);
+      free(vs);
+    }
+  }
+}
+
+
+/**
+ *
+ */
+static void
+vsource_cleanup(struct vsource_list *list)
+{
+  vsource_t *vs;
+  while((vs = LIST_FIRST(list)) != NULL) {
+    LIST_REMOVE(vs, vs_link);
+    free(vs->vs_url);
+    free(vs->vs_mimetype);
+    free(vs);
+  }
+}
+
+
+/**
+ *
+ */
+static void
+vsource_parse_hls(struct vsource_list *list, char *s, const char *base)
+{
+  int bandwidth = -1;
+  int l;
+
+  for(; l = strcspn(s, "\r\n"), *s; s += l+1+strspn(s+l+1, "\r\n")) {
+    s[l] = 0;
+    if(l == 0)
+      continue;
+    const char *s2, *s3;
+    if((s2 = mystrbegins(s, "#EXT-X-STREAM-INF:")) != NULL) {
+      s3 = strstr(s2, "BANDWIDTH=");
+      if(s3 != NULL)
+        bandwidth = atoi(s3 + strlen("BANDWIDTH="));
+    } else if(*s == '#') {
+      continue;
+    } else if(bandwidth != -1) {
+      char *playlist = url_resolve_relative_from_base(base, s);
+      vsource_insert(list, playlist, "application/x-mpegURL", bandwidth);
+      free(playlist);
+      bandwidth = -1;
+    }
+  }
+}
+
+
+
+
+/**
+ *
+ */
+static void
+vsource_load_hls(struct vsource_list *list, const char *url)
+{
+  char *buf;
+  char errbuf[256];
+
+  buf = fa_load(url, NULL, NULL, errbuf, sizeof(errbuf), NULL, 0, NULL, NULL);
+
+  if(buf == NULL) {
+    TRACE(TRACE_INFO, "HLS", "Unable to open %s -- %s", url, errbuf);
+    return;
+  }
+
+  if(mystrbegins(buf, "#EXTM3U")) {
+    vsource_parse_hls(list, buf, url);
+  } else {
+    TRACE(TRACE_INFO, "HLS", "%s is not an EXTM3U file", url);
+  }
+  free(buf);
+}
+
+
+/**
+ *
+ */
+void
+vsource_add_hls(struct vsource_list *vsl, char *hls, const char *url)
+{
+  vsource_remove(vsl, url);
+  vsource_parse_hls(vsl, hls, url);
+}
+
 
 /**
  *
@@ -73,101 +208,165 @@ typedef struct vsource {
 static event_t *
 play_video(const char *url, struct media_pipe *mp,
 	   int flags, int priority,
-	   char *errbuf, size_t errlen)
+	   char *errbuf, size_t errlen,
+	   video_queue_t *vq)
 {
   htsmsg_t *subs, *sources;
   const char *str;
   htsmsg_field_t *f;
-  int nsources = 0, i;
-  vsource_t *vsvec, *vs;
+  vsource_t *vs;
+  struct vsource_list vsources;
+  event_t *e;
+  const char *canonical_url;
+  htsmsg_t *m = NULL;
+  LIST_INIT(&vsources);
 
-  if(strncmp(url, "videoparams:", strlen("videoparams:"))) 
-    return backend_play_video(url, mp, flags | BACKEND_VIDEO_SET_TITLE,
-			      priority, errbuf, errlen, NULL, url);
+  mp_reinit_streams(mp);
 
-  url += strlen("videoparams:");
-  htsmsg_t *m = htsmsg_json_deserialize(url);
+  if(strncmp(url, "videoparams:", strlen("videoparams:"))) {
+    backend_t *be = backend_canhandle(url);
 
-  if(m == NULL) {
-    snprintf(errbuf, errlen, "Invalid JSON");
-    return NULL;
-  }
+    if(be == NULL || be->be_play_video == NULL) {
+      prop_t *p = prop_create_root(NULL);
+      if(backend_open(p, url, 1)) {
+	prop_destroy(p);
+	snprintf(errbuf, errlen, "No backend for URL");
+	return NULL;
+      }
+      rstr_t *r = prop_get_string(p, "source", NULL);
+      prop_destroy(p);
+      if(r != NULL) {
+	TRACE(TRACE_DEBUG, "vp", "Page %s redirects to video source %s\n",
+	      url, rstr_get(r));
+	event_t *e = play_video(rstr_get(r), mp, flags, priority,
+				errbuf, errlen, vq);
+	rstr_release(r);
+	return e;
+      }
+      snprintf(errbuf, errlen,
+	       "Page model for '%s' does not provide a video source",
+	       url);
+      return NULL;
 
-  const char *canonical_url = htsmsg_get_str(m, "canonicalUrl");
+    }
 
-  // Sources
+    canonical_url = url;
 
-  if((sources = htsmsg_get_list(m, "sources")) == NULL) {
-    snprintf(errbuf, errlen, "No sources list in JSON parameters");
-    return NULL;
-  }
+    mp_set_url(mp, url);
+    e = be->be_play_video(url, mp, flags | BACKEND_VIDEO_SET_TITLE,
+                          priority, errbuf, errlen, NULL,
+                          canonical_url, vq, &vsources);
+
+  } else {
+
+    url += strlen("videoparams:");
+    m = htsmsg_json_deserialize(url);
+
+    if(m == NULL) {
+      snprintf(errbuf, errlen, "Invalid JSON");
+      return NULL;
+    }
+
+    canonical_url = htsmsg_get_str(m, "canonicalUrl");
+
+    // Sources
+
+    if((sources = htsmsg_get_list(m, "sources")) == NULL) {
+      snprintf(errbuf, errlen, "No sources list in JSON parameters");
+      return NULL;
+    }
+
+    HTSMSG_FOREACH(f, sources) {
+      htsmsg_t *src = &f->hmf_msg;
+      const char *url      = htsmsg_get_str(src, "url");
+      const char *mimetype = htsmsg_get_str(src, "mimetype");
+      int bitrate          = htsmsg_get_u32_or_default(src, "bitrate", -1);
+
+      if(url == NULL)
+        continue;
+
+      if(mimetype != NULL && 
+         (!strcmp(mimetype, "application/vnd.apple.mpegurl") ||
+          !strcmp(mimetype, "audio/mpegurl"))) {
+        vsource_load_hls(&vsources, url);
+        continue;
+      }
+
+      vsource_insert(&vsources, url, mimetype, bitrate);
+    }
+
+
+    if(LIST_FIRST(&vsources) == NULL) {
+      snprintf(errbuf, errlen, "No players found for sources");
+      vsource_cleanup(&vsources);
+      return NULL;
+    }
   
-  HTSMSG_FOREACH(f, sources)
-    nsources++;
+    // Other metadata
+
+    if((str = htsmsg_get_str(m, "title")) != NULL)
+      prop_set_string(prop_create(mp->mp_prop_metadata, "title"), str);
+    else
+      flags |= BACKEND_VIDEO_SET_TITLE;
+
+    // Subtitles
+
+    if((subs = htsmsg_get_list(m, "subtitles")) != NULL) {
+      HTSMSG_FOREACH(f, subs) {
+        htsmsg_t *sub = &f->hmf_msg;
+        const char *title = htsmsg_get_str(sub, "title");
+        const char *url = htsmsg_get_str(sub, "url");
+        const char *lang = htsmsg_get_str(sub, "language");
+        const char *source = htsmsg_get_str(sub, "source");
+
+        mp_add_track(mp->mp_prop_subtitle_tracks, title, url, 
+                     NULL, NULL, lang, source, NULL, 0);
+      }
+    }
+
+    // Check if we should disable filesystem scanning (subtitles)
+
+    if(htsmsg_get_u32_or_default(m, "no_fs_scan", 0))
+      flags |= BACKEND_VIDEO_NO_FS_SCAN;
+
+    vs = LIST_FIRST(&vsources);
   
-  if(nsources == 0) {
-    snprintf(errbuf, errlen, "No sources in JSON list");
-    return NULL;
+    if(canonical_url == NULL)
+      canonical_url = vs->vs_url;
+
+    TRACE(TRACE_DEBUG, "Video", "Playing %s", vs->vs_url);
+
+    e = backend_play_video(vs->vs_url, mp, flags, priority, 
+                           errbuf, errlen, vs->vs_mimetype,
+                           canonical_url, vq, &vsources);
   }
 
-  vsvec = alloca(nsources * sizeof(vsource_t));
+  while(e != NULL) {
 
-  i = 0;
-  HTSMSG_FOREACH(f, sources) {
-    htsmsg_t *src = &f->hmf_msg;
-    vsvec[i].vs_url = htsmsg_get_str(src, "url");
-    if(vsvec[i].vs_url == NULL)
-      continue;
+    if(event_is_type(e, EVENT_REOPEN)) {
 
-    if(backend_canhandle(vsvec[i].vs_url) == NULL)
-      continue;
+      vsource_t *vs = LIST_FIRST(&vsources);
+      if(vs == NULL) {
+        snprintf(errbuf, errlen, "No alternate video sources");
+        e = NULL;
+        break;
+      }
 
-    vsvec[i].vs_bitrate = htsmsg_get_u32_or_default(src, "bitrate", -1);
-    vsvec[i].vs_mimetype = htsmsg_get_str(src, "mimetype");
-    i++;
-  }
+      TRACE(TRACE_DEBUG, "Video", "Playing %s", vs->vs_url);
 
-  nsources = i;
+      e = backend_play_video(vs->vs_url, mp, flags, priority, 
+                             errbuf, errlen, vs->vs_mimetype,
+                             canonical_url, vq, &vsources);
 
-  if(nsources == 0) {
-    snprintf(errbuf, errlen, "No players found for sources");
-    return NULL;
-  }
-  
-  // Other metadata
-
-  if((str = htsmsg_get_str(m, "title")) != NULL)
-    prop_set_string(prop_create(mp->mp_prop_metadata, "title"), str);
-  else
-    flags |= BACKEND_VIDEO_SET_TITLE;
-
-  // Subtitles
-
-  if((subs = htsmsg_get_list(m, "subtitles")) != NULL) {
-    HTSMSG_FOREACH(f, subs) {
-      htsmsg_t *sub = &f->hmf_msg;
-      const char *url = htsmsg_get_str(sub, "url");
-      const char *lang = htsmsg_get_str(sub, "language");
-      const char *source = htsmsg_get_str(sub, "source");
-
-      mp_add_track(mp->mp_prop_subtitle_tracks, NULL, url, 
-		   NULL, NULL, lang, source, NULL, 0);
+    } else {
+      break;
     }
   }
 
-  // Check if we should disable filesystem scanning of related files (subtitles)
-
-  if(htsmsg_get_u32_or_default(m, "no_fs_scan", 0))
-    flags |= BACKEND_VIDEO_NO_FS_SCAN;
-
-  vs = vsvec;
-  
-  if(canonical_url == NULL)
-    canonical_url = vs->vs_url;
-
-  return backend_play_video(vs->vs_url, mp, flags, priority, 
-			    errbuf, errlen, vs->vs_mimetype,
-			    canonical_url);
+  vsource_cleanup(&vsources);
+  if(m)
+    htsmsg_destroy(m);
+  return e;
 }
 
 
@@ -216,6 +415,8 @@ static void
 vq_add_node(video_queue_t *vq, prop_t *p, video_queue_entry_t *before)
 {
   video_queue_entry_t *vqe = calloc(1, sizeof(video_queue_entry_t));
+
+  prop_tag_set(p, vq, vqe);
 
   vqe->vqe_root = prop_ref_inc(p);
 
@@ -349,6 +550,9 @@ vq_entries_callback(void *opaque, prop_event_t event, ...)
   case PROP_DESTROYED:
     break;
 
+  case PROP_HAVE_MORE_CHILDS:
+    break;
+
   default:
     printf("Cant handle event %d\n", event);
     abort();
@@ -395,23 +599,45 @@ video_queue_destroy(video_queue_t *vq)
 /**
  *
  */
-static rstr_t *
-video_queue_find_next(video_queue_t *vq, const char *url, int reverse)
+rstr_t *
+video_queue_find_next(video_queue_t *vq, const char *url, int reverse,
+		      int wrap)
 {
   rstr_t *r = NULL;
   video_queue_entry_t *vqe;
+  const char *cu = NULL;
+
   if(url == NULL)
     return NULL;
+
+  if(!strncmp(url, "videoparams:", strlen("videoparams:"))) {
+    htsmsg_t *m = htsmsg_json_deserialize(url + strlen("videoparams:"));
+    cu = m ? htsmsg_get_str(m, "canonicalUrl") : NULL;
+    cu = cu ? mystrdupa(cu) : NULL;
+    htsmsg_destroy(m);
+  }
+
   hts_mutex_lock(&video_queue_mutex);
+
   TAILQ_FOREACH(vqe, &vq->vq_entries, vqe_link) {
-    if(vqe->vqe_url != NULL && !strcmp(url, rstr_get(vqe->vqe_url)) &&
-       vqe->vqe_type != NULL && !strcmp("video", rstr_get(vqe->vqe_type)))
+    if(vqe->vqe_url != NULL &&
+       (!strcmp(url, rstr_get(vqe->vqe_url)) ||
+	(cu && !strcmp(cu, rstr_get(vqe->vqe_url)))) &&
+       vqe->vqe_type != NULL && 
+       (!strcmp("video", rstr_get(vqe->vqe_type)) || 
+	!strcmp("tvchannel", rstr_get(vqe->vqe_type))))
       break;
   }
 
-  if(vqe != NULL)
-    vqe = reverse ? TAILQ_PREV(vqe, video_queue_entry_queue, vqe_link) : 
-      TAILQ_NEXT(vqe, vqe_link);
+  if(vqe != NULL) {
+
+    if(reverse) {
+      vqe = TAILQ_PREV(vqe, video_queue_entry_queue, vqe_link);
+    } else {
+      vqe = TAILQ_NEXT(vqe, vqe_link);
+    }
+  }
+
   if(vqe != NULL)
     r = rstr_dup(vqe->vqe_url);
   hts_mutex_unlock(&video_queue_mutex);
@@ -439,16 +665,19 @@ video_player_idle(void *aux)
   while(run) {
     
     if(play_url != NULL) {
+      prop_set_void(errprop);
       e = play_video(rstr_get(play_url), mp, 
 		     play_flags, play_priority, 
-		     errbuf, sizeof(errbuf));
+		     errbuf, sizeof(errbuf), vq);
       if(e == NULL)
 	prop_set_string(errprop, errbuf);
     }
 
-    if(e == NULL)
+    if(e == NULL) {
+      TRACE(TRACE_DEBUG, "vp", "Waiting for event");
+      rstr_set(&play_url, NULL);
       e = mp_dequeue_event(mp);
-
+    }
     if(event_is_type(e, EVENT_PLAY_URL)) {
       force_continuous = 0;
       prop_set_void(errprop);
@@ -459,6 +688,9 @@ video_player_idle(void *aux)
       if(ep->no_audio)
 	play_flags |= BACKEND_VIDEO_NO_AUDIO;
       play_priority = ep->priority;
+
+      TRACE(TRACE_DEBUG, "vp", "Playing %s flags:0x%x", ep->url,
+	    play_flags);
 
       if(vq != NULL)
 	video_queue_destroy(vq);
@@ -490,7 +722,8 @@ video_player_idle(void *aux)
 	event_is_action(e, ACTION_SKIP_BACKWARD);
       if(vq && (video_settings.continuous_playback || force_continuous || skp))
 	next = video_queue_find_next(vq, rstr_get(play_url),
-				     event_is_action(e, ACTION_SKIP_BACKWARD));
+				     event_is_action(e, ACTION_SKIP_BACKWARD), 
+				     0);
       
       if(skp)
 	play_flags |= BACKEND_VIDEO_START_FROM_BEGINNING;

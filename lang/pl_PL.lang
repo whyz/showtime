@@ -1,53 +1,80 @@
-﻿language: Polish
+language: Polish
 native: Polski
 maintainer: Cichy <ml.cichy@gmail.com>
 #
-# ./glwthemes/mono/commandmenu/cmd_root.view
+# ./glwskins/default/cmdmenu.view
 #
-id: Audio settings
-msg: Ustawienia dźwięku
+id: Add current page to bookmarks
+msg: Dodaj stronę do zakładek
 
-id: Languages
-msg: Język
+id: Open settings
+msg: Otwórz ustawienia
 
-id: Settings
-msg: Ustawienia
-
-id: Subtitle settings
-msg: Ustawienia napisów
-
-id: Video settings
-msg: Ustawienia wideo
+id: Remove current page from bookmarks
+msg: Usuń stronę z zakładek
 
 #
-# ./glwthemes/mono/directoryviews/infobox/audio.view
+# ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
-id: Added by: %s
-msg: Dodane przez: %s
+id: Exit Showtime
+msg: Zamknij Showtime
 
-id: Played %d times
-msg[0]: Odtworzono %d razy
-msg[1]: Odtworzono %d raz
+id: Go to Home screen
+msg: Przejdź do ekranu głównego
+
+id: Navigation
+msg: Nawigacja
+
+id: Open Settings
+msg: Otwórz ustawienia
+
+id: Playqueue
+msg: Lista odtwarzania
+
+id: Power off
+msg: Wyłącz
+
+id: Reload current page
+msg: Odśwież
+
+id: Suspend
+msg: Zawieś
+
+id: System
+msg: System
 
 #
-# ./glwthemes/mono/directoryviews/list2/center_directory.view
+# ./glwskins/default/cmdmenu/cmdmenu_dir.view
 #
-id: %d entries
-msg[0]: %d plików
-msg[1]: %d plik(i)
+id: Add '%s' to home screen
+msg: Dodaj '%s' do ekranu głównego
+
+id: Remove '%s' from home screen
+msg: Usuń '%s' z ekranu głównego
 
 #
-# ./glwthemes/mono/directoryviews/list2/center_playlist.view
+# ./glwskins/default/cmdmenu/cmdmenu_item.view
 #
-id: %d tracks
-msg[0]: %d ścieżki
-msg[1]: ścieżka
+id: Continue from %s
+msg: Wznów od %s
 
-#
-# ./glwthemes/mono/directoryviews/list2/options_audio.view
-#
+id: Continue playback here
+msg: Wznów odtwarzanie tutaj
+
 id: Delete
 msg: Usuń
+
+id: Mark as seen
+msg: Oznacz jako widziane
+
+id: Mark as unseen
+msg: Oznacz jako niewidziane
+
+id: Play from beginning
+msg: Odtwórz od początku
+
+id: Play until end of list
+msg: Odtwarzaj do końca listy
 
 id: Queue
 msg: Kolejka
@@ -59,31 +86,49 @@ id: Unstar
 msg: Usuń gwiazdkę
 
 #
-# ./glwthemes/mono/include/buttons.view
+# ./glwskins/default/cmdmenu/cmdmenu_video.view
 #
-id: Off
-msg: Wyłączony
+id: Audio
+msg: Audio
 
-id: On
-msg: Włączony
+id: Audio settings
+msg: Ustawienia Audio
+
+id: Audio tracks
+msg: Ścieżki dźwiękowe
+
+id: Seek by time
+msg: Przeszukaj według czasu
+
+id: Settings
+msg: Ustawienia
+
+id: Subtitle settings
+msg: Ustawienia napisów
+
+id: Subtitle tracks
+msg: Wybór napisów
+
+id: Subtitles
+msg: Napisy
+
+id: Video
+msg: Video
+
+id: Video menu
+msg: Menu Video
+
+id: Video settings
+msg: Ustawienia Video
 
 #
-# ./glwthemes/mono/include/infobox.view
+# ./glwskins/default/log.view
 #
-id: Enqueue
-msg: Kolejkuj
+id: System log
+msg: Log systemowy
 
 #
-# ./glwthemes/mono/include/popup.view
-#
-id: Cancel
-msg: Anuluj
-
-id: OK
-msg: OK
-
-#
-# ./glwthemes/mono/pages/about.view
+# ./glwskins/default/pages/about.view
 #
 id: Allocated by application: %d kB
 msg: Zajęte przez aplikację: %d kB
@@ -116,7 +161,7 @@ id: Memory status
 msg: Status pamięci
 
 id: Renderer: %s
-msg: Rendering: %s
+msg: Renderer: %s
 
 id: System info
 msg: Informacje o systemie
@@ -137,70 +182,242 @@ id: Windowmanager: %s
 msg: Okno menadżera: %s
 
 #
-# ./glwthemes/mono/pages/about_top.view
+# ./glwskins/default/pages/directory.view
 #
-id: About
-msg: O programie
+id: Album
+msg: Album
+
+id: Artist
+
+msg: Wykonawca
+
+id: Custom
+msg: Własny
+
+id: Images
+msg: Obrazy
+
+id: List
+msg: Lista
+
+id: Slideshow
+msg: Pokaz slajdów
+
+id: Tvchannels
+
+msg: Kanały TV
+
+id: View
+msg: Widok
 
 #
-# ./glwthemes/mono/pages/home_top.view
+# ./glwskins/default/pages/discovered.view
 #
-id: Home
-msg: Strona główna
+id: Discovered resources on local network
+msg: Wykryte zasoby w sieci lokalnej
 
 #
-# ./glwthemes/mono/pages/openerror.view
+# ./glwskins/default/pages/home.view
+#
+id: Tiled
+msg: Sąsiadujący
+
+#
+# ./glwskins/default/pages/home_clist.view
+#
+id: About Showtime
+msg: O Showtime
+
+id: Dismiss
+msg: Odrzuć
+
+id: Plugins
+msg: Wtyczki
+
+#
+# ./glwskins/default/pages/iteminfo/image.view
+#
+id: Camera:
+msg: Kamera:
+
+id: Date:
+msg: Data:
+
+#
+# ./glwskins/default/pages/iteminfo/plugin.view
+#
+id: Author:
+msg: Autor
+
+id: Available version:
+msg: Dostępna wersja:
+
+id: Installed version:
+msg: Zainstalowana wersja:
+
+id: Showtime %s or newer is required
+msg: Wymagany Showtime w wersji %s lub nowszy
+
+#
+# ./glwskins/default/pages/iteminfo/video.view
+#
+id: Duration:
+msg: Długość"
+
+id: File date:
+msg: Data pliku:
+
+id: Genre:
+msg: Gatunek:
+
+id: Metadata from
+msg: Metadane z
+
+id: Rating:
+msg: Ocena:
+
+id: Year:
+msg: Rok:
+
+#
+# ./glwskins/default/pages/listitems/add.view
+#
+id: Add new entry
+msg: Dodaj nowy wpis
+
+#
+# ./glwskins/default/pages/listitems/bool.view
+#
+id: No
+msg: Nie
+
+id: Yes
+msg: Tak
+
+#
+# ./glwskins/default/pages/listitems/font.view
+#
+id: Condensed
+msg: Skondensowany
+
+id: Main
+msg: Główny
+
+id: Subs
+msg: Napisy
+
+#
+# ./glwskins/default/pages/listitems/plugin.view
+#
+id: Install
+msg: Zainstaluj
+
+id: Uninstall
+msg: Odinstaluj
+
+id: Upgrade
+msg: Zaktualizuj
+
+#
+# ./glwskins/default/pages/openerror.view
 #
 id: Unable to open resource
 msg: Nie można otworzyć zasobu
 
 #
-# ./glwthemes/mono/pages/openerror_top.view
-#
-id: Page load error
-msg: Błąd podczas ładowania strony
-
-#
-# ./glwthemes/mono/pages/playqueue_top.view
-#
-id: Playqueue
-msg: Lista odtwarzania
-
-#
-# ./glwthemes/mono/pages/video.view
-#
-id: Playback status
-msg: Status odtwarzania
-
-id: Unable to start video playback
-msg: Nie można odtworzyć pliku wideo
-
-#
-# ./glwthemes/mono/playdecks/dvd.view
-#
-id: Chapter %d / %d
-msg: Rozdział %d / %d
-
-id: Title %d / %d
-msg: Tytuł %d / %d
-
-#
-# ./glwthemes/mono/playdecks/tracks.view
+# ./glwskins/default/pages/playqueue.view
 #
 id: Track %d / %d
 msg: Ścieżka %d / %d
 
 #
-# ./glwthemes/mono/playdecks/video.view
+# ./glwskins/default/pages/slideshow.view
 #
-id: CPU is too slow to decode this video
-msg: Procesor jest zbyt wolny by dekodować te wideo
+id: Paused
+msg: Zapauzowany
 
 #
-# ./glwthemes/mono/popups/auth.view
+# ./glwskins/default/pages/upgrade.view
+#
+id: An error occured during download
+msg: Wystąpił błąd w trakcie pobierania
+
+id: Available version:
+msg: Dostępna wersja:
+
+id: Changelog for %s releases
+msg: Lista zmian dla %s
+
+id: Check for updates now
+msg: Sprawdź dostępność aktualizacji
+
+id: Checking for updates...
+msg: Sprawdzanie aktualizacji...
+
+id: Current version:
+msg: Obecna wersja:
+
+id: Download and install...
+msg: Pobierz i zainstaluj...
+
+id: Downloading...
+msg: Pobieranie...
+
+id: Installing...
+msg: Instalowanie...
+
+id: New version %s is available for download
+msg: Nowa wersja %s jest dostępna do pobrania
+
+id: No upgrade available
+msg: Brak aktualizacji
+
+id: Restarting Showtime in %d seconds...
+msg: Restart Showtime za %d sekund...
+
+id: Retry...
+msg: Ponów...
+
+id: Showtime is up to date
+msg: Showtime jest aktualny
+
+id: Stable
+msg: Stabilne
+
+id: Testing
+msg: Testowe
+
+id: Unable to query for new version
+msg: Nie można sprawdzić dostępności nowej wersji
+
+#
+# ./glwskins/default/pages/video.view
+#
+id: CPU is too slow to decode this video
+msg: Procesor jest zbyt wolny by dekodować te Video
+
+id: Playback status
+msg: Status odtwarzania
+
+#
+# ./glwskins/default/pages/wideinfo/video.view
+#
+id: Seen:
+msg: Widziany:
+
+#
+# ./glwskins/default/playdecks/dvd.view
+#
+id: Chapter: %d
+msg: Rozdział: %d
+
+id: Title: %d
+msg: Tytuł: %d
+
+#
+# ./glwskins/default/popups/auth.view
 #
 id: Domain
-# Missing translation
 msg: Domena
 
 id: Password
@@ -213,50 +430,34 @@ id: Username
 msg: Nazwa użytkownika
 
 #
-# ./glwthemes/mono/screensaver.view
+# ./glwskins/default/popups/common.view
+#
+id: Cancel
+msg: Anuluj
+
+id: OK
+msg: OK
+
+#
+# ./glwskins/default/screensaver.view
 #
 id: No media loaded
 msg: Brak danych
 
 #
-# ./glwthemes/mono/sysinfo.view
+# ./glwskins/default/sysinfo.view
 #
-id: Audio output
-msg: Wyjście audio
-
-id: CPUs
-msg: Procesor
-
-id: GPU & Display
-msg: Procesor graficzny i wyświetlacz 
-
-id: GPU Core temperature: %d / %d °
-msg: Temperatura procesora graficznego: %d / %d °
+id: Memory usage:
+msg: Zużycie pamięci:
 
 #
-# ./glwthemes/mono/universe.view
+# ./glwskins/default/universe.view
 #
-id: Adjust background tint based on daytime
-msg: Ustawienie podświetlenia w zależności od pory dnia
-
-id: Alternate list layout
-msg: Alternatywny wygląd listy
-
 id: Audio muted
 msg: Wyciszono
 
-id: Fancy UI animations
-msg: Animacje interfejsu
-
 id: Master volume: %d dB
 msg: Regulacja głośności: %d dB
-
-id: Multilingual 'No media loaded'
-# Missing translation
-msg: Wielojęzyczne 'Nie załadowano mediów'
-
-id: Top bar navigation buttons
-msg: Przyciski na pasku nawigacyjnym
 
 #
 # ./src/api/opensubtitles.c
@@ -268,7 +469,16 @@ id: Use opensubtitles.org
 msg: Korzystaj z opensubtitles.org
 
 #
-# ./src/arch/arch_ps3.c
+# ./src/api/tmdb.c
+#
+id: Language (ISO 639-1 code)
+msg: Język (Kod ISO 639-1)
+
+id: Use original title
+msg: Użyj oryginalnego tytyłu
+
+#
+# ./src/arch/ps3/ps3_main.c
 #
 id: System is low on memory (%d kB RAM available)
 msg: Mała ilość dostępnej pamięci (dostępne %d kB RAM)
@@ -276,8 +486,11 @@ msg: Mała ilość dostępnej pamięci (dostępne %d kB RAM)
 #
 # ./src/audio/audio.c
 #
+id: Audio output
+msg: Wyjście audio
+
 id: Audio/Video sync delay
-msg: Synchronizuj Audio/Wideo 
+msg: Synchronizuj Audio/Video
 
 id: Current output device
 msg: Urządzenie wyjściowe
@@ -342,11 +555,17 @@ msg: Wyniki wyszukiwania dla: %s
 #
 # ./src/backend/spotify/spotify.c
 #
+id: Albums
+msg: Albumy
+
 id: Automatic login when Showtime starts
 msg: Automatyczne logowanie przy starcie programu
 
 id: Collaborative
 msg: Wspólne
+
+id: Compilations
+msg: Składanki
 
 id: Enable Spotify
 msg: Włącz Spotify
@@ -355,7 +574,7 @@ id: Forget me
 msg: Nie zapamiętuj
 
 id: Friends
-msg: Przyjaciele
+msg: Znajomi
 
 id: High bitrate
 msg: Wysoki bitrate
@@ -379,13 +598,16 @@ id: Playlists
 msg: Lista odtwarzania
 
 id: Relogin (switch user)
-msg: Zaloguj ponownie (przełącz użytkownika)
+msg: Przełącz użytkownika (przeloguj)
 
 id: Search result
 msg: Wyniki wyszukiwania
 
+id: Singles
+msg: Single
+
 id: Spotify friends
-msg: Przyjaciele
+msg: Znajomi ze Spotify
 
 id: Spotify music service
 msg: Serwis muzyczny Spotify
@@ -400,13 +622,16 @@ id: Spotify: Connection error: %s
 msg: Spotify: Błąd połączenia: %s
 
 id: Starred
-msg: Najwyżej oceniane
+msg: Oznaczone gwiazdką
 
 #
-# ./src/bookmarks.c
+# ./src/blobcache_file.c
 #
-id: Bookmarks
-msg: Zakładki
+id: Cache cleared
+msg: Wyczyszczono pamięć podręczną
+
+id: Clear cached files
+msg: Wyczyść pamięć podręczną
 
 #
 # ./src/fileaccess/fa_backend.c
@@ -422,6 +647,39 @@ msg: Nie można otworzyć pliku: %s
 #
 id: Search using Unix locatedb
 msg: Szukaj za pomocą Unix locatedb
+
+#
+# ./src/fileaccess/fa_nativesmb.c
+#
+id: Access denied
+msg: Brak dostępu
+
+id: Account restricted
+msg: Konto z ograniczeniami
+
+id: Bad network share name
+msg: Błędna nazwa udziału sieciowego
+
+id: Logon failure
+msg: Błąd logowania
+
+#
+# ./src/fileaccess/fa_scanner.c
+#
+id: Date
+msg: Data
+
+id: Filename
+msg: Nazwa pliku
+
+id: Show only supported files
+msg: Pokazuj tylko obsługiwane formaty
+
+id: Sort folders first
+msg: Najpierw sortuj foldery
+
+id: Sort on
+msg: Sortuj
 
 #
 # ./src/fileaccess/fa_spotlight.c
@@ -443,6 +701,9 @@ msg: Język
 
 id: Language codes should be configured as three character ISO codes, example (eng, swe, fra)
 msg: Język powinien być skonfigurowany jako trzy znaki kodu ISO, na przykład (eng, swe, pol)
+
+id: Languages
+msg: Języki
 
 id: Preferred languages
 msg: Preferowane języki
@@ -490,6 +751,15 @@ id: Keymapper
 msg: Mapowanie przycisków
 
 #
+# ./src/keyring.c
+#
+id: Forget remembered passwords
+msg: Usuń zapamiętane hasła
+
+id: Rembered passwords erased
+msg: Usunięto zapamiętane hasła
+
+#
 # ./src/media.c
 #
 id: Align subtitles on video frame
@@ -505,34 +775,217 @@ id: Subtitle scaling
 msg: Skalowanie napisów
 
 id: Video zoom
-msg: Zbliżenie 
+msg: Zbliżenie
 
 #
 # ./src/metadata/metadata.c
 #
+id: Automatic
+msg: Automatyczne
+
+id: Custom search query
+msg: Własny tryb przeszukiwania
+
+id: Custom title
+msg: Własny tytuł
+
 id: Embedded in file
 msg: Wpisane w plik
+
+id: Enabled
+msg: Włączone
+
+id: IMDb ID
+msg: Identyfikator IMDb
+
+id: Metadata
+msg: Metadane
+
+id: Metadata configuration and provider settings
+msg: Ustawienia metadanych i dostawcy
+
+id: Metadata loaded from '%s' using %s
+msg: Metadane załadowane z '%s' używając %s
+
+id: Metadata search
+msg: Przeszukiwanie metadanych
+
+id: Metadata source
+msg: Źródło metadanych
+
+id: Movie
+msg: Film
+
+id: No data found
+msg: Nie znaleziono danych
+
+id: None
+msg: Żadne
+
+id: Providers for Music
+msg: Dostawcy Muzyki
+
+id: Providers for Video
+msg: Dostawcy Video
+
+id: Refresh metadata
+msg: Odśwież metadane
 
 id: Track %d
 msg: Ścieżka %d
 
+id: custom IMDb ID
+msg: Własny identyfikator IMDb
+
+id: custom query
+msg: własne zapytanie
+
+id: filename
+msg: nazwa pliku
+
+id: filename as TV episode
+msg: nazwa pliku jak odcinek TV
+
+id: folder name
+msg: nazwa folderu
+
+#
+# ./src/metadata/metadb.c
+#
+id: %d items deleted
+msg: Usunięto %s elementów
+
+id: Clear all metadata
+msg: Usuń wszystkie metadane
+
+id: Clearing all metadata means losing <b>all</b> information about:\n\nIf a track/movie has been seen\nNumber of times a track/movie has been played\nPlayback resume position\n\nIt will also erase the metadata cached from external sources such as themoviedb.org, etc\n\nAre you sure you proceed?
+msg: Usunięcie wszystkich metadanych oznacza utratę <b>WSZYSTKICH<\b> informacji typu:\n\nCzy ścieżka/film był widziany\nIle razy był/a odtwarzany/a\nPozycji wznowienia\n\nZostaną usunięte także metadane pobrane z serwisów zewnętrznych jak themoviedb.org, itp.\n\nCzy napewno kontynuować?
+
 #
 # ./src/navigator.c
 #
+id: Add and remove items on homepage
+msg: Dodaj/Usuń elementy ze strony głównej
+
+id: Added new bookmark: %s
+msg: Dodano nową zakładkę: %s
+
+id: Bookmarks
+msg: Zakładki
+
+id: Music
+msg: Muzyka
+
 id: No handler for URL
 msg: Brak wsparcia dla URL
+
+id: Other
+msg: Inne
+
+id: Photos
+msg: Zdjęcia
+
+id: Removed bookmark: %s
+msg: Usunięto zakładkę: %s
+
+id: TV
+msg: TV
+
+id: Title
+msg: Tytuł
+
+id: Type
+msg: Typ
+
+id: URL
+msg: Adres URL
 
 #
 # ./src/plugins.c
 #
-id: Invalud URI
-msg: Błędny URI
+id: Alternate plugin Repository URL
+msg: Alternatywne repozytorium wtyczek - adres
 
-id: Plugin ID %s does not exist
-msg: Wtyczka o ID %s nie istnieje
+id: Automatically upgrade plugins
+msg: Automatycznie aktualizuj wtyczki
 
-id: Plugin ID %s have no download URL
-msg: Wtyczka o ID %s nie posiada adresu URL
+id: Available plugins
+msg: Dostępne wtyczki
+
+id: Background
+msg: Tło
+
+id: Beta testing passwords
+msg: Hasła beta-testów
+
+id: Browse available plugins
+msg: Przeglądaj dostępne wtyczki
+
+id: Browsing
+msg: Przeglądanie
+
+id: Cloud services
+msg: Usługi w chmurze
+
+id: Corrupt plugin bundle
+msg: Uszkodzony pakiet wtyczki
+
+id: Default
+msg: Domyślne
+
+id: Disk write error
+msg: Błąd zapisu na dysku
+
+id: Downloading
+msg: Pobieranie
+
+id: File open error
+msg: Błąd otwierania pliku
+
+id: Home page
+msg: Strona główna
+
+id: Installed plugins
+msg: Zainstalowane wtyczki
+
+id: Installed version higher than available
+msg: Zainstalowana wersja jest nowsza od dostępnej
+
+id: Installing
+msg: Instalowanie
+
+id: List of albums
+msg: Lista albumów
+
+id: Loading screen
+msg: Ekran ładowania
+
+id: Movies
+msg: Filmy
+
+id: Music streaming
+msg: Strumieniowanie Muzyki
+
+id: Not installable
+msg: Nieinstalowalny
+
+id: Not installed
+msg: Nie zainstalowany
+
+id: Not upgradable
+msg: Nie możliwy do aktualizacji
+
+id: Online TV
+msg: Internet TV
+
+id: Preferred views from plugins
+msg: Preferowany podgląd z wtyczek
+
+id: Screen saver
+msg: Wygaszacz ekranu
+
+id: TV channels
+msg: Kanały TV
 
 id: Unable to load plugin.json: %s
 msg: Nie można załadować plugin.json: %s
@@ -540,8 +993,23 @@ msg: Nie można załadować plugin.json: %s
 id: Unable to load plugin.json: Malformed JSON
 msg: Nie można załadować plugin.json: Uszkodzony plik JSON
 
-id: Unable to request plugin repository: %s
-msg: Nie można pobrać repozytorium wtyczki: %s
+id: Uncategorized
+msg: Bez kategorii
+
+id: Up to date
+msg: Aktualny
+
+id: Upgradable
+msg: Możliwość aktualizacji
+
+id: Upgraded plugin %s to version %s
+msg: Zaktualizowano wtyczkę w wersji %s do %s
+
+id: User interface extensions
+msg: Rozszerzenia interfeju użytkownika
+
+id: Video streaming
+msg: Strumieniowanie Video
 
 #
 # ./src/runcontrol.c
@@ -549,44 +1017,89 @@ msg: Nie można pobrać repozytorium wtyczki: %s
 id: Automatic standby
 msg: Automatyczny tryb gotowości
 
-id: Run control
-msg: Sterowanie
+id: Logout
+msg: Wyloguj
+
+id: Open shell
+msg: Otwórz linię komend
+
+id: Power off system
+msg: Wyłącz system
+
+id: Starting and stopping Showtime
+msg: Uruchamianie i zatrzymywanie Showtime
 
 #
 # ./src/sd/sd.c
 #
-id: Enabled
-msg: Włączone
-
 id: Name
 msg: Nazwa
 
-id: Type
-msg: Typ
+#
+# ./src/service.c
+#
+id: Local network
+msg: Sieć lokalna
 
 #
 # ./src/settings.c
 #
 id: Applications and installed plugins
-msg: Aplikacje i wtyczki
+msg: Aplikacje i zainstalowane wtyczki
+
+id: Developer settings
+msg: Ustawienia dewelopera
 
 id: Discovered media sources
 msg: Wykryte media
 
+id: Fonts and user interface styling
+msg: Czcionki i wygląd iterfejsu użytkownika
+
+id: General
+msg: Ogólne
+
 id: Global settings
 msg: Ustawienia globalne
 
-#
-# ./src/ui/glw/glw.c
-#
-id: Display and user interface
-msg: Ustawienia wyświetlania oraz interfejsu użytkownika
+id: Look and feel
+msg: Wygląd i odczucia
 
+id: Settings useful for developers
+msg: Ustawienia pomocne dla deweloperów
+
+id: System related settings
+msg: Ustawienia związane z systemem
+
+#
+# ./src/text/fontstash.c
+#
+id: Narrow text
+msg: Zwężony
+
+id: Unable to load %s -- %s
+msg: Nie można załadować %s -- %s
+
+id: Unable to open %s for writing
+msg: Nie można otworzyć %s do zapisu
+
+id: Unable to write to %s
+msg: Nie można zapisać do %s
+
+id: Use font %s for
+msg: Użyj czcionki %s dla
+
+id: User interface
+msg: Interfejs Użytkownika
+
+#
+# ./src/ui/glw/glw_settings.c
+#
 id: Horizontal underscan
 msg: Przesunięcie poziome
 
 id: Screensaver delay
-msg: Wygaszacz ekranu
+msg: Opóźnienie wygaszacza ekranu
 
 id: Userinterface size
 msg: Rozmiar interfejsu użytkownika
@@ -597,9 +1110,6 @@ msg: Przesunięcie pionowe
 #
 # ./src/ui/glw/glw_x11.c
 #
-id: Fullscreen mode
-msg: Tryb pełnoekranowy
-
 id: Map mouse wheel to up/down
 msg: Mapuj kółko myszy
 
@@ -616,7 +1126,25 @@ id: Switch to this mode now
 msg: Przełącz na ten tryb
 
 id: Video modes
-msg: Tryby wyświetlania wideo
+msg: Tryby wyświetlania Video
+
+#
+# ./src/upgrade.c
+#
+id: Notify about upgrades
+msg: Powiadom o aktualizacjach
+
+id: Open download page
+msg: Otwórz stronę pobierania
+
+id: Showtime version %s is available
+msg: Dostępna jest wersja %s Showtime
+
+id: Software upgrade
+msg: Aktualizacja oprogramowania
+
+id: Upgrade to releases from
+msg: Aktualizuj do wersji z
 
 #
 # ./src/upnp/upnp.c
@@ -643,7 +1171,7 @@ msg: Nie znaleziono usługi
 # ./src/video/ps3_vdec.c
 #
 id: Cell-h264: Forcing level 4.2 for content in level %d.%d. This may break video playback.
-msg: Cell-h264: Wymuszenie poziomu 4.2 dla poziomu %d.%d. Możliwe problemy z odtworzeniem wideo
+msg: Cell-h264: Wymuszenie poziomu 4.2 dla poziomu %d.%d. Możliwe problemy z odtworzeniem Video
 
 id: Unable to accelerate %s, library not loaded.
 msg: Brak przyspieszenia dla %s, biblioteka nie załadowana
@@ -661,15 +1189,12 @@ msg: Błąd sprawdzania kodeka Cell. Błąd 0x%x
 # ./src/video/video_settings.c
 #
 id: 1080
-# Missing translation
 msg: 1080
 
 id: 576
-# Missing translation
 msg: 576
 
 id: 720
-# Missing translation
 msg: 720
 
 id: Always try to select a subtitle
@@ -679,7 +1204,6 @@ id: Auto
 msg: Automatycznie
 
 id: Automatically play next video in list
-# Missing translation
 msg: Automatycznie odtwarzaj kolejny plik z listy
 
 id: Center
@@ -689,7 +1213,10 @@ id: Color
 msg: Kolor
 
 id: Count video as played when reaching
-msg: Traktuj wideo jako obejrzane po osiągnięciu
+msg: Traktuj Video jako obejrzane po osiągnięciu
+
+id: Enable VDA
+msg: Włącz VDA
 
 id: Enable VDPAU
 msg: Włącz VDPAU
@@ -704,22 +1231,19 @@ id: Ignore embedded styling
 msg: Ignoruj wbudowany styl
 
 id: Include all subtitle files from movie directory
-# Missing translation
 msg: Dołącz wszystkie napisy z folderu z filmem
 
 id: Left
 msg: Lewy
 
 id: Maximum resolution for deinterlacer
-# Missing translation
 msg: Maks. rozdzielczość przy usuwaniu przeplotu
 
-id: No
-msg: Nie
-
 id: No limit
-# Missing translation
 msg: Bez limitu
+
+id: Off
+msg: Wyłączony
 
 id: Outline color
 msg: Kolor obrysu
@@ -728,11 +1252,10 @@ id: Outline size
 msg: Rozmiar obrysu
 
 id: Preferred VDPAU deinterlacer method
-# Missing translation
 msg: Preferowana metoda usuwania przeplotu dla VDPAU
 
 id: Resume video playback
-msg: Wznów odtwarzanie wideo
+msg: Wznów odtwarzanie Video
 
 id: Right
 msg: Prawy
@@ -744,7 +1267,6 @@ id: Shadow offset
 msg: Offset cienia
 
 id: Stretch video to fullscreen
-# Missing translation
 msg: Rozciągnij obraz do pełnego ekranu
 
 id: Stretch video to widescreen
@@ -757,29 +1279,20 @@ id: Subtitle size
 msg: Rozmiar napisów
 
 id: Subtitle size and positioning
-# Missing translation
 msg: Rozmiar i pozycja napisów
 
 id: Subtitle styling
 msg: Styl napisów
 
-id: Subtitles
-msg: Napisy
-
 id: Temporal
-# Missing translation
 msg: Czasowy
 
 id: Temporal/Spatial
-# Missing translation
 msg: Czasowy/przestrzenny
 
 id: Video acceleration and display behaviour
-msg: Akceleracja wideo i zachowanie wyświetlacza
+msg: Akceleracja Video i zachowanie wyświetlacza
 
 id: Video playback
-msg: Odtwarzanie wideo
-
-id: Yes
-msg: Tak
+msg: Odtwarzanie Video
 

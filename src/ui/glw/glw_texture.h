@@ -21,7 +21,11 @@
 
 #include "misc/pixmap.h"
 
-#define GLW_TEX_REPEAT 0x1
+#define GLW_TEX_CORNER_TOPLEFT        PIXMAP_CORNER_TOPLEFT
+#define GLW_TEX_CORNER_TOPRIGHT       PIXMAP_CORNER_TOPRIGHT
+#define GLW_TEX_CORNER_BOTTOMLEFT     PIXMAP_CORNER_BOTTOMLEFT
+#define GLW_TEX_CORNER_BOTTOMRIGHT    PIXMAP_CORNER_BOTTOMRIGHT
+#define GLW_TEX_REPEAT                0x10
 
 typedef struct glw_loadable_texture {
 
@@ -66,13 +70,18 @@ typedef struct glw_loadable_texture {
   float glt_s, glt_t;
   int16_t glt_tex_width;
   int16_t glt_tex_height;
+  int16_t glt_radius;
+  int16_t glt_margin;
 
 } glw_loadable_texture_t;
 
 void glw_tex_init(glw_root_t *gr);
 
+void glw_tex_fini(glw_root_t *gr);
+
 glw_loadable_texture_t *glw_tex_create(glw_root_t *gr, rstr_t *url,
-				       int flags, int xs, int ys);
+				       int flags, int xs, int ys,
+				       int radius);
 
 void glw_tex_deref(glw_root_t *gr, glw_loadable_texture_t *ht);
 
@@ -98,13 +107,8 @@ void glw_tex_backend_free_loader_resources(glw_loadable_texture_t *glt);
 
 void glw_tex_backend_layout(glw_root_t *gr, glw_loadable_texture_t *glt);
 
-#define GLW_TEXTURE_FORMAT_I8A8   1  // Intensity + Alpha
-#define GLW_TEXTURE_FORMAT_RGB    2
-#define GLW_TEXTURE_FORMAT_BGR32  3
-
 void glw_tex_upload(glw_root_t *gr, glw_backend_texture_t *tex,
-		    const void *src, int format, int width, int height,
-		    int flags);
+		    const pixmap_t *pm, int flags);
 
 void glw_tex_destroy(glw_root_t *gr, glw_backend_texture_t *tex);
 

@@ -1,28 +1,26 @@
 
-* Fix all the playdecks!
-* Auto-upgrade of Showtime
-* Metadata priority order
-* Fix list focus when destroying item via context menu
+* Log memory usage
 * Standardize view elements so .view plugins have something to lean on
-* GLW .view plugins
-* filtering in ui
 
 ---- view plugins ------------------
 
  - class -> path mapping
 
+special classes:
       home
       screensaver
       directory
+
+contents:
+
       tracks (a list of tracks, such as Spotify playlist)
       album  (a list of tracks on the same album)
       albums (a list of albums)
       movies
-      items
+      artist
       images
-      slideshow
+      tvchannels
 
- Which one is active is configurable somewhere and results in
 
-  $ui.viewpath.home -> URL
-  $ui.viewpath.screensaver -> URL
+
+

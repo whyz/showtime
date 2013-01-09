@@ -31,8 +31,6 @@
 
 #include "event.h"
 #include "showtime.h"
-#include "ui/ui.h"
-#include "ipc/ipc.h"
 #include "event.h"
 
 
@@ -126,7 +124,7 @@ lirc_thread(void *aux)
 	snprintf(buf, sizeof(buf), "IR+%s", keyname);
 	e = event_create_str(EVENT_KEYDESC, buf);
       }
-      ui_primary_event(e);
+      event_to_ui(e);
     }
   }
  out:
@@ -176,13 +174,4 @@ lirc_open(void)
 }
 
 
-
-
-/**
- *
- */
-void
-lirc_start(void)
-{
-  lirc_open();
-}
+INITME(INIT_GROUP_IPC, lirc_open);

@@ -80,7 +80,7 @@ vdpau_newframe(glw_video_t *gv, video_decoder_t *vd0, int flags)
     
     gv->gv_cfg_cur.gvc_valid = 0;
     
-    mp_send_cmd_head(mp, &mp->mp_video, MB_REINITIALIZE);
+    mp_send_cmd(mp, &mp->mp_video, MB_CTRL_REINITIALIZE);
 
     drain(gv, &gv->gv_displaying_queue);
     drain(gv, &gv->gv_decoded_queue);
@@ -118,7 +118,7 @@ vdpau_newframe(glw_video_t *gv, video_decoder_t *vd0, int flags)
 
     hts_mutex_lock(&mp->mp_clock_mutex);
     aclock = mp->mp_audio_clock + gr->gr_frame_start - 
-      mp->mp_audio_clock_realtime + mp->mp_avdelta;
+      mp->mp_audio_clock_avtime + mp->mp_avdelta;
     hts_mutex_unlock(&mp->mp_clock_mutex);
 
     d = s->gvs_pts - aclock;
@@ -384,59 +384,61 @@ vdpau_init(glw_video_t *gv)
 }
 
 
+static void vdpau_deliver(const frame_info_t *fi, glw_video_t *gv);
+
 /**
  *
  */
 static glw_video_engine_t glw_video_vdpau = {
-  .gve_name = "OpenGL/VDPAU",
+  .gve_type = 'VDPA',
   .gve_newframe = vdpau_newframe,
   .gve_render = vdpau_render,
   .gve_reset = vdpau_reset,
   .gve_init = vdpau_init,
+  .gve_deliver = vdpau_deliver,
 };
 
+GLW_REGISTER_GVE(glw_video_vdpau);
 
 /**
  *
  */
-void
-glw_video_input_vdpau(glw_video_t *gv,
-		      uint8_t * const data[], const int pitch[],
-		      const frame_info_t *fi)
+static void
+vdpau_deliver(const frame_info_t *fi, glw_video_t *gv)
 {
-  struct vdpau_render_state *rs = (struct vdpau_render_state *)data[0];
+  struct vdpau_render_state *rs = (struct vdpau_render_state *)fi->fi_data[0];
   vdpau_dev_t *vd = gv->w.glw_root->gr_be.gbr_vdpau_dev;
   vdpau_mixer_t *vm = &gv->gv_vm;
   glw_video_surface_t *s;
-  int wvec[3] = {fi->width};
-  int hvec[3] = {fi->height};
-  VdpRect src_rect = { 0, 0, fi->width, fi->height };
+  int wvec[3] = {fi->fi_width};
+  int hvec[3] = {fi->fi_height};
+  VdpRect src_rect = { 0, 0, fi->fi_width, fi->fi_height };
 
 #if 0
   VdpRect dst_rect = { 0, 0, 
-		       gv->gv_rwidth ?: fi->width,
-		       gv->gv_rheight ?: fi->height };
+		       gv->gv_rwidth ?: fi->fi_width,
+		       gv->gv_rheight ?: fi->fi_height };
 #else
   VdpRect dst_rect = { 0, 0, 
-		       fi->width,
-		       fi->height };
+		       fi->fi_width,
+		       fi->fi_height };
 #endif
 
-  if(glw_video_configure(gv, &glw_video_vdpau, wvec, hvec, 4, 0))
+  if(glw_video_configure(gv, &glw_video_vdpau, wvec, hvec, 4, 0, 0))
     return;
 
   if((s = glw_video_get_surface(gv)) == NULL)
     return;
-  s->gvs_width = fi->width;
-  s->gvs_height = fi->height;
+  s->gvs_width = fi->fi_width;
+  s->gvs_height = fi->fi_height;
 
   vdpau_mixer_set_color_matrix(vm, fi);
 
-  if(fi->interlaced) {
-    int duration = fi->duration >> 1;
+  if(fi->fi_interlaced) {
+    int duration = fi->fi_duration >> 1;
 
     if(video_settings.vdpau_deinterlace_resolution_limit > 0 && 
-       fi->height > video_settings.vdpau_deinterlace_resolution_limit)
+       fi->fi_height > video_settings.vdpau_deinterlace_resolution_limit)
       vdpau_mixer_set_deinterlacer(vm, 0);
     else
       vdpau_mixer_set_deinterlacer(vm, video_settings.vdpau_deinterlace);
@@ -447,7 +449,7 @@ glw_video_input_vdpau(glw_video_t *gv,
     vm->vm_surface_win[0] = rs->surface;
 
     vd->vdp_video_mixer_render(vm->vm_mixer, VDP_INVALID_HANDLE, NULL,
-			       !fi->tff,
+			       !fi->fi_tff,
 			       2, &vm->vm_surface_win[2],
 			       vm->vm_surface_win[1],
 			       1, &vm->vm_surface_win[0],
@@ -456,16 +458,16 @@ glw_video_input_vdpau(glw_video_t *gv,
 			       &dst_rect, &dst_rect,
 			       0, NULL);
 
-    glw_video_put_surface(gv, s, fi->pts - duration, fi->epoch, duration, 0);
+    glw_video_put_surface(gv, s, fi->fi_pts - duration, fi->fi_epoch, duration, 0);
 
     if((s = glw_video_get_surface(gv)) == NULL)
       return;
 
-    s->gvs_width = fi->width;
-    s->gvs_height = fi->height;
+    s->gvs_width = fi->fi_width;
+    s->gvs_height = fi->fi_height;
 
     vd->vdp_video_mixer_render(vm->vm_mixer, VDP_INVALID_HANDLE, NULL,
-			       fi->tff,
+			       fi->fi_tff,
 			       2, &vm->vm_surface_win[2],
 			       vm->vm_surface_win[1],
 			       1, &vm->vm_surface_win[0],
@@ -482,6 +484,6 @@ glw_video_input_vdpau(glw_video_t *gv,
 			       &dst_rect, &dst_rect, 0, NULL);
   }
 
-  glw_video_put_surface(gv, s, fi->pts, fi->epoch, fi->duration, 0);
+  glw_video_put_surface(gv, s, fi->fi_pts, fi->fi_epoch, fi->fi_duration, 0);
 }
 #endif

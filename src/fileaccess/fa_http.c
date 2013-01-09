@@ -20,7 +20,9 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
+#if ENABLE_LIBAV
 #include <libavutil/base64.h>
+#endif
 #include <assert.h>
 #include <zlib.h>
 
@@ -30,7 +32,7 @@
 #include "fa_proto.h"
 #include "showtime.h"
 #include "htsmsg/htsmsg_xml.h"
-#include "misc/string.h"
+#include "misc/str.h"
 #include "misc/sha.h"
 
 #if ENABLE_SPIDERMONKEY
@@ -178,7 +180,7 @@ http_connection_get(const char *hostname, int port, int ssl,
   id = ++http_connection_tally;
   hts_mutex_unlock(&http_connections_mutex);
 
-  if((tc = tcp_connect(hostname, port, errbuf, errlen, 5000, ssl)) == NULL) {
+  if((tc = tcp_connect(hostname, port, errbuf, errlen, 30000, ssl)) == NULL) {
     HTTP_TRACE(dbg, "Connection to %s:%d failed", hostname, port);
     return NULL;
   }
@@ -647,10 +649,10 @@ http_client_oauth(struct http_auth_req *har,
   snprintf(str, sizeof(str), "%lu", time(NULL));
   const char *oauth_timestamp = mystrdupa(str);
 
-  struct AVSHA *shactx = alloca(av_sha_size);
-  av_sha_init(shactx, 160);
-  av_sha_update(shactx, nonce, sizeof(nonce));
-  av_sha_final(shactx, nonce);
+  sha1_decl(shactx);
+  sha1_init(shactx);
+  sha1_update(shactx, nonce, sizeof(nonce));
+  sha1_final(shactx, nonce);
 
   snprintf(str, sizeof(str),
 	   "%02x%02x%02x%02x%02x%02x%02x%02x"
@@ -743,7 +745,11 @@ http_client_oauth(struct http_auth_req *har,
 		 oauth_nonce,
 		 oauth_token);
 
+#if ENABLE_LIBAV
   av_base64_encode(sig, sizeof(sig), md, 20);
+#else
+  abort();
+#endif
   url_escape(str + strlen(str), sizeof(str) - strlen(str), sig,
 	     URL_ESCAPE_PARAM);
   snprintf(str + strlen(str), sizeof(str) - strlen(str), "\"");
@@ -776,6 +782,27 @@ http_client_set_header(struct http_auth_req *har, const char *key,
 }
 
 
+/**
+ *
+ */
+static void
+http_send_verb(htsbuf_queue_t *q, http_file_t *hf, const char *method)
+{
+  char *r, *path = hf->hf_path;
+  if(strchr(path, ' ')) {
+    path = strdup(hf->hf_path);
+    for(r = path; *r; r++) {
+      if(*r == ' ')
+	*r = '+';
+    }
+  }
+
+  htsbuf_qprintf(q, "%s %s HTTP/1.%d\r\n", method, 
+		 path, hf->hf_version);
+
+  if(path != hf->hf_path)
+    free(path);
+}
 
 /**
  *
@@ -788,7 +815,7 @@ http_headers_init(struct http_header_list *l, const http_file_t *hf)
 
   LIST_INIT(l);
 
-  if(hc->hc_port != 80) {
+  if(hc->hc_port != 80 && 0) {
     snprintf(str, sizeof(str), "%s:%d", hc->hc_hostname, hc->hc_port);
     http_header_add(l, "Host", str, 0);
   } else {
@@ -935,8 +962,10 @@ http_drain_content(http_file_t *hf)
 {
   char *buf;
 
-  if(hf->hf_chunked_transfer == 0 && hf->hf_rsize < 0)
+  if(hf->hf_chunked_transfer == 0 && hf->hf_rsize < 0) {
+    hf->hf_rsize = 0;
     return 0;
+  }
 
   if((buf = http_read_content(hf)) == NULL)
     return -1;
@@ -1062,11 +1091,11 @@ http_read_response(http_file_t *hf, struct http_header_list *headers)
       code = atoi(q);
       continue;
     }
-    
-    if(http_tokenize(hf->hf_line, argv, 2, -1) != 2)
+
+    if((c = strchr(hf->hf_line, ':')) == NULL)
       continue;
 
-    if((c = strrchr(argv[0], ':')) == NULL)
+    if(http_tokenize(hf->hf_line, argv, 2, ':') != 2)
       continue;
     *c = 0;
 
@@ -1173,7 +1202,7 @@ http_detach(http_file_t *hf, int reusable, const char *reason)
   if(hf->hf_connection == NULL)
     return;
 
-  if(reusable) {
+  if(reusable && !gconf.disable_http_reuse) {
     http_connection_park(hf->hf_connection, hf->hf_debug);
   } else {
     http_connection_destroy(hf->hf_connection, hf->hf_debug, reason);
@@ -1280,7 +1309,11 @@ authenticate(http_file_t *hf, char *errbuf, size_t errlen, int *non_interactive,
 
     /* Got auth credentials */  
     snprintf(buf1, sizeof(buf1), "%s:%s", username, password);
+#if ENABLE_LIBAV
     av_base64_encode(buf2, sizeof(buf2), (uint8_t *)buf1, strlen(buf1));
+#else
+    abort();
+#endif
 
     snprintf(buf1, sizeof(buf1), "Basic %s", buf2);
     hf->hf_auth = strdup(buf1);
@@ -1378,15 +1411,15 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
   http_headers_init(&headers, hf);
 
   if(hf->hf_streaming) {
-    htsbuf_qprintf(&q, "GET %s HTTP/1.%d\r\n", hf->hf_path, hf->hf_version);
+    http_send_verb(&q, hf, "GET");
     http_headers_auth(&headers, hf, "GET", NULL);
     tcp_huge_buffer(hf->hf_connection->hc_tc);
   } else if(nohead) {
-    htsbuf_qprintf(&q, "GET %s HTTP/1.%d\r\n", hf->hf_path, hf->hf_version);
+    http_send_verb(&q, hf, "GET");
     htsbuf_qprintf(&q, "Range: bytes=0-1\r\n");
     http_headers_auth(&headers, hf, "GET", NULL);
   } else {
-    htsbuf_qprintf(&q, "HEAD %s HTTP/1.%d\r\n", hf->hf_path, hf->hf_version);
+    http_send_verb(&q, hf, "HEAD");
     http_headers_auth(&headers, hf, "HEAD", NULL);
   }
 
@@ -1395,7 +1428,7 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
 
   if(hf->hf_debug)
-    htsbuf_dump_raw_stderr(&q);
+    htsbuf_hexdump(&q, "HTTP");
 
   tcp_write_queue(hf->hf_connection->hc_tc, &q);
 
@@ -1413,7 +1446,7 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
     if(nohead) {
       // Server did not honour our GET request with 1 byte range
       // This is bad, bail out
-      snprintf(errbuf, errlen, "Unexpected 200 response on open GET");
+      snprintf(errbuf, errlen, "Unexpected 200 response on range request");
       return -1;
     }
 
@@ -1481,18 +1514,38 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
   case 405:
     if(!nohead) {
+
+      // This server does not support HEAD, remember that
       http_server_quirk_set_get(hf->hf_connection->hc_hostname, 
 				HTTP_SERVER_QUIRK_NO_HEAD);
-      // Retry using GET
-      if(http_drain_content(hf)) {
-	snprintf(errbuf, errlen, "Connection lost");
-	return -1;
-      }
-      
+
+      // It's a bit unclear if we receive a body when we
+      // get a "405 Method Not Supported" as a result
+      // of a HEAD request (it seems to be differerent
+      // between different servers), so just disconnect
+      // and retry without HEAD
+
+      http_detach(hf, 0, "HEAD not supported");
       nohead = 1;
-      goto again;
+      goto reconnect;
     }
-    // FALLTHRU
+    snprintf(errbuf, errlen, "Unsupported method");
+    return -1;
+
+  case -1:
+    if(!hf->hf_streaming && !nohead) {
+      // Server might choke on HEAD request
+
+      http_server_quirk_set_get(hf->hf_connection->hc_hostname, 
+				HTTP_SERVER_QUIRK_NO_HEAD);
+
+      http_detach(hf, 0, "Disconnect during HEAD request");
+      nohead = 1;
+      goto reconnect;
+    }
+    snprintf(errbuf, errlen, "Server reset connection");
+    return -1;
+
   default:
     snprintf(errbuf, errlen, "Unhandled HTTP response %d", code);
     return -1;
@@ -1613,8 +1666,7 @@ reconnect:
   
 again:
 
-
-  htsbuf_qprintf(&q, "GET %s HTTP/1.%d\r\n", hf->hf_path, hf->hf_version);
+  http_send_verb(&q, hf, "GET");
 
   http_headers_init(&headers, hf);
   http_headers_auth(&headers, hf, "GET", NULL);
@@ -1689,7 +1741,7 @@ http_open_ex(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
   http_file_t *hf = calloc(1, sizeof(http_file_t));
   hf->hf_version = 1;
   hf->hf_url = strdup(url);
-  hf->hf_debug = !!(flags & FA_DEBUG);
+  hf->hf_debug = !!(flags & FA_DEBUG) || gconf.enable_http_debug;
   hf->hf_streaming = !!(flags & FA_STREAMING);
 
   if(stats != NULL) {
@@ -1782,7 +1834,7 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
 
       htsbuf_queue_init(&q, 0);
 
-      htsbuf_qprintf(&q, "GET %s HTTP/1.%d\r\n", hf->hf_path, hf->hf_version);
+      http_send_verb(&q, hf, "GET");
 
       http_headers_init(&headers, hf);
       http_headers_auth(&headers, hf, "GET", NULL);
@@ -1815,7 +1867,7 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
       http_cookie_append(hc->hc_hostname, hf->hf_path, &headers);
       http_headers_send(&q, &headers, NULL);
       if(hf->hf_debug)
-	htsbuf_dump_raw_stderr(&q);
+	htsbuf_hexdump(&q, "HTTP");
 
       tcp_write_queue(hc->hc_tc, &q);
 
@@ -2378,11 +2430,10 @@ parse_propfind(http_file_t *hf, htsmsg_t *xml, fa_dir_t *fd,
 	if(!isdir) {
 	  if((d = get_cdata_by_tag(c, "DAV:getcontentlength")) != NULL)
 	    hf->hf_filesize = strtoll(d, NULL, 10);
-
-	  hf->hf_mtime = 0;
-	  if((d = get_cdata_by_tag(c, "DAV:getlastmodified")) != NULL)
-	    http_ctime(&hf->hf_mtime, d);
-	}
+        }
+        hf->hf_mtime = 0;
+        if((d = get_cdata_by_tag(c, "DAV:getlastmodified")) != NULL)
+          http_ctime(&hf->hf_mtime, d);
 	goto ok;
       } 
     }
@@ -2631,7 +2682,7 @@ http_request(const char *url, const char **arguments,
   if(headers_out != NULL)
     LIST_INIT(headers_out);
   hf->hf_version = 1;
-  hf->hf_debug = !!(flags & FA_DEBUG);
+  hf->hf_debug = !!(flags & FA_DEBUG) || gconf.enable_http_debug;
   hf->hf_req_compression = !!(flags & FA_COMPRESSION);
   hf->hf_url = strdup(url);
 
@@ -2689,13 +2740,13 @@ http_request(const char *url, const char **arguments,
   http_headers_send(&q, &headers, headers_in);
 
   if(hf->hf_debug)
-    htsbuf_dump_raw_stderr(&q);
+    htsbuf_hexdump(&q, "HTTP");
 
   tcp_write_queue(hf->hf_connection->hc_tc, &q);
 
   if(postdata != NULL) {
     if(hf->hf_debug)
-      htsbuf_dump_raw_stderr(postdata);
+      htsbuf_hexdump(&q, "HTTP-POSTDATA");
 
     tcp_write_queue_dontfree(hf->hf_connection->hc_tc, postdata);
   }
@@ -2840,7 +2891,7 @@ http_request(const char *url, const char **arguments,
     char *buf = NULL;
     size_t size = 0;
 
-    hra.total = 0;
+    hra.total = hf->hf_filesize;
 
     if(hf->hf_chunked_transfer) {
       char chunkheader[100];
@@ -2898,14 +2949,14 @@ http_request(const char *url, const char **arguments,
       z.next_in = (void *)buf;
       z.avail_in = size;
       
-      z.avail_out = 3 * hf->hf_filesize;
+      z.avail_out = 3 * size;
       uint8_t *buf2 = z.next_out = malloc(z.avail_out + 1);
 
       while(1) {
 	int zr = inflate(&z, 0);
 	if(zr < 0) {
-	  snprintf(errbuf, errlen, "zlib error %d (%d %d)", zr,
-		   z.avail_in, z.avail_out);
+	  snprintf(errbuf, errlen, "zlib error %d (%d %d %"PRId64")", zr,
+		   z.avail_in, z.avail_out, hf->hf_filesize);
 	  free(buf);
 	  free(buf2);
 	  goto error;

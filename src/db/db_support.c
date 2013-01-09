@@ -85,13 +85,19 @@ db_step(sqlite3_stmt *pStmt)
 }
 
 int
-db_prepare(sqlite3 *db, const char *zSql, int nSql,
-	   sqlite3_stmt **ppStmt, const char **pz)
+db_preparex(sqlite3 *db, sqlite3_stmt **ppStmt, const char *zSql, 
+	    const char *file, int line)
 {
   int rc;
-  while( SQLITE_LOCKED==(rc = sqlite3_prepare_v2(db, zSql, nSql, ppStmt, pz)) ){
+
+  while(SQLITE_LOCKED==(rc = sqlite3_prepare_v2(db, zSql, -1, ppStmt, NULL))) {
     rc = wait_for_unlock_notify(db);
     if( rc!=SQLITE_OK ) break;
+  }
+
+  if(rc != SQLITE_OK) {
+    TRACE(TRACE_ERROR, "SQLITE", "SQL Error %d at %s:%d",
+	  rc, file, line);
   }
   return rc;
 }
@@ -126,7 +132,7 @@ db_get_int64_from_query(sqlite3 *db, const char *query, int64_t *v)
   sqlite3_stmt *stmt;
 
  restart:
-  rc = db_prepare(db, query, -1, &stmt, NULL);
+  rc = db_prepare(db, &stmt, query);
   if(rc) {
     if(rc == SQLITE_LOCKED)
       goto restart;
@@ -208,6 +214,7 @@ db_upgrade_schema(sqlite3 *db, const char *schemadir, const char *dbname)
   char buf[256];
 
   db_one_statement(db, "pragma journal_mode=wal;", NULL);
+  db_one_statement(db, "pragma case_sensitive_like=1;", NULL);
 
   if(db_get_int_from_query(db, "pragma user_version", &ver)) {
     TRACE(TRACE_ERROR, "DB", "%s: Unable to query db version", dbname);
@@ -438,4 +445,139 @@ rstr_t *
 db_rstr(sqlite3_stmt *stmt, int col)
 {
   return rstr_alloc((const char *)sqlite3_column_text(stmt, col));
+}
+
+
+/**
+ *
+ */
+int
+db_posint(sqlite3_stmt *stmt, int col)
+{
+  if(sqlite3_column_type(stmt, col) == SQLITE_INTEGER)
+    return sqlite3_column_int(stmt, col);
+  return -1;
+}
+
+
+/**
+ *
+ */
+void
+db_escape_path_query(char *dst, size_t dstlen, const char *src)
+{
+  for(; *src && dstlen > 3; dstlen--) {
+    if(*src == '%' || *src == '_') {
+      *dst++ = '\\';
+      *dst++ = *src++;
+      dstlen--;
+    } else {
+      *dst++ = *src++;
+    }
+  }
+  *dst++ = '%';
+  *dst = 0;
+}
+
+
+
+
+#if ENABLE_SQLITE_LOCKING
+
+/**
+ * Sqlite mutex helpers
+ */
+static hts_mutex_t static_mutexes[6];
+
+static int
+sqlite_mutex_init(void)
+{
+  int i;
+  for(i = 0; i < 6; i++)
+    hts_mutex_init(&static_mutexes[i]);
+  return SQLITE_OK;
+}
+
+static int
+sqlite_mutex_end(void)
+{
+  return SQLITE_OK;
+}
+
+static sqlite3_mutex *
+sqlite_mutex_alloc(int id)
+{
+  hts_mutex_t *m;
+
+  switch(id) {
+  case SQLITE_MUTEX_FAST:
+    m = malloc(sizeof(hts_mutex_t));
+    hts_mutex_init(m);
+    break;
+
+  case SQLITE_MUTEX_RECURSIVE:
+    m = malloc(sizeof(hts_mutex_t));
+    hts_mutex_init_recursive(m);
+    break;
+    
+  case SQLITE_MUTEX_STATIC_MASTER: m=&static_mutexes[0]; break;
+  case SQLITE_MUTEX_STATIC_MEM:    m=&static_mutexes[1]; break;
+  case SQLITE_MUTEX_STATIC_MEM2:   m=&static_mutexes[2]; break;
+  case SQLITE_MUTEX_STATIC_PRNG:   m=&static_mutexes[3]; break;
+  case SQLITE_MUTEX_STATIC_LRU:    m=&static_mutexes[4]; break;
+  case SQLITE_MUTEX_STATIC_LRU2:   m=&static_mutexes[5]; break;
+  default:
+    return NULL;
+  }
+  return (sqlite3_mutex *)m;
+}
+
+static void
+sqlite_mutex_free(sqlite3_mutex *M)
+{
+  hts_mutex_t *m = (hts_mutex_t *)M;
+  hts_mutex_destroy(m);
+  free(m);
+}
+
+static void
+sqlite_mutex_enter(sqlite3_mutex *M)
+{
+  hts_mutex_t *m = (hts_mutex_t *)M;
+  hts_mutex_lock(m);
+}
+
+static void
+sqlite_mutex_leave(sqlite3_mutex *M)
+{
+  hts_mutex_t *m = (hts_mutex_t *)M;
+  hts_mutex_unlock(m);
+}
+
+static int
+sqlite_mutex_try(sqlite3_mutex *m)
+{
+  return SQLITE_BUSY;
+}
+
+static struct sqlite3_mutex_methods sqlite_mutexes = {
+  sqlite_mutex_init,
+  sqlite_mutex_end,
+  sqlite_mutex_alloc,
+  sqlite_mutex_free,
+  sqlite_mutex_enter,
+  sqlite_mutex_try,
+  sqlite_mutex_leave,
+};
+#endif
+
+
+
+void
+db_init(void)
+{
+#if ENABLE_SQLITE_LOCKING
+  sqlite3_config(SQLITE_CONFIG_MUTEX, &sqlite_mutexes);
+#endif
+  sqlite3_initialize();
 }

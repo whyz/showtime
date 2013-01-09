@@ -82,7 +82,7 @@ gvo_create(int64_t pts, int type)
 {
   glw_video_overlay_t *gvo = calloc(1, sizeof(glw_video_overlay_t));
   gvo->gvo_start = pts;
-  gvo->gvo_stop = AV_NOPTS_VALUE;
+  gvo->gvo_stop = PTS_UNSET;
   gvo->gvo_alpha = 1;
   gvo->gvo_type = type;
   return gvo;
@@ -128,7 +128,7 @@ gvo_flush_infinite(glw_video_t *gv)
   for(gvo = LIST_FIRST(&gv->gv_overlays); gvo != NULL; gvo = next) {
     next = LIST_NEXT(gvo, gvo_link);
 
-    if(gvo->gvo_stop == AV_NOPTS_VALUE || gvo->gvo_stop_estimated)
+    if(gvo->gvo_stop == PTS_UNSET || gvo->gvo_stop_estimated)
       gvo_destroy(gv, gvo);
   }
 }
@@ -146,7 +146,7 @@ gvo_set_pts(glw_video_t *gv, int64_t pts)
   for(gvo = LIST_FIRST(&gv->gv_overlays); gvo != NULL; gvo = next) {
     next = LIST_NEXT(gvo, gvo_link);
 
-    if(gvo->gvo_stop != AV_NOPTS_VALUE && gvo->gvo_stop <= pts) {
+    if(gvo->gvo_stop != PTS_UNSET && gvo->gvo_stop <= pts) {
       gvo_destroy(gv, gvo);
       continue;
     }
@@ -377,7 +377,7 @@ glw_video_overlay_render(glw_video_t *gv, const glw_rctx_t *frc,
 
       glw_renderer_draw(&gvo->gvo_renderer, gr, &rc0,
 			&gvo->gvo_texture, NULL, NULL,
-			gvo->gvo_alpha * rc0.rc_alpha, 0);
+			gvo->gvo_alpha * rc0.rc_alpha, 0, NULL);
       break;
 
     case GVO_TEXT:
@@ -467,10 +467,11 @@ spu_repaint(glw_video_t *gv, dvdspu_t *d)
 {
   int width  = d->d_x2 - d->d_x1;
   int height = d->d_y2 - d->d_y1;
-  int outsize = width * height * 4;
-  uint32_t *tmp, *t0; 
   int x, y, i;
   uint8_t *buf = d->d_bitmap;
+
+  if(width < 1 || height < 1)
+    return;
 
 #if ENABLE_DVD  
   video_decoder_t *vd = gv->gv_vd;
@@ -501,11 +502,12 @@ spu_repaint(glw_video_t *gv, dvdspu_t *d)
   ha.ey -= d->d_y1;
 #endif
 
-  t0 = tmp = malloc(outsize);
+  pixmap_t *pm = pixmap_create(width, height, PIXMAP_BGR32, 0);
 
   /* XXX: this can be optimized in many ways */
 
   for(y = 0; y < height; y++) {
+    uint32_t *tmp = pm->pm_data + y * pm->pm_linesize;
     for(x = 0; x < width; x++) {
       i = buf[0];
 
@@ -544,7 +546,7 @@ spu_repaint(glw_video_t *gv, dvdspu_t *d)
   gvo_flush_all(gv);
 
   
-  glw_video_overlay_t *gvo = gvo_create(AV_NOPTS_VALUE, GVO_DVDSPU);
+  glw_video_overlay_t *gvo = gvo_create(PTS_UNSET, GVO_DVDSPU);
 
   gvo->gvo_canvas_width   = d->d_canvas_width;
   gvo->gvo_canvas_height  = d->d_canvas_height;
@@ -571,9 +573,8 @@ spu_repaint(glw_video_t *gv, dvdspu_t *d)
   glw_renderer_vtx_pos(r, 3, d->d_x1, d->d_y1, 0.0f);
   glw_renderer_vtx_st (r, 3, 0, 0);
 
-  glw_tex_upload(gr, &gvo->gvo_texture, t0, GLW_TEXTURE_FORMAT_BGR32,
-		 width, height, 0);
-  free(t0);
+  glw_tex_upload(gr, &gvo->gvo_texture, pm, 0);
+  pixmap_release(pm);
 }
 
 
@@ -634,7 +635,6 @@ gvo_create_from_vo_bitmap(glw_video_t *gv, video_overlay_t *vo)
 {
   glw_video_overlay_t *gvo = gvo_create(vo->vo_start, GVO_BITMAP);
   glw_root_t *gr = gv->w.glw_root;
-  int fmt;
 
   pixmap_t *pm = vo->vo_pixmap;
   int W = pm->pm_width;
@@ -678,20 +678,8 @@ gvo_create_from_vo_bitmap(glw_video_t *gv, video_overlay_t *vo)
     gvo->gvo_height = pm->pm_height;
   }
 
-  switch(pm->pm_type) {
-  case PIXMAP_IA:
-    fmt = GLW_TEXTURE_FORMAT_I8A8;
-    break;
 
-  case PIXMAP_BGR32:
-    fmt = GLW_TEXTURE_FORMAT_BGR32;
-    break;
-
-  default:
-    return;
-  }
-
-  glw_tex_upload(gr, &gvo->gvo_texture, pm->pm_pixels, fmt, W, H, 0);
+  glw_tex_upload(gr, &gvo->gvo_texture, pm, 0);
 }
 
 /**
@@ -827,7 +815,7 @@ glw_video_overlay_set_pts(glw_video_t *gv, int64_t pts)
 
   glw_video_overlay_spu_layout(gv, pts);
   pts -= vd->vd_mp->mp_svdelta;
-  pts -= vd->vd_mp->mp_pts_delta_for_subs;
+  pts -= vd->vd_mp->mp_start_time;
 
   glw_video_overlay_sub_set_pts(gv, pts);
 }

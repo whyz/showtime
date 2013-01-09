@@ -28,6 +28,8 @@ typedef struct glw_slideshow {
   int timer;
 
   float time;
+  float transition_time;
+
   int displaytime;
 
   prop_t *playstatus;
@@ -85,8 +87,7 @@ glw_slideshow_layout(glw_slideshow_t *s, glw_rctx_t *rc)
   glw_t *c, *p, *n;
   float delta;
 
-  delta = 0.1f;
-
+  delta = s->w.glw_root->gr_frameduration / (1000000.0 * s->transition_time);
   if(s->time == 0) {
     s->displaytime = INT32_MAX;
   } else {
@@ -94,8 +95,11 @@ glw_slideshow_layout(glw_slideshow_t *s, glw_rctx_t *rc)
   }
 
     
-  if((c = s->w.glw_focused) == NULL)
+  if((c = s->w.glw_focused) == NULL) {
     c = s->w.glw_focused = glw_first_widget(&s->w);
+    if(c)
+      glw_copy_constraints(&s->w, c);
+  }
   if(c == NULL)
     return;
 
@@ -104,8 +108,10 @@ glw_slideshow_layout(glw_slideshow_t *s, glw_rctx_t *rc)
     if(c == NULL)
       c = glw_first_widget(&s->w);
     s->timer = 0;
-    if(c != NULL)
-      glw_focus_set(s->w.glw_root, c, GLW_FOCUS_SET_INTERACTIVE);
+    if(c != NULL) {
+      glw_focus_open_path_close_all_other(c);
+      glw_copy_constraints(&s->w, c);
+    }
   }
   
   if(!s->hold)
@@ -152,22 +158,30 @@ static int
 glw_slideshow_event(glw_slideshow_t *s, event_t *e)
 {
   glw_t *c;
+  event_int_t *eu = (event_int_t *)e;
 
-  if(event_is_action(e, ACTION_SKIP_FORWARD)) {
-
+  if(event_is_action(e, ACTION_SKIP_FORWARD) ||
+     event_is_action(e, ACTION_RIGHT)) {
     c = s->w.glw_focused ? glw_next_widget(s->w.glw_focused) : NULL;
     if(c == NULL)
       c = glw_first_widget(&s->w);
     s->w.glw_focused = c;
     s->timer = 0;
 
-  } else if(event_is_action(e, ACTION_SKIP_BACKWARD)) {
+  } else if(event_is_action(e, ACTION_SKIP_BACKWARD) ||
+	    event_is_action(e, ACTION_LEFT)) {
 
     c = s->w.glw_focused ? glw_prev_widget(s->w.glw_focused) : NULL;
     if(c == NULL)
       c = glw_last_widget(&s->w);
     s->w.glw_focused = c;
     s->timer = 0;
+
+  } else if(event_is_type(e, EVENT_UNICODE) && eu->val == 32) {
+
+    s->hold = !s->hold;
+    glw_slideshow_update_playstatus(s);
+    
 
   } else if(event_is_action(e, ACTION_PLAYPAUSE) ||
 	    event_is_action(e, ACTION_PLAY) ||
@@ -202,8 +216,13 @@ glw_slideshow_callback(glw_t *w, void *opaque, glw_signal_t signal,
     glw_slideshow_layout(s, extra);
     return 0;
 
-  case GLW_SIGNAL_EVENT:
+  case GLW_SIGNAL_EVENT_BUBBLE:
     return glw_slideshow_event(s, extra);
+
+  case GLW_SIGNAL_CHILD_CONSTRAINTS_CHANGED:
+    if(w->glw_focused == extra)
+      glw_copy_constraints(w, extra);
+    return 1;
 
   default:
     break;
@@ -220,6 +239,7 @@ glw_slideshow_ctor(glw_t *w)
 {
   glw_slideshow_t *s = (glw_slideshow_t *)w;
   s->time = 5.0;
+  s->transition_time = 0.5;
 }
 
 
@@ -239,6 +259,10 @@ glw_slideshow_set(glw_t *w, va_list ap)
 
     case GLW_ATTRIB_TIME:
       s->time = va_arg(ap, double);
+      break;
+
+    case GLW_ATTRIB_TRANSITION_TIME:
+      s->transition_time = va_arg(ap, double);
       break;
 
     case GLW_ATTRIB_PROPROOTS3:

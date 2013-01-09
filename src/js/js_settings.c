@@ -1,6 +1,7 @@
 /*
  *  JSAPI <-> Setting objects
  *  Copyright (C) 2010 Andreas Öman
+ *  Copyright (C) 2012 Fábio Ferreira
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -219,7 +220,7 @@ js_store_update_bool(void *opaque, int value)
   js_setting_t *jss = opaque;
   settings_update(settings_get_cx(jss), jss, BOOLEAN_TO_JSVAL(!!value));
   if(jss->jss_key != NULL)
-    kv_url_opt_set(jss->jss_jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN,
+    kv_url_opt_set(jss->jss_jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN,
 		   jss->jss_key, KVSTORE_SET_INT, !!value);
 }
 
@@ -235,7 +236,7 @@ js_store_update_string(void *opaque, const char *str)
 		  str ? STRING_TO_JSVAL(JS_NewStringCopyZ(cx, str))
 		  : JSVAL_NULL);
   if(jss->jss_key != NULL)
-    kv_url_opt_set(jss->jss_jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN,
+    kv_url_opt_set(jss->jss_jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN,
 		   jss->jss_key, KVSTORE_SET_STRING, str);
 }
 
@@ -249,7 +250,7 @@ js_store_update_int(void *opaque, int value)
   js_setting_t *jss = opaque;
   settings_update(settings_get_cx(jss), jss, INT_TO_JSVAL(value));
   if(jss->jss_key != NULL)
-    kv_url_opt_set(jss->jss_jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN,
+    kv_url_opt_set(jss->jss_jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN,
 		   jss->jss_key, KVSTORE_SET_INT, value);
 }
 
@@ -327,7 +328,7 @@ js_createBool(JSContext *cx, JSObject *obj, uintN argc,
     return JS_FALSE;
 
   if(persistent && jsg->jsg_kv_url)
-    def = kv_url_opt_get_int(jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN, 
+    def = kv_url_opt_get_int(jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN, 
 			     id, def);
 
   jss->jss_s =
@@ -367,7 +368,7 @@ js_createString(JSContext *cx, JSObject *obj, uintN argc,
 
   rstr_t *r = NULL;
   if(persistent && jsg->jsg_kv_url) {
-    r = kv_url_opt_get_rstr(jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN, id);
+    r = kv_url_opt_get_rstr(jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN, id);
     if(r != NULL)
       def = rstr_get(r);
   }
@@ -459,7 +460,7 @@ js_createMultiOpt(JSContext *cx, JSObject *obj, uintN argc,
 
   rstr_t *r = NULL;
   if(persistent && jsg->jsg_kv_url)
-    r = kv_url_opt_get_rstr(jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN, id);
+    r = kv_url_opt_get_rstr(jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN, id);
 
   add_multiopt(cx, jss, options, rstr_get(r));
 
@@ -506,7 +507,7 @@ js_createDivider(JSContext *cx, JSObject *obj, uintN argc,
   if(!JS_ConvertArguments(cx, argc, argv, "s", &title))
     return JS_FALSE;
 
-  settings_create_divider(jsg->jsg_root, _p(title));
+  settings_create_separator(jsg->jsg_root, _p(title));
   return JS_TRUE;
 }
 
@@ -541,7 +542,7 @@ js_createInt(JSContext *cx, JSObject *obj, uintN argc,
     return JS_FALSE;
 
   if(persistent && jsg->jsg_kv_url)
-    def = kv_url_opt_get_int(jsg->jsg_kv_url, KVSTORE_PAGE_DOMAIN_PLUGIN, 
+    def = kv_url_opt_get_int(jsg->jsg_kv_url, KVSTORE_DOMAIN_PLUGIN, 
 			     id, def);
 
   jss->jss_s =
@@ -581,7 +582,7 @@ js_createAction(JSContext *cx, JSObject *obj, uintN argc,
   jss->jss_s =
     settings_create_action(jsg->jsg_root, _p(title), 
 			   js_action_function, jss, 
-			   js_global_pc);
+			   jsg->jsg_settings_flags, js_global_pc);
 
   jss->jss_cx = NULL;
 
@@ -792,7 +793,7 @@ js_createSettings(JSContext *cx, JSObject *obj, uintN argc,
   jsg->jsg_store = htsmsg_store_load(spath) ?: htsmsg_create_map();
   jsg->jsg_root_owner = 1;
   jsg->jsg_root =
-    prop_ref_inc(settings_add_dir_cstr(settings_apps, title,
+    prop_ref_inc(settings_add_dir_cstr(gconf.settings_apps, title,
 				  NULL, icon, desc, NULL));
   robj = JS_NewObjectWithGivenProto(cx, &setting_group_class, NULL, obj);
   jsg->jsg_val = *rval = OBJECT_TO_JSVAL(robj);

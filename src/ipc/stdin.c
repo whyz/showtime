@@ -22,11 +22,9 @@
 #include <termios.h>
 #include <string.h>
 
+#include "showtime.h"
 #include "arch/threads.h"
 #include "event.h"
-#include "ui/ui.h"
-
-#include "ipc.h"
 
 
 #define ESEQ(n...) (const uint8_t []){n}
@@ -34,28 +32,28 @@
 const static struct {
   const uint8_t *codes;
   int action;
-  const char *desc;
+  int fkey;
 } map[] = {
-  {ESEQ(0x1b,0x5b,0x41,0x00),               ACTION_UP,    NULL },
-  {ESEQ(0x1b,0x5b,0x42,0x00),               ACTION_DOWN,  NULL },
-  {ESEQ(0x1b,0x5b,0x43,0x00),               ACTION_RIGHT, NULL },
-  {ESEQ(0x1b,0x5b,0x44,0x00),               ACTION_LEFT,  NULL },
-  {ESEQ(0x1b,0x4f,0x50,0x00),               0,            "F1" },
-  {ESEQ(0x1b,0x4f,0x51,0x00),               0,            "F2" },
-  {ESEQ(0x1b,0x4f,0x52,0x00),               0,            "F3" },
-  {ESEQ(0x1b,0x4f,0x53,0x00),               0,            "F4" },
-  {ESEQ(0x1b,0x5b,0x31,0x35,0x7e,0x00),     0,            "F5" },
-  {ESEQ(0x1b,0x5b,0x31,0x37,0x7e,0x00),     0,            "F6" },
-  {ESEQ(0x1b,0x5b,0x31,0x38,0x7e,0x00),     0,            "F7" },
-  {ESEQ(0x1b,0x5b,0x31,0x39,0x7e,0x00),     0,            "F8" },
-  {ESEQ(0x1b,0x5b,0x32,0x30,0x7e,0x00),     0,            "F9" },
-  {ESEQ(0x1b,0x5b,0x32,0x31,0x7e,0x00),     0,            "F10" },
-  {ESEQ(0x1b,0x5b,0x32,0x32,0x7e,0x00),     0,            "F11" },
-  {ESEQ(0x1b,0x5b,0x32,0x33,0x7e,0x00),     0,            "F12" },
-  {ESEQ(0x1b,0x5b,0x35,0x7e,0x00),          0,            "Prior"},
-  {ESEQ(0x1b,0x5b,0x36,0x7e,0x00),          0,            "Next"},
-  {ESEQ(0x1b,0x4f,0x48,0x00),               0,            "Home"},
-  {ESEQ(0x1b,0x4f,0x46,0x00),               0,            "End"},
+  {ESEQ(0x1b,0x5b,0x41,0x00),               ACTION_UP,    0 },
+  {ESEQ(0x1b,0x5b,0x42,0x00),               ACTION_DOWN,  0 },
+  {ESEQ(0x1b,0x5b,0x43,0x00),               ACTION_RIGHT, 0 },
+  {ESEQ(0x1b,0x5b,0x44,0x00),               ACTION_LEFT,  0 },
+  {ESEQ(0x1b,0x4f,0x50,0x00),               0,            0x1 },
+  {ESEQ(0x1b,0x4f,0x51,0x00),               0,            0x2 },
+  {ESEQ(0x1b,0x4f,0x52,0x00),               0,            0x3 },
+  {ESEQ(0x1b,0x4f,0x53,0x00),               0,            0x4 },
+  {ESEQ(0x1b,0x5b,0x31,0x35,0x7e,0x00),     0,            0x5 },
+  {ESEQ(0x1b,0x5b,0x31,0x37,0x7e,0x00),     0,            0x6 },
+  {ESEQ(0x1b,0x5b,0x31,0x38,0x7e,0x00),     0,            0x7 },
+  {ESEQ(0x1b,0x5b,0x31,0x39,0x7e,0x00),     0,            0x8 },
+  {ESEQ(0x1b,0x5b,0x32,0x30,0x7e,0x00),     0,            0x9 },
+  {ESEQ(0x1b,0x5b,0x32,0x31,0x7e,0x00),     0,            0xa },
+  {ESEQ(0x1b,0x5b,0x32,0x32,0x7e,0x00),     0,            0xb },
+  {ESEQ(0x1b,0x5b,0x32,0x33,0x7e,0x00),     0,            0xc },
+  {ESEQ(0x1b,0x5b,0x35,0x7e,0x00),          ACTION_PAGE_UP},
+  {ESEQ(0x1b,0x5b,0x36,0x7e,0x00),          ACTION_PAGE_DOWN},
+  {ESEQ(0x1b,0x4f,0x48,0x00),               ACTION_TOP},
+  {ESEQ(0x1b,0x4f,0x46,0x00),               ACTION_BOTTOM},
 };
 
 
@@ -136,8 +134,8 @@ stdin_thread(void *aux)
 
 	    if(map[i].action) {
 	      e = event_create_action(map[i].action);
-	    } else if(map[i].desc != NULL) {
-	      e = event_create_str(EVENT_KEYDESC, map[i].desc);
+	    } else if(map[i].fkey) {
+	      e = event_from_Fkey(map[i].fkey, 0);
 	    }
 	    break;
 	  }
@@ -158,25 +156,44 @@ stdin_thread(void *aux)
 
     if(e == NULL)
       continue;
-    ui_primary_event(e);
+    event_to_ui(e);
   }
   return NULL;
 }
 
+static struct termios termio;
 
+/**
+ *
+ */
+static void
+stdin_shutdown_early(void *opaque, int exitcode)
+{
+  tcsetattr(0, TCSANOW, &termio);
+}
 
-void
+static void
 stdin_start(void)
 {
-  struct termios termio;
+  if(!gconf.listen_on_stdin)
+    return;
+
+  struct termios termio2;
 
   if(!isatty(0))
     return;
   if(tcgetattr(0, &termio) == -1)
     return;
-  termio.c_lflag &= ~(ECHO | ICANON);
-  if(tcsetattr(0, TCSANOW, &termio) == -1)
+  termio2 = termio;
+  termio2.c_lflag &= ~(ECHO | ICANON);
+  if(tcsetattr(0, TCSANOW, &termio2) == -1)
     return;
+
+  shutdown_hook_add(stdin_shutdown_early, NULL, 0);
+
   hts_thread_create_detached("stdin", stdin_thread, NULL,
 			     THREAD_PRIO_NORMAL);
 }
+
+
+INITME(INIT_GROUP_IPC, stdin_start);

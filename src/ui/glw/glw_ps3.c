@@ -27,23 +27,28 @@
 #include <malloc.h>
 
 #include "glw.h"
+#include "glw_settings.h"
 #include "glw_video_common.h"
 
 #include "showtime.h"
 #include "settings.h"
 #include "misc/extents.h"
-
+#include "misc/str.h"
+#include "navigator.h"
 
 #include <psl1ght/lv2.h>
 #include <rsx/commands.h>
 #include <rsx/nv40.h>
 #include <rsx/reality.h>
 
+#include <psl1ght/lv2/memory.h>
+
 #include <sysutil/video.h>
 #include <sysutil/events.h>
 
 #include <io/pad.h>
 #include <io/kb.h>
+#include <io/osk.h>
 
 #include <sysmodule/sysmodule.h>
 
@@ -54,8 +59,6 @@ typedef struct glw_ps3 {
 
   glw_root_t gr;
 
-  int stop;
-  
   VideoResolution res;
 
   u32 framebuffer[2];
@@ -71,12 +74,16 @@ typedef struct glw_ps3 {
   float scale;
   int button_assign;
 
+  struct glw *osk_widget;
+  mem_container_t osk_container;
+
 } glw_ps3_t;
 
 
 char *rsx_address;
 static struct extent_pool *rsx_mempool;
 static hts_mutex_t rsx_mempool_lock;
+static void clear_btns(void);
 
 
 
@@ -263,13 +270,123 @@ glw_ps3_init(glw_ps3_t *gp)
 }
 
 
+/**
+ *
+ */
+static void
+osk_returned(glw_ps3_t *gp)
+{
+  oskCallbackReturnParam param = {0};
+  uint8_t ret[512];
+  uint8_t buf[512];
+  
+  if(param.result != 0)
+    return;
+
+  assert(gp->osk_widget != NULL);
+
+  param.length = sizeof(ret)/2;
+  param.str_addr = (intptr_t)ret;
+  oskUnloadAsync(&param);
+
+  ucs2_to_utf8(buf, sizeof(buf), ret, sizeof(ret), 0);
+
+  glw_lock(&gp->gr);
+
+  glw_t *w = gp->osk_widget;
+  if(!(w->glw_flags & GLW_DESTROYING) && w->glw_class->gc_update_text) {
+    w->glw_class->gc_update_text(w, (const char *)buf);
+  }
+  glw_unlock(&gp->gr);
+}
+
+
+/**
+ *
+ */
+static void
+osk_destroyed(glw_ps3_t *gp)
+{
+  glw_t *w = gp->osk_widget;
+  assert(w != NULL);
+
+  if(!(w->glw_flags & GLW_DESTROYING)) {
+    event_t *e = event_create_action(ACTION_SUBMIT);
+    glw_event_to_widget(w, e, 0);
+    event_release(e);
+  }
+  glw_unref(w);
+  gp->osk_widget = NULL;
+
+  if(gp->osk_container != 0xFFFFFFFFU)
+    lv2MemContinerDestroy(gp->osk_container);
+}
+
+/**
+ *
+ */
+static void
+osk_open(glw_root_t *gr, const char *title, const char *input, glw_t *w,
+	 int password)
+{
+  oskParam param = {0};
+  oskInputFieldInfo ifi = {0};
+  glw_ps3_t *gp = (glw_ps3_t *)gr;
+  
+  if(gp->osk_widget)
+    return;
+
+  if(title == NULL)
+    title = "";
+
+  void *title16;
+  void *input16;
+
+  size_t s;
+  s = utf8_to_ucs2(NULL, title, 0);
+  title16 = malloc(s);
+  utf8_to_ucs2(title16, title, 0);
+
+  s = utf8_to_ucs2(NULL, input, 0);
+  input16 = malloc(s);
+  utf8_to_ucs2(input16, input, 0);
+
+  param.firstViewPanel = password ? OSK_PANEL_TYPE_PASSWORD :
+    OSK_PANEL_TYPE_DEFAULT;
+  param.allowedPanels = param.firstViewPanel;
+  param.prohibitFlags = OSK_PROHIBIT_RETURN;
+
+  ifi.message_addr = (intptr_t)title16;
+  ifi.startText_addr = (intptr_t)input16;
+  ifi.maxLength = 256;
+
+  if(lv2MemContinerCreate(&gp->osk_container, 2 * 1024 * 1024))
+    gp->osk_container = 0xFFFFFFFFU;
+
+  oskSetKeyLayoutOption(3);
+
+  int ret = oskLoadAsync(gp->osk_container, &param, &ifi);
+
+  if(!ret) {
+    gp->osk_widget = w;
+    glw_ref(w);
+  }
+
+  free(title16);
+  free(input16);
+}
+
+
+/**
+ *
+ */
 static void 
 eventHandle(u64 status, u64 param, void *userdata) 
 {
   glw_ps3_t *gp = userdata;
   switch(status) {
   case EVENT_REQUEST_EXITAPP:
-    gp->stop = 1;
+    gp->gr.gr_stop = 1;
     break;
   case EVENT_MENU_OPEN:
     TRACE(TRACE_INFO, "XMB", "Opened");
@@ -281,6 +398,22 @@ eventHandle(u64 status, u64 param, void *userdata)
     break;
   case EVENT_DRAWING_END:
     break;
+  case EVENT_OSK_LOADED: 
+    TRACE(TRACE_DEBUG, "OSK", "Loaded");
+    break;
+  case EVENT_OSK_FINISHED: 
+    TRACE(TRACE_DEBUG, "OSK", "Finished");
+    osk_returned(gp);
+    break;
+  case EVENT_OSK_UNLOADED:
+    TRACE(TRACE_DEBUG, "OSK", "Unloaded");
+    osk_destroyed(gp);
+    break;
+  case EVENT_OSK_INPUT_CANCELED:
+    TRACE(TRACE_DEBUG, "OSK", "Input canceled");
+    oskAbort();
+    break;
+
   default:
     TRACE(TRACE_DEBUG, "LV2", "Unhandled event 0x%lx", status);
     break;
@@ -311,7 +444,7 @@ setupRenderTarget(glw_ps3_t *gp, u32 currentBuffer)
 }
 
 static void 
-drawFrame(glw_ps3_t *gp, int buffer, int with_universe) 
+drawFrame(glw_ps3_t *gp, int buffer, int with_universe)
 {
   gcmContextData *ctx = gp->gr.gr_be.be_ctx;
 
@@ -369,11 +502,16 @@ drawFrame(glw_ps3_t *gp, int buffer, int with_universe)
 
   glw_rctx_t rc;
   glw_rctx_init(&rc, gp->gr.gr_width * gp->scale, gp->gr.gr_height, 1);
+  rc.rc_alpha = 1 - gp->gr.gr_stop * 0.1;
   glw_layout0(gp->gr.gr_universe, &rc);
   glw_render0(gp->gr.gr_universe, &rc);
   glw_unlock(&gp->gr);
 }
 
+
+/**
+ *
+ */
 typedef enum {
   BTN_LEFT = 1,
   BTN_UP,
@@ -433,7 +571,7 @@ const static action_type_t *btn_to_action[BTN_max] = {
   [BTN_UP]         = AVEC(ACTION_UP),
   [BTN_RIGHT]      = AVEC(ACTION_RIGHT),
   [BTN_DOWN]       = AVEC(ACTION_DOWN),
-  [BTN_CROSS]      = AVEC(ACTION_ACTIVATE, ACTION_ENTER),
+  [BTN_CROSS]      = AVEC(ACTION_ACTIVATE),
   [BTN_CIRCLE]     = AVEC(ACTION_NAV_BACK),
   [BTN_TRIANGLE]   = AVEC(ACTION_MENU),
   [BTN_SQUARE]     = AVEC(ACTION_ITEMMENU, ACTION_SHOW_MEDIA_STATS),
@@ -441,6 +579,7 @@ const static action_type_t *btn_to_action[BTN_max] = {
   [BTN_L1]         = AVEC(ACTION_SKIP_BACKWARD, ACTION_NAV_BACK),
   [BTN_R1]         = AVEC(ACTION_SKIP_FORWARD, ACTION_NAV_FWD),
 
+  [BTN_L3]         = AVEC(ACTION_SYSINFO),
   [BTN_R3]         = AVEC(ACTION_LOGWINDOW),
   [BTN_START]      = AVEC(ACTION_PLAYPAUSE),
   [BTN_ENTER]      = AVEC(ACTION_ACTIVATE, ACTION_ENTER),
@@ -466,6 +605,8 @@ const static action_type_t *btn_to_action_sel[BTN_max] = {
   [BTN_RIGHT]      = AVEC(ACTION_MOVE_RIGHT),
   [BTN_DOWN]       = AVEC(ACTION_MOVE_DOWN),
   [BTN_TRIANGLE]   = AVEC(ACTION_SWITCH_VIEW),
+  [BTN_CIRCLE]     = AVEC(ACTION_STOP),
+  [BTN_START]      = AVEC(ACTION_PLAYQUEUE),
 };
 
 
@@ -475,8 +616,27 @@ static int16_t button_counter[MAX_PADS][BTN_max];
 static PadData paddata[MAX_PADS];
 
 
+static void
+clear_btns(void)
+{
+  memset(button_counter, 0, sizeof(button_counter));
+}
+
 #define KEY_REPEAT_DELAY 30 // in frames
 #define KEY_REPEAT_RATE  3  // in frames
+
+
+static void
+handle_seek(glw_ps3_t *gp, int pad, int sign, int pressed, int pre)
+{
+  if(pressed && pre > 10) {
+    event_t *e = event_create_int3(EVENT_DELTA_SEEK_REL, pre, sign, 
+				   gp->gr.gr_framerate);
+    event_dispatch(e);
+  }
+}
+
+
 
 static void
 handle_btn(glw_ps3_t *gp, int pad, int code, int pressed, int sel, int pre)
@@ -491,12 +651,15 @@ handle_btn(glw_ps3_t *gp, int pad, int code, int pressed, int sel, int pre)
 
   int16_t *store = &button_counter[pad][code];
   int rate = KEY_REPEAT_RATE;
+  int xrep = 0;
   if(code == 0)
     return;
   
   if(pressed) {
 
-    if(pre > 200)
+    if(pre > 200 && *store > KEY_REPEAT_DELAY)
+      xrep = 1;
+    if(pre > 150)
       rate = 1;
     else if(pre > 100)
       rate = 2;
@@ -527,7 +690,14 @@ handle_btn(glw_ps3_t *gp, int pad, int code, int pressed, int sel, int pre)
       }
 
       if(e != NULL) {
-	glw_dispatch_event(&gp->gr.gr_uii, e);
+	event_addref(e);
+	event_to_ui(e);
+
+	if(xrep) {
+	  event_addref(e);
+	  event_to_ui(e);
+	}
+
 	event_release(e);
       }
     }
@@ -668,9 +838,14 @@ handle_pads(glw_ps3_t *gp)
   PadInfo2 padinfo2;
   int i;
 
+  if(gp->osk_widget) {
+    clear_btns();
+    return;
+  }
+
   // Check the pads.
   ioPadGetInfo2(&padinfo2);
-  for(i=0; i<MAX_PADS; i++){
+  for(i=0; i<7; i++){
     if(!padinfo2.port_status[i])
       continue;
 
@@ -707,10 +882,12 @@ handle_pads(glw_ps3_t *gp)
     handle_btn(gp, i, BTN_START,    pd->BTN_START,    sel, 0);
     handle_btn(gp, i, BTN_R1,       pd->BTN_R1,       sel, pd->PRE_R1);
     handle_btn(gp, i, BTN_L1,       pd->BTN_L1,       sel, pd->PRE_L1);
-    handle_btn(gp, i, BTN_R2,       pd->BTN_R2,       sel, pd->PRE_R2);
-    handle_btn(gp, i, BTN_L2,       pd->BTN_L2,       sel, pd->PRE_L2);
     handle_btn(gp, i, BTN_R3,       pd->BTN_R3,       sel, 0);
     handle_btn(gp, i, BTN_L3,       pd->BTN_L3,       sel, 0);
+
+
+    handle_seek(gp, i, 1,        pd->BTN_R2,       pd->PRE_R2);
+    handle_seek(gp, i, -1,       pd->BTN_L2,       pd->PRE_L2);
   }
 }
 
@@ -851,8 +1028,7 @@ handle_kb(glw_ps3_t *gp)
 	      }
 
 	      if(e != NULL) {
-		glw_dispatch_event(&gp->gr.gr_uii, e);
-		event_release(e);
+		event_to_ui(e);
 		break;
 	      }
 	    }
@@ -860,8 +1036,7 @@ handle_kb(glw_ps3_t *gp)
 
 	  if(i == sizeof(kb2action) / sizeof(*kb2action) && uc < 0x8000 && uc) {
 	    e = event_create_int(EVENT_UNICODE, uc);
-	    glw_dispatch_event(&gp->gr.gr_uii, e);
-	    event_release(e);
+	    event_to_ui(e);
 	  }
 	}
       }
@@ -884,7 +1059,10 @@ glw_ps3_mainloop(glw_ps3_t *gp)
 
 
   sysRegisterCallback(EVENT_SLOT0, eventHandle, gp);
-  while(!gp->stop) {
+  while(gp->gr.gr_stop != 10) {
+
+    if(gp->gr.gr_stop)
+      gp->gr.gr_stop++;
 
     handle_pads(gp);
     handle_kb(gp);
@@ -903,39 +1081,20 @@ glw_ps3_mainloop(glw_ps3_t *gp)
   sysUnregisterCallback(EVENT_SLOT0);
 }
 
+int glw_ps3_start(void);
 
 /**
  *
  */
-static int
-glw_ps3_start(ui_t *ui, prop_t *root, int argc, char *argv[], int primary)
+int
+glw_ps3_start(void)
 {
   glw_ps3_t *gp = calloc(1, sizeof(glw_ps3_t));
-  char confname[PATH_MAX];
-  const char *theme_path = NULL;
-  const char *displayname_title  = NULL;
 
-  gp->gr.gr_uii.uii_prop = root;
+  prop_t *root = gp->gr.gr_prop_ui = prop_create(prop_get_global(), "ui");
+  gp->gr.gr_prop_nav = nav_spawn();
 
   prop_set_int(prop_create(root, "fullscreen"), 1);
-
-  snprintf(confname, sizeof(confname), "glw/ps3");
-
-  /* Parse options */
-
-  argv++;
-  argc--;
-
-  while(argc > 0) {
-    if(!strcmp(argv[0], "--theme") && argc > 1) {
-      theme_path = argv[1];
-      argc -= 2; argv += 2;
-      continue;
-    } else {
-      break;
-    }
-  }
-
 
   if(glw_ps3_init(gp))
      return 1;
@@ -952,9 +1111,11 @@ glw_ps3_start(ui_t *ui, prop_t *root, int argc, char *argv[], int primary)
     gr->gr_base_underscan_h = 36;
     gr->gr_base_underscan_v = 20;
   }
-  
-  if(glw_init(gr, theme_path, ui, primary, confname, displayname_title))
+
+  if(glw_init(gr))
     return 1;
+
+  gr->gr_open_osk = osk_open;
 
   TRACE(TRACE_DEBUG, "GLW", "loading universe");
 
@@ -965,38 +1126,3 @@ glw_ps3_start(ui_t *ui, prop_t *root, int argc, char *argv[], int primary)
   glw_reap(gr);
   return 0;
 }
-
-
-/**
- *
- */
-static void
-glw_ps3_dispatch_event(uii_t *uii, event_t *e)
-{
-  /* Pass it on to GLW */
-  glw_dispatch_event(uii, e);
-  event_release(e);
-}
-
-
-/**
- *
- */
-static void
-glw_ps3_stop(uii_t *uii)
-{
-  glw_ps3_t *gp = (glw_ps3_t *)uii;
-  gp->stop = 1;
-}
-
-
-/**
- *
- */
-ui_t glw_ui = {
-  .ui_title = "glw",
-  .ui_start = glw_ps3_start,
-  .ui_dispatch_event = glw_ps3_dispatch_event,
-  .ui_stop = glw_ps3_stop,
-};
-

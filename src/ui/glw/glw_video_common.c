@@ -17,7 +17,6 @@
  */
 
 #include <assert.h>
-#include <libavutil/pixdesc.h>
 
 #include "showtime.h"
 #include "media.h"
@@ -33,8 +32,7 @@
 static glw_video_engine_t glw_video_blank;
 
 
-static void  glw_video_input(frame_buffer_type_t type, void *frame,
-			     const frame_info_t *info, void *opaque);
+static void glw_video_input(const frame_info_t *info, void *opaque);
 
 
 /**
@@ -53,14 +51,14 @@ glw_video_rctx_adjust(glw_rctx_t *rc, const glw_video_t *gv)
 		   -gr->gr_underscan_v);
   }
 
-  float t_aspect = av_q2d(gv->gv_dar);
+  float t_aspect = (float)gv->gv_dar_num / gv->gv_dar_den; 
 
-    if(video_settings.stretch_fullscreen)
-      return;
+  if(gv->gv_fstretch)
+    return;
 
   if(t_aspect * rc->rc_height < rc->rc_width) {
 
-    if(video_settings.stretch_horizontal)
+    if(gv->gv_hstretch)
       return;
 
     // Shrink X
@@ -129,6 +127,18 @@ glw_video_widget_event(event_t *e, media_pipe_t *mp, int in_menu)
       event_release(e);
       return 1;
     }
+
+    if(event_is_action(e, ACTION_UP)) {
+      e = event_create_action(ACTION_VOLUME_UP);
+      event_dispatch(e);
+      return 1;
+    }
+
+    if(event_is_action(e, ACTION_DOWN)) {
+      e = event_create_action(ACTION_VOLUME_DOWN);
+      event_dispatch(e);
+      return 1;
+    }
   }
   return 0;
 }
@@ -190,8 +200,8 @@ glw_video_compute_avdiff(glw_root_t *gr, video_decoder_t *vd, media_pipe_t *mp,
 
   hts_mutex_lock(&mp->mp_clock_mutex);
 
-  aclock = mp->mp_audio_clock + gr->gr_frame_start
-    - mp->mp_audio_clock_realtime;
+  aclock = mp->mp_audio_clock + gr->gr_frame_start_avtime
+    - mp->mp_audio_clock_avtime;
 
   hts_mutex_unlock(&mp->mp_clock_mutex);
 
@@ -281,6 +291,8 @@ glw_video_dtor(glw_t *w)
   prop_ref_dec(gv->gv_model);
   prop_unsubscribe(gv->gv_vo_scaling_sub);
   prop_unsubscribe(gv->gv_vzoom_sub);
+  prop_unsubscribe(gv->gv_hstretch_sub);
+  prop_unsubscribe(gv->gv_fstretch_sub);
   prop_unsubscribe(gv->gv_vo_on_video_sub);
 
   free(gv->gv_current_url);
@@ -319,7 +331,7 @@ glw_video_newframe(glw_t *w, int flags)
 
   hts_mutex_unlock(&gv->gv_surface_mutex);
 
-  if(pts != AV_NOPTS_VALUE)
+  if(pts != PTS_UNSET)
     glw_video_overlay_set_pts(gv, pts);
 }
 
@@ -337,8 +349,6 @@ glw_video_widget_callback(glw_t *w, void *opaque, glw_signal_t signal,
 
   switch(signal) {
   case GLW_SIGNAL_LAYOUT:
-    // Reset screensaver counter if we are displaying video
-    w->glw_root->gr_screensaver_counter = 0;
 
     rc = extra;
     rc0 = *rc;
@@ -401,7 +411,10 @@ glw_video_ctor(glw_t *w)
 
   LIST_INSERT_HEAD(&gr->gr_video_decoders, gv, gv_global_link);
 
-  gv->gv_vd = video_decoder_create(gv->gv_mp, glw_video_input, gv);
+  gv->gv_mp->mp_video_frame_deliver = glw_video_input;
+  gv->gv_mp->mp_video_frame_opaque = gv;
+
+  gv->gv_vd = video_decoder_create(gv->gv_mp);
   video_playback_create(gv->gv_mp);
 
   gv->gv_vo_scaling_sub =
@@ -420,6 +433,23 @@ glw_video_ctor(glw_t *w)
 		   settings_get_value(gv->gv_mp->mp_setting_vzoom),
 		   NULL);
 
+  gv->gv_hstretch_sub =
+    prop_subscribe(0,
+		   PROP_TAG_SET_INT, &gv->gv_hstretch,
+		   PROP_TAG_COURIER, w->glw_root->gr_courier,
+		   PROP_TAG_ROOT,
+		   settings_get_value(gv->gv_mp->mp_setting_hstretch),
+		   NULL);
+
+
+  gv->gv_fstretch_sub =
+    prop_subscribe(0,
+		   PROP_TAG_SET_INT, &gv->gv_fstretch,
+		   PROP_TAG_COURIER, w->glw_root->gr_courier,
+		   PROP_TAG_ROOT,
+		   settings_get_value(gv->gv_mp->mp_setting_fstretch),
+		   NULL);
+
   gv->gv_vo_on_video_sub =
     prop_subscribe(0,
 		   PROP_TAG_SET_INT, &gv->gv_vo_on_video,
@@ -427,9 +457,6 @@ glw_video_ctor(glw_t *w)
 		   PROP_TAG_ROOT,
 		   settings_get_value(gv->gv_mp->mp_setting_sub_on_video),
 		   NULL);
-
-  // We like fullwindow mode if possible (should be confiurable perhaps)
-  glw_set_constraints(w, 0, 0, 0, GLW_CONSTRAINT_F);
 }
 
 
@@ -607,7 +634,7 @@ int
 glw_video_configure(glw_video_t *gv,
 		    const glw_video_engine_t *engine,
 		    const int *wvec, const int *hvec,
-		    int surfaces, int flags)
+		    int surfaces, int flags, int pixfmt)
 {
   glw_video_config_t gvc = {0};
 
@@ -629,6 +656,7 @@ glw_video_configure(glw_video_t *gv,
 
   gvc.gvc_nsurfaces = surfaces;
   gvc.gvc_flags = flags;
+  gvc.gvc_pixfmt = pixfmt;
 
   if(memcmp(&gvc, &gv->gv_cfg_cur, sizeof(gvc))) {
 
@@ -642,6 +670,8 @@ glw_video_configure(glw_video_t *gv,
     }
   }
 
+  // Reset screen saver every time we get a new frame
+  gv->w.glw_root->gr_screensaver_counter = 0;
   return 0;
 }
 	       
@@ -683,79 +713,41 @@ glw_video_put_surface(glw_video_t *gv, glw_video_surface_t *s,
 }
 
 
+static LIST_HEAD(, glw_video_engine) engines;
+
+void
+glw_register_video_engine(glw_video_engine_t *gve)
+{
+  LIST_INSERT_HEAD(&engines, gve, gve_link);
+}
+
+
 /**
  * Frame delivery from video decoder
  */
 static void 
-glw_video_input(frame_buffer_type_t type, void *frame,
-		const frame_info_t *fi, void *opaque)
+glw_video_input(const frame_info_t *fi, void *opaque)
 {
   glw_video_t *gv = opaque;
-  const AVFrame *avframe;
+  glw_video_engine_t *gve;
 
   if(fi) {
-    gv->gv_dar = fi->dar;
-    gv->gv_vheight = fi->height;
+    gv->gv_dar_num = fi->fi_dar_num;
+    gv->gv_dar_den = fi->fi_dar_den;
+    gv->gv_vheight = fi->fi_height;
   }
   hts_mutex_lock(&gv->gv_surface_mutex);
 
-  if(frame == NULL) {
+  if(fi == NULL) {
     // Blackout
-    glw_video_configure(gv, &glw_video_blank, NULL, NULL, 0, 0);
+    glw_video_configure(gv, &glw_video_blank, NULL, NULL, 0, 0, 0);
     hts_mutex_unlock(&gv->gv_surface_mutex);
     return;
   }
   
-  switch(type) {
-#if CONFIG_GLW_BACKEND_RSX
-  case FRAME_BUFFER_TYPE_RSX_MEMORY:
-    glw_video_input_rsx_mem(gv, frame, fi);
-    break;
-#endif
-
-  case FRAME_BUFFER_TYPE_LIBAV_FRAME:
-    avframe = frame;
-
-    switch(fi->pix_fmt) {
-    case PIX_FMT_YUV420P:
-    case PIX_FMT_YUV422P:
-    case PIX_FMT_YUV444P:
-    case PIX_FMT_YUV410P:
-    case PIX_FMT_YUV411P:
-    case PIX_FMT_YUV440P:
-
-    case PIX_FMT_YUVJ420P:
-    case PIX_FMT_YUVJ422P:
-    case PIX_FMT_YUVJ444P:
-    case PIX_FMT_YUVJ440P:
-      glw_video_input_yuvp(gv, avframe->data, avframe->linesize, fi);
-      break;
-      
-#if ENABLE_VDPAU
-    case PIX_FMT_VDPAU_H264:
-    case PIX_FMT_VDPAU_MPEG1:
-    case PIX_FMT_VDPAU_MPEG2:
-    case PIX_FMT_VDPAU_WMV3:
-    case PIX_FMT_VDPAU_VC1:
-    case PIX_FMT_VDPAU_MPEG4:
-      glw_video_input_vdpau(gv, avframe->data, avframe->linesize, fi);
-      break;
-#endif
-      
-    default:
-      TRACE(TRACE_ERROR, "GLW", 
-	  "PIX_FMT %s (0x%x) does not have a video engine",
-	   av_pix_fmt_descriptors[fi->pix_fmt].name, fi->pix_fmt);
-      break;
-    }
-    break;
-
-  default:
-      TRACE(TRACE_ERROR, "GLW", 
-	    "buffer type %d  does not have a video engine",
-	    type);
-      break;
-  }
+  LIST_FOREACH(gve, &engines, gve_link)
+    if(gve->gve_type == fi->fi_type)
+      gve->gve_deliver(fi, gv);
 
   hts_mutex_unlock(&gv->gv_surface_mutex);
 }
@@ -820,7 +812,7 @@ glw_video_surface_reconfigure(glw_video_t *gv)
 static int64_t
 blank_newframe(glw_video_t *gv, video_decoder_t *vd, int flags)
 {
-  return AV_NOPTS_VALUE;
+  return PTS_UNSET;
 }
 
 /**
@@ -853,9 +845,69 @@ blank_init(glw_video_t *gv)
  *
  */
 static glw_video_engine_t glw_video_blank = {
-  .gve_name = "No output",
   .gve_newframe = blank_newframe,
   .gve_render = blank_render,
   .gve_reset = blank_reset,
   .gve_init = blank_init,
 };
+
+
+
+
+#if ENABLE_LIBAV
+
+
+static void
+video_deliver_lavc(const frame_info_t *fi, glw_video_t *gv)
+{
+  frame_info_t nfi = *fi;
+
+  switch(fi->fi_pix_fmt) {
+  case PIX_FMT_YUV420P:
+  case PIX_FMT_YUV422P:
+  case PIX_FMT_YUV444P:
+  case PIX_FMT_YUV410P:
+  case PIX_FMT_YUV411P:
+  case PIX_FMT_YUV440P:
+  case PIX_FMT_YUVJ420P:
+  case PIX_FMT_YUVJ422P:
+  case PIX_FMT_YUVJ444P:
+  case PIX_FMT_YUVJ440P:
+    avcodec_get_chroma_sub_sample(nfi.fi_pix_fmt, &nfi.fi_hshift,
+				  &nfi.fi_vshift);
+    
+    nfi.fi_type = 'YUVP';
+    break;
+    
+  case PIX_FMT_VDPAU_H264:
+  case PIX_FMT_VDPAU_MPEG1:
+  case PIX_FMT_VDPAU_MPEG2:
+  case PIX_FMT_VDPAU_WMV3:
+  case PIX_FMT_VDPAU_VC1:
+  case PIX_FMT_VDPAU_MPEG4:
+    nfi.fi_type = 'VDPA';
+    break;
+    
+  default:
+    return;
+  }
+  glw_video_engine_t *gve;
+
+  LIST_FOREACH(gve, &engines, gve_link)
+    if(gve->gve_type == nfi.fi_type)
+      gve->gve_deliver(&nfi, gv);
+}
+
+
+/**
+ *
+ */
+static glw_video_engine_t glw_video_lavc = {
+  .gve_type = 'LAVC',
+  .gve_deliver = video_deliver_lavc,
+};
+
+GLW_REGISTER_GVE(glw_video_lavc);
+
+#endif
+

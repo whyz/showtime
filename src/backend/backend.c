@@ -31,6 +31,7 @@
 #include "notifications.h"
 #include "misc/pixmap.h"
 #include "htsmsg/htsmsg_json.h"
+#include "media.h"
 
 prop_t *global_sources; // Move someplace else
 
@@ -85,7 +86,9 @@ backend_play_video(const char *url, struct media_pipe *mp,
 		   int flags, int priority,
 		   char *errbuf, size_t errlen,
 		   const char *mimetype, 
-		   const char *canonical_url)
+		   const char *canonical_url,
+		   video_queue_t *vq,
+                   struct vsource_list *vsl)
 {
   backend_t *nb = backend_canhandle(url);
 
@@ -94,8 +97,10 @@ backend_play_video(const char *url, struct media_pipe *mp,
     return NULL;
   }
 
+  mp_set_url(mp, canonical_url);
+
   return nb->be_play_video(url, mp, flags, priority, errbuf, errlen, mimetype,
-			   canonical_url);
+			   canonical_url, vq, vsl);
 }
 
 
@@ -131,7 +136,7 @@ be_page_canhandle(const char *url)
  *
  */
 static int
-be_page_open(prop_t *root, const char *url0)
+be_page_open(prop_t *root, const char *url0, int sync)
 {
   prop_t *src = prop_create(root, "model");
   prop_t *metadata = prop_create(src, "metadata");
@@ -264,8 +269,14 @@ backend_imageloader(rstr_t *url0, const image_meta_t *im,
   } else {
     pm = nb->be_imageloader(url, im, vpaths, errbuf, errlen, cache_control,
 			    cb, opaque);
-    if(pm != NULL && pm != NOT_MODIFIED)
+    if(pm != NULL && pm != NOT_MODIFIED && !im->im_no_decoding) {
       pm = pixmap_decode(pm, im, errbuf, errlen);
+
+      if(im->im_corner_radius)
+	pm = pixmap_rounded_corners(pm, im->im_corner_radius,
+				    im->im_corner_selection);
+
+    }
   }
   if(m)
     htsmsg_destroy(m);
@@ -318,7 +329,7 @@ backend_probe(const char *url, char *errbuf, size_t errlen)
  *
  */
 int
-backend_open_video(prop_t *page, const char *url)
+backend_open_video(prop_t *page, const char *url, int sync)
 {
   prop_set_int(prop_create(page, "directClose"), 1);
   prop_set_string(prop_create(page, "source"), url);
@@ -351,14 +362,14 @@ BE_REGISTER(videoparams);
  *
  */
 int
-backend_open(prop_t *page, const char *url)
+backend_open(prop_t *page, const char *url, int sync)
 {
   backend_t *be;
   char urlbuf[URL_MAX];
 
   LIST_FOREACH(be, &backends, be_global_link) {
     if(be->be_flags & BACKEND_OPEN_CHECKS_URI) {
-      if(be->be_open(page, url))
+      if(be->be_open(page, url, sync))
 	continue;
       return 0;
     }
@@ -373,7 +384,7 @@ backend_open(prop_t *page, const char *url)
      !be->be_normalize(url, urlbuf, sizeof(urlbuf)))
     url = urlbuf;
 
-  be->be_open(page, url);
+  be->be_open(page, url, sync);
   return 0;
 }
 

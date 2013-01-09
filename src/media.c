@@ -23,36 +23,22 @@
 #include <time.h>
 #include <string.h>
 
-#include <libavformat/avformat.h>
-
 #include "media.h"
 #include "showtime.h"
-#include "audio/audio_decoder.h"
-#include "audio/audio_defs.h"
+#include "audio2/audio_ext.h"
 #include "event.h"
 #include "playqueue.h"
-#include "fileaccess/fa_libav.h"
 #include "backend/backend.h"
 #include "misc/isolang.h"
 #include "i18n.h"
 #include "video/ext_subtitles.h"
 #include "video/video_settings.h"
-#include "video/video_overlay.h"
 #include "settings.h"
+#include "db/kvstore.h"
 
-// -- Video accelerators ---------
+struct AVCodecContext;
 
-#if ENABLE_VDPAU
-#include "video/vdpau.h"
-#endif
-
-#if ENABLE_PS3_VDEC
-#include "video/ps3_vdec.h"
-#endif
-
-#if ENABLE_VDA
-#include "video/vda.h"
-#endif
+static LIST_HEAD(, codec_def) registeredcodecs;
 
 // -------------------------------
 
@@ -70,6 +56,8 @@ static prop_t *media_prop_current;
 static struct media_pipe_list media_pipe_stack;
 media_pipe_t *media_primary;
 
+static int mp_seek_in_queues(media_pipe_t *mp, int64_t pos);
+
 static void seek_by_propchange(void *opaque, prop_event_t event, ...);
 
 static void update_av_delta(void *opaque, int value);
@@ -85,6 +73,8 @@ static void track_mgr_destroy(media_track_mgr_t *mtm);
 
 static void track_mgr_next_track(media_track_mgr_t *mtm);
 
+static void mtm_select_track(media_track_mgr_t *mtm, event_select_track_t *est);
+
 uint8_t HTS_JOIN(sp, k0)[321];
 
 /**
@@ -93,6 +83,11 @@ uint8_t HTS_JOIN(sp, k0)[321];
 void
 media_init(void)
 {
+  codec_def_t *cd;
+  LIST_FOREACH(cd, &registeredcodecs, link)
+    if(cd->init)
+      cd->init();
+
   hts_mutex_init(&media_mutex);
 
   LIST_INIT(&media_pipe_stack);
@@ -121,18 +116,18 @@ media_buf_dtor_freedata(media_buf_t *mb)
     free(mb->mb_data);
 }
 
+#define BUF_PAD 32
 
 media_buf_t *
 media_buf_alloc_locked(media_pipe_t *mp, size_t size)
 {
   hts_mutex_assert(&mp->mp_mutex);
   media_buf_t *mb = pool_get(mp->mp_mb_pool);
-  mb->mb_time = AV_NOPTS_VALUE;
   mb->mb_dtor = media_buf_dtor_freedata;
   mb->mb_size = size;
   if(size > 0) {
-    mb->mb_data = malloc(size + FF_INPUT_BUFFER_PADDING_SIZE);
-    memset(mb->mb_data + size, 0, FF_INPUT_BUFFER_PADDING_SIZE);
+    mb->mb_data = malloc(size + BUF_PAD);
+    memset(mb->mb_data + size, 0, BUF_PAD);
   }
 
   return mb;
@@ -150,6 +145,7 @@ media_buf_alloc_unlocked(media_pipe_t *mp, size_t size)
 }
 
 
+#if ENABLE_LIBAV
 /**
  *
  */
@@ -162,7 +158,6 @@ media_buf_from_avpkt_unlocked(media_pipe_t *mp, AVPacket *pkt)
   mb = pool_get(mp->mp_mb_pool);
   hts_mutex_unlock(&mp->mp_mutex);
 
-  mb->mb_time = AV_NOPTS_VALUE;
   mb->mb_dtor = media_buf_dtor_freedata;
 
   if(pkt->destruct == av_destruct_packet) {
@@ -184,6 +179,7 @@ media_buf_from_avpkt_unlocked(media_pipe_t *mp, AVPacket *pkt)
   av_free_packet(pkt);
   return mb;
 }
+#endif
 
 /**
  *
@@ -221,10 +217,10 @@ static void
 mq_init(media_queue_t *mq, prop_t *p, hts_mutex_t *mutex, media_pipe_t *mp)
 {
   mq->mq_mp = mp;
-  TAILQ_INIT(&mq->mq_q);
+  TAILQ_INIT(&mq->mq_q_data);
+  TAILQ_INIT(&mq->mq_q_ctrl);
 
   mq->mq_packets_current = 0;
-  mq->mq_packets_threshold = 5;
   mq->mq_stream = -1;
   hts_cond_init(&mq->mq_avail, mutex);
   mq->mq_prop_qlen_cur = prop_create(p, "dqlen");
@@ -265,6 +261,7 @@ mp_create(const char *name, int flags, const char *type)
   mp = calloc(1, sizeof(media_pipe_t));
 
   mp->mp_satisfied = -1;
+  mp->mp_epoch = 1;
 
   mp->mp_mb_pool = pool_create("packet headers", 
 			       sizeof(media_buf_t),
@@ -295,6 +292,8 @@ mp_create(const char *name, int flags, const char *type)
 
   mp->mp_prop_io = prop_create(mp->mp_prop_root, "io");
   mp->mp_prop_notifications = prop_create(mp->mp_prop_root, "notifications");
+  mp->mp_prop_url         = prop_create(mp->mp_prop_root, "url");
+
 
   //--------------------------------------------------
   // Video
@@ -366,8 +365,6 @@ mp_create(const char *name, int flags, const char *type)
   mp->mp_prop_repeat      = prop_create(mp->mp_prop_root, "repeat");
   prop_set_int(mp->mp_prop_repeat, 0);
 
-  mp->mp_prop_url         = prop_create(mp->mp_prop_root, "url");
-
   mp->mp_prop_avdiff      = prop_create(mp->mp_prop_root, "avdiff");
   mp->mp_prop_avdiff_error= prop_create(mp->mp_prop_root, "avdiffError");
 
@@ -418,9 +415,26 @@ mp_create(const char *name, int flags, const char *type)
 
   mp->mp_setting_vzoom = 
     settings_create_int(mp->mp_setting_video_root, "vzoom",
-			_p("Video zoom"), video_settings.vzoom, NULL, 50, 200,
-			1, NULL, mp, SETTINGS_INITIAL_UPDATE,
+			_p("Video zoom"),
+			video_settings.vzoom, NULL,
+			50, 200, 1,
+			NULL, NULL, SETTINGS_INITIAL_UPDATE,
 			"%", mp->mp_pc, NULL, NULL);
+
+  mp->mp_setting_hstretch = 
+    settings_create_bool(mp->mp_setting_video_root, "hstretch",
+			 _p("Stretch video to widescreen"),
+			 video_settings.stretch_horizontal, NULL,
+			 NULL, NULL, SETTINGS_INITIAL_UPDATE,
+			 mp->mp_pc, NULL, NULL);
+
+  mp->mp_setting_fstretch = 
+    settings_create_bool(mp->mp_setting_video_root, "fstretch",
+			 _p("Stretch video to fullscreen"),
+			 video_settings.stretch_fullscreen, NULL,
+			 NULL, NULL, SETTINGS_INITIAL_UPDATE,
+			 mp->mp_pc, NULL, NULL);
+
 
   mp->mp_setting_av_delta = 
     settings_create_int(mp->mp_setting_audio_root, "avdelta",
@@ -430,8 +444,8 @@ mp_create(const char *name, int flags, const char *type)
 
   mp->mp_setting_sv_delta = 
     settings_create_int(mp->mp_setting_subtitle_root, "svdelta",
-			_p("Subtitle delay"), 0, NULL, -60000, 60000,
-			100, update_sv_delta, mp, SETTINGS_INITIAL_UPDATE,
+			_p("Subtitle delay"), 0, NULL, -600000, 600000,
+			500, update_sv_delta, mp, SETTINGS_INITIAL_UPDATE,
 			"ms", mp->mp_pc, NULL, NULL);
 
   mp->mp_setting_sub_scale = 
@@ -446,6 +460,9 @@ mp_create(const char *name, int flags, const char *type)
 			 subtitle_settings.align_on_video, NULL,
 			 NULL, NULL, 0,
 			 mp->mp_pc, NULL, NULL);
+
+
+
 
   return mp;
 }
@@ -468,25 +485,32 @@ mp_reinit_streams(media_pipe_t *mp)
 }
 
 
+static void
+mq_flush_q(media_pipe_t *mp, media_queue_t *mq, struct media_buf_queue *q)
+{
+  media_buf_t *mb, *next;
+
+  for(mb = TAILQ_FIRST(q); mb != NULL; mb = next) {
+    next = TAILQ_NEXT(mb, mb_link);
+
+    if(mb->mb_data_type == MB_CTRL_EXIT)
+      continue;
+
+    TAILQ_REMOVE(q, mb, mb_link);
+    mq->mq_packets_current--;
+    mp->mp_buffer_current -= mb->mb_size;
+    media_buf_free_locked(mp, mb);
+  }
+}
+
 /**
  * Must be called with mp locked
  */
 static void
 mq_flush(media_pipe_t *mp, media_queue_t *mq)
 {
-  media_buf_t *mb, *next;
-
-  for(mb = TAILQ_FIRST(&mq->mq_q); mb != NULL; mb = next) {
-    next = TAILQ_NEXT(mb, mb_link);
-
-    if(mb->mb_data_type == MB_CTRL_EXIT)
-      continue;
-
-    TAILQ_REMOVE(&mq->mq_q, mb, mb_link);
-    mq->mq_packets_current--;
-    mp->mp_buffer_current -= mb->mb_size;
-    media_buf_free_locked(mp, mb);
-  }
+  mq_flush_q(mp, mq, &mq->mq_q_data);
+  mq_flush_q(mp, mq, &mq->mq_q_ctrl);
   mq_update_stats(mp, mq);
 }
 
@@ -510,6 +534,8 @@ mp_destroy(media_pipe_t *mp)
   setting_destroy(mp->mp_setting_sub_scale);
   setting_destroy(mp->mp_setting_sub_on_video);
   setting_destroy(mp->mp_setting_vzoom);
+  setting_destroy(mp->mp_setting_hstretch);
+  setting_destroy(mp->mp_setting_fstretch);
 
   prop_unsubscribe(mp->mp_sub_currenttime);
   prop_unsubscribe(mp->mp_sub_stats);
@@ -556,6 +582,122 @@ mp_ref_dec(media_pipe_t *mp)
 }
 
 
+
+/**
+ *
+ */
+static void
+mp_direct_seek(media_pipe_t *mp, int64_t ts)
+{
+  event_t *e;
+  event_ts_t *ets;
+
+  ts = MAX(ts, 0);
+
+  prop_set_float_ex(mp->mp_prop_currenttime, mp->mp_sub_currenttime,
+		    ts / 1000000.0, 0);
+
+  mp->mp_seek_base = ts;
+
+
+  if(!mp_seek_in_queues(mp, ts + mp->mp_start_time)) {
+    prop_set_float(prop_create(mp->mp_prop_root, "seektime"), ts / 1000000.0);
+    return;
+  }
+
+  /* If there already is a seek event enqueued, update it */
+  TAILQ_FOREACH(e, &mp->mp_eq, e_link) {
+    if(!event_is_type(e, EVENT_SEEK))
+      continue;
+
+    ets = (event_ts_t *)e;
+    ets->ts = ts;
+    return;
+  }
+
+  ets = event_create(EVENT_SEEK, sizeof(event_ts_t));
+  ets->ts = ts;
+  mp->mp_epoch++;
+
+  e = &ets->h;
+  TAILQ_INSERT_TAIL(&mp->mp_eq, e, e_link);
+  hts_cond_signal(&mp->mp_backpressure);
+}
+
+
+/**
+ *
+ */
+media_buf_t *
+mp_deq(media_pipe_t *mp, media_queue_t *mq)
+{
+  media_buf_t *mb;
+  if((mb = TAILQ_FIRST(&mq->mq_q_ctrl)) != NULL) { 
+    TAILQ_REMOVE(&mq->mq_q_ctrl, mb, mb_link);
+    return mb;
+  }
+  if((mb = TAILQ_FIRST(&mq->mq_q_data)) != NULL) {
+    TAILQ_REMOVE(&mq->mq_q_data, mb, mb_link);
+    return mb;
+  }
+  return NULL;
+}
+
+
+/**
+ *
+ */
+static void
+mb_enq(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
+{
+  if(mb->mb_data_type > MB_CTRL) {
+    TAILQ_INSERT_TAIL(&mq->mq_q_ctrl, mb, mb_link);
+  } else {
+    TAILQ_INSERT_TAIL(&mq->mq_q_data, mb, mb_link);
+  }
+  mq->mq_packets_current++;
+  mb->mb_epoch = mp->mp_epoch;
+  mp->mp_buffer_current += mb->mb_size;
+  mq_update_stats(mp, mq);
+  hts_cond_signal(&mq->mq_avail);
+}
+
+/**
+ *
+ */
+void
+mp_bump_epoch(media_pipe_t *mp)
+{
+  hts_mutex_lock(&mp->mp_mutex);
+  mp->mp_epoch++;
+  hts_mutex_unlock(&mp->mp_mutex);
+}
+
+
+/**
+ *
+ */
+static void
+mp_send_cmd_locked(media_pipe_t *mp, media_queue_t *mq, int cmd)
+{
+  media_buf_t *mb = media_buf_alloc_locked(mp, 0);
+  mb->mb_data_type = cmd;
+  mb_enq(mp, mq, mb);
+}
+
+
+/**
+ *
+ */
+static void
+send_hold(media_pipe_t *mp)
+{
+  event_t *e = event_create_int(EVENT_HOLD, mp->mp_hold);
+  TAILQ_INSERT_TAIL(&mp->mp_eq, e, e_link);
+  hts_cond_signal(&mp->mp_backpressure);
+}
+
+
 /**
  *
  */
@@ -563,17 +705,73 @@ static void
 mp_enqueue_event_locked(media_pipe_t *mp, event_t *e)
 {
   event_select_track_t *est = (event_select_track_t *)e;
+  event_int3_t *ei3;
+  int64_t d;
 
   switch(e->e_type_x) {
   case EVENT_SELECT_AUDIO_TRACK:
-    mp->mp_audio_track_mgr.mtm_user_set |= est->manual;
+    mtm_select_track(&mp->mp_audio_track_mgr, est);
+
+    //    mp->mp_audio_track_mgr.mtm_user_set |= est->manual;
     break;
   case EVENT_SELECT_SUBTITLE_TRACK:
-    mp->mp_subtitle_track_mgr.mtm_user_set |= est->manual;
+    mtm_select_track(&mp->mp_subtitle_track_mgr, est);
+
+    //    mp->mp_subtitle_track_mgr.mtm_user_set |= est->manual;
     break;
+  case EVENT_DELTA_SEEK_REL:
+    // We want to seek thru the entire feature in 3 seconds
+
+#define TOTAL_SEEK_TIME_IN_SECONDS 2
+
+    ei3 = (event_int3_t *)e;
+
+    int pre  = ei3->val1;
+    int sign = ei3->val2;
+    int rate = ei3->val3;
+
+    d = pre * pre * mp->mp_duration /
+      (rate*TOTAL_SEEK_TIME_IN_SECONDS*255*255);
+
+    mp_direct_seek(mp, mp->mp_seek_base += d*sign);
+    return;
   default:
     break;
   }
+
+  if(event_is_action(e, ACTION_PLAYPAUSE ) ||
+     event_is_action(e, ACTION_PLAY ) ||
+     event_is_action(e, ACTION_PAUSE)) {
+    
+    mp->mp_hold = action_update_hold_by_event(mp->mp_hold, e);
+    if(mp->mp_flags & MP_VIDEO)
+      mp_send_cmd_locked(mp, &mp->mp_video, mp->mp_hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
+    mp_send_cmd_locked(mp, &mp->mp_audio, mp->mp_hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
+    mp_set_playstatus_by_hold(mp, mp->mp_hold, NULL);
+    send_hold(mp);
+    return;
+      
+  } else if(event_is_type(e, EVENT_INTERNAL_PAUSE)) {
+
+    mp->mp_hold = 1;
+
+    if(mp->mp_flags & MP_VIDEO)
+      mp_send_cmd_locked(mp, &mp->mp_video, mp->mp_hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
+    mp_send_cmd_locked(mp, &mp->mp_audio, mp->mp_hold ? MB_CTRL_PAUSE : MB_CTRL_PLAY);
+    mp_set_playstatus_by_hold(mp, mp->mp_hold, e->e_payload);
+    send_hold(mp);
+    return;
+
+  } else if(event_is_action(e, ACTION_SEEK_BACKWARD)) {
+    mp_direct_seek(mp, mp->mp_seek_base -= 15000000);
+    return;
+  }
+
+  if(event_is_action(e, ACTION_SEEK_FORWARD)) {
+    mp_direct_seek(mp, mp->mp_seek_base += 15000000);
+    return;
+  }
+
   atomic_add(&e->e_refcount, 1);
   TAILQ_INSERT_TAIL(&mp->mp_eq, e, e_link);
   hts_cond_signal(&mp->mp_backpressure);
@@ -681,34 +879,6 @@ mq_update_stats(media_pipe_t *mp, media_queue_t *mq)
   }
 }
 
-
-/**
- *
- */
-static void
-mb_enq_tail(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
-{
-  TAILQ_INSERT_TAIL(&mq->mq_q, mb, mb_link);
-  mq->mq_packets_current++;
-  mp->mp_buffer_current += mb->mb_size;
-  mq_update_stats(mp, mq);
-  hts_cond_signal(&mq->mq_avail);
-}
-
-/**
- *
- */
-static void
-mb_enq_head(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
-{
-  TAILQ_INSERT_HEAD(&mq->mq_q, mb, mb_link);
-  mq->mq_packets_current++;
-  mp->mp_buffer_current += mb->mb_size;
-  mq_update_stats(mp, mq);
-  hts_cond_signal(&mq->mq_avail);
-}
-
-
 /**
  *
  */
@@ -717,8 +887,8 @@ mq_realtime_delay(media_queue_t *mq)
 {
   media_buf_t *f, *l;
 
-  f = TAILQ_FIRST(&mq->mq_q);
-  l = TAILQ_LAST(&mq->mq_q, media_buf_queue);
+  f = TAILQ_FIRST(&mq->mq_q_data);
+  l = TAILQ_LAST(&mq->mq_q_data, media_buf_queue);
 
   if(f != NULL) {
     if(f->mb_epoch == l->mb_epoch) {
@@ -737,7 +907,7 @@ event_t *
 mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 {
   event_t *e = NULL;
-
+  
   hts_mutex_lock(&mp->mp_mutex);
 #if 0
   printf("ENQ %s %d/%d %d/%d\n", mq == &mp->mp_video ? "video" : "audio",
@@ -746,7 +916,8 @@ mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 #endif
 	 
   while((e = TAILQ_FIRST(&mp->mp_eq)) == NULL &&
-	mq->mq_packets_current > mq->mq_packets_threshold &&
+	mp->mp_video.mq_packets_current >= (mp->mp_video.mq_stream != -1 ? 5 : 0) &&
+	mp->mp_audio.mq_packets_current >= (mp->mp_audio.mq_stream != -1 ? 5 : 0) &&
 	(mp->mp_buffer_current + mb->mb_size > mp->mp_buffer_limit ||
 	 (mp->mp_max_realtime_delay != 0 && 
 	  mq_realtime_delay(mq) > mp->mp_max_realtime_delay)))
@@ -755,7 +926,7 @@ mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
   if(e != NULL) {
     TAILQ_REMOVE(&mp->mp_eq, e, e_link);
   } else {
-    mb_enq_tail(mp, mq, mb);
+    mb_enq(mp, mq, mb);
   }
 
   hts_mutex_unlock(&mp->mp_mutex);
@@ -771,32 +942,35 @@ int
 mb_enqueue_no_block(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb,
 		    int auxtype)
 {
+  assert(mb->mb_data_type < MB_CTRL);
+
   hts_mutex_lock(&mp->mp_mutex);
   
   if(mp->mp_buffer_current + mb->mb_size > mp->mp_buffer_limit &&
-     mq->mq_packets_current < mq->mq_packets_threshold) {
+     mq->mq_packets_current < 5) {
       hts_mutex_unlock(&mp->mp_mutex);
     return -1;
   }
 
   if(auxtype != -1) {
     media_buf_t *after;
-    TAILQ_FOREACH_REVERSE(after, &mq->mq_q, media_buf_queue, mb_link) {
+    TAILQ_FOREACH_REVERSE(after, &mq->mq_q_data, media_buf_queue, mb_link) {
       if(after->mb_data_type == auxtype)
 	break;
     }
     
     if(after == NULL)
-      TAILQ_INSERT_HEAD(&mq->mq_q, mb, mb_link);
+      TAILQ_INSERT_HEAD(&mq->mq_q_data, mb, mb_link);
     else
-      TAILQ_INSERT_AFTER(&mq->mq_q, after, mb, mb_link);
+      TAILQ_INSERT_AFTER(&mq->mq_q_data, after, mb, mb_link);
 
   } else {
-    TAILQ_INSERT_TAIL(&mq->mq_q, mb, mb_link);
+    TAILQ_INSERT_TAIL(&mq->mq_q_data, mb, mb_link);
   }
 
   mq->mq_packets_current++;
   mp->mp_buffer_current += mb->mb_size;
+  mb->mb_epoch = mp->mp_epoch;
   mq_update_stats(mp, mq);
   hts_cond_signal(&mq->mq_avail);
 
@@ -812,7 +986,7 @@ void
 mb_enqueue_always(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 {
   hts_mutex_lock(&mp->mp_mutex);
-  mb_enq_tail(mp, mq, mb);
+  mb_enq(mp, mq, mb);
   hts_mutex_unlock(&mp->mp_mutex);
 }
 
@@ -820,46 +994,33 @@ mb_enqueue_always(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 /**
  *
  */
-void
-mb_enqueue_always_head(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
-{
-  hts_mutex_lock(&mp->mp_mutex);
-  mb_enq_head(mp, mq, mb);
-  hts_mutex_unlock(&mp->mp_mutex);
-}
-
-
-/**
- *
- */
-int
+static int
 mp_seek_in_queues(media_pipe_t *mp, int64_t pos)
 {
   media_buf_t *abuf, *vbuf, *vk, *mb;
   int rval = 1;
-  hts_mutex_lock(&mp->mp_mutex);
 
-  TAILQ_FOREACH(abuf, &mp->mp_audio.mq_q, mb_link)
-    if(abuf->mb_pts != AV_NOPTS_VALUE && abuf->mb_pts >= pos)
+  TAILQ_FOREACH(abuf, &mp->mp_audio.mq_q_data, mb_link)
+    if(abuf->mb_pts != PTS_UNSET && abuf->mb_pts >= pos)
       break;
 
   if(abuf != NULL) {
     vk = NULL;
 
-    TAILQ_FOREACH(vbuf, &mp->mp_video.mq_q, mb_link) {
+    TAILQ_FOREACH(vbuf, &mp->mp_video.mq_q_data, mb_link) {
       if(vbuf->mb_keyframe)
 	vk = vbuf;
-      if(vbuf->mb_pts != AV_NOPTS_VALUE && vbuf->mb_pts >= pos)
+      if(vbuf->mb_pts != PTS_UNSET && vbuf->mb_pts >= pos)
 	break;
     }
     
     if(vbuf != NULL && vk != NULL) {
       int adrop = 0, vdrop = 0, vskip = 0;
       while(1) {
-	mb = TAILQ_FIRST(&mp->mp_audio.mq_q);
+	mb = TAILQ_FIRST(&mp->mp_audio.mq_q_data);
 	if(mb == abuf)
 	  break;
-	TAILQ_REMOVE(&mp->mp_audio.mq_q, mb, mb_link);
+	TAILQ_REMOVE(&mp->mp_audio.mq_q_data, mb, mb_link);
 	mp->mp_audio.mq_packets_current--;
 	mp->mp_buffer_current -= mb->mb_size;
 	media_buf_free_locked(mp, mb);
@@ -868,10 +1029,10 @@ mp_seek_in_queues(media_pipe_t *mp, int64_t pos)
       mq_update_stats(mp, &mp->mp_audio);
 
       while(1) {
-	mb = TAILQ_FIRST(&mp->mp_video.mq_q);
+	mb = TAILQ_FIRST(&mp->mp_video.mq_q_data);
 	if(mb == vk)
 	  break;
-	TAILQ_REMOVE(&mp->mp_video.mq_q, mb, mb_link);
+	TAILQ_REMOVE(&mp->mp_video.mq_q_data, mb, mb_link);
 	mp->mp_video.mq_packets_current--;
 	mp->mp_buffer_current -= mb->mb_size;
 	media_buf_free_locked(mp, mb);
@@ -889,22 +1050,21 @@ mp_seek_in_queues(media_pipe_t *mp, int64_t pos)
       rval = 0;
 
       mb = media_buf_alloc_locked(mp, 0);
-      mb->mb_data_type = MB_BLACKOUT;
-      mb_enq_head(mp, &mp->mp_video, mb);
+      mb->mb_data_type = MB_CTRL_BLACKOUT;
+      mb_enq(mp, &mp->mp_video, mb);
 
       mb = media_buf_alloc_locked(mp, 0);
-      mb->mb_data_type = MB_FLUSH;
-      mb_enq_head(mp, &mp->mp_video, mb);
+      mb->mb_data_type = MB_CTRL_FLUSH;
+      mb_enq(mp, &mp->mp_video, mb);
 
       mb = media_buf_alloc_locked(mp, 0);
-      mb->mb_data_type = MB_FLUSH;
-      mb_enq_tail(mp, &mp->mp_audio, mb);
+      mb->mb_data_type = MB_CTRL_FLUSH;
+      mb_enq(mp, &mp->mp_audio, mb);
 
 
       TRACE(TRACE_DEBUG, "Media", "Seeking by dropping %d audio packets and %d+%d video packets from queue", adrop, vdrop, vskip);
     }
   }
-  hts_mutex_unlock(&mp->mp_mutex);
   return rval;
 }
 
@@ -926,18 +1086,18 @@ mp_flush(media_pipe_t *mp, int blank)
 
   if(v->mq_stream >= 0) {
     mb = media_buf_alloc_locked(mp, 0);
-    mb->mb_data_type = MB_FLUSH;
-    mb_enq_tail(mp, v, mb);
+    mb->mb_data_type = MB_CTRL_FLUSH;
+    mb_enq(mp, v, mb);
 
     mb = media_buf_alloc_locked(mp, 0);
-    mb->mb_data_type = MB_BLACKOUT;
-    mb_enq_tail(mp, v, mb);
+    mb->mb_data_type = MB_CTRL_BLACKOUT;
+    mb_enq(mp, v, mb);
   }
 
   if(a->mq_stream >= 0) {
     mb = media_buf_alloc_locked(mp, 0);
-    mb->mb_data_type = MB_FLUSH;
-    mb_enq_tail(mp, a, mb);
+    mb->mb_data_type = MB_CTRL_FLUSH;
+    mb_enq(mp, a, mb);
   }
 
   if(mp->mp_satisfied == 0) {
@@ -949,32 +1109,6 @@ mp_flush(media_pipe_t *mp, int blank)
 
 }
 
-/**
- *
- */
-void
-mp_end(media_pipe_t *mp)
-{
-  media_queue_t *v = &mp->mp_video;
-  media_queue_t *a = &mp->mp_audio;
-  media_buf_t *mb;
-
-  hts_mutex_lock(&mp->mp_mutex);
-
-  if(v->mq_stream >= 0) {
-    mb = media_buf_alloc_locked(mp, 0);
-    mb->mb_data_type = MB_END;
-    mb_enq_tail(mp, v, mb);
-  }
-
-  if(a->mq_stream >= 0) {
-    mb = media_buf_alloc_locked(mp, 0);
-    mb->mb_data_type = MB_END;
-    mb_enq_tail(mp, a, mb);
-  }
-  hts_mutex_unlock(&mp->mp_mutex);
-}
-
 
 /**
  *
@@ -982,29 +1116,8 @@ mp_end(media_pipe_t *mp)
 void
 mp_send_cmd(media_pipe_t *mp, media_queue_t *mq, int cmd)
 {
-  media_buf_t *mb;
-
   hts_mutex_lock(&mp->mp_mutex);
-
-  mb = media_buf_alloc_locked(mp, 0);
-  mb->mb_data_type = cmd;
-  mb_enq_tail(mp, mq, mb);
-  hts_mutex_unlock(&mp->mp_mutex);
-}
-
-/*
- *
- */
-void
-mp_send_cmd_head(media_pipe_t *mp, media_queue_t *mq, int cmd)
-{
-  media_buf_t *mb;
-
-  hts_mutex_lock(&mp->mp_mutex);
-
-  mb = media_buf_alloc_locked(mp, 0);
-  mb->mb_data_type = cmd;
-  mb_enq_head(mp, mq, mb);
+  mp_send_cmd_locked(mp, mq, cmd);
   hts_mutex_unlock(&mp->mp_mutex);
 }
 
@@ -1021,27 +1134,10 @@ mp_send_cmd_data(media_pipe_t *mp, media_queue_t *mq, int cmd, void *d)
   mb = media_buf_alloc_locked(mp, 0);
   mb->mb_data_type = cmd;
   mb->mb_data = d;
-  mb_enq_tail(mp, mq, mb);
+  mb_enq(mp, mq, mb);
   hts_mutex_unlock(&mp->mp_mutex);
 }
 
-
-/**
- *
- */
-void
-mp_send_cmd_u32_head(media_pipe_t *mp, media_queue_t *mq, int cmd, uint32_t u)
-{
-  media_buf_t *mb;
-
-  hts_mutex_lock(&mp->mp_mutex);
-
-  mb = media_buf_alloc_locked(mp, 0);
-  mb->mb_data_type = cmd;
-  mb->mb_data32 = u;
-  mb_enq_head(mp, mq, mb);
-  hts_mutex_unlock(&mp->mp_mutex);
-}
 
 /*
  *
@@ -1057,7 +1153,7 @@ mp_send_cmd_u32(media_pipe_t *mp, media_queue_t *mq, int cmd, uint32_t u)
   mb = media_buf_alloc_locked(mp, 0);
   mb->mb_data_type = cmd;
   mb->mb_data32 = u;
-  mb_enq_tail(mp, mq, mb);
+  mb_enq(mp, mq, mb);
   hts_mutex_unlock(&mp->mp_mutex);
 }
 
@@ -1079,13 +1175,12 @@ media_codec_ref(media_codec_t *cw)
 void
 media_codec_deref(media_codec_t *cw)
 {
-  media_format_t *fw = cw->fw;
-
   if(atomic_add(&cw->refcount, -1) > 1)
     return;
-
+#if ENABLE_LIBAV
   if(cw->codec_ctx != NULL && cw->codec_ctx->codec != NULL)
     avcodec_close(cw->codec_ctx);
+#endif
 
   if(cw->close != NULL)
     cw->close(cw);
@@ -1093,65 +1188,15 @@ media_codec_deref(media_codec_t *cw)
   if(cw->codec_ctx_alloced)
     free(cw->codec_ctx);
 
+#if ENABLE_LIBAV
   if(cw->parser_ctx != NULL)
     av_parser_close(cw->parser_ctx);
-  
-  if(fw != NULL)
-    media_format_deref(fw);
+
+  if(cw->fw != NULL)
+    media_format_deref(cw->fw);
+#endif
 
   free(cw);
-}
-
-/**
- *
- */
-static int
-media_codec_create_lavc(media_codec_t *cw, enum CodecID id,
-			AVCodecContext *ctx, media_codec_params_t *mcp)
-{
-  extern int concurrency;
-
-  cw->codec = avcodec_find_decoder(id);
-
-  if(cw->codec == NULL)
-    return -1;
-  
-  if(ctx == NULL || id == CODEC_ID_AC3) {
-    cw->codec_ctx = avcodec_alloc_context();
-    cw->codec_ctx_alloced = 1;
-  } else {
-    cw->codec_ctx = ctx;
-  }
-
-  //  cw->codec_ctx->debug = FF_DEBUG_PICT_INFO | FF_DEBUG_BUGS;
-
-  cw->codec_ctx->codec_id   = cw->codec->id;
-  cw->codec_ctx->codec_type = cw->codec->type;
-  cw->codec_ctx->opaque = cw;
-
-  if(mcp != NULL && mcp->extradata != NULL) {
-    cw->codec_ctx->extradata = calloc(1, mcp->extradata_size +
-				      FF_INPUT_BUFFER_PADDING_SIZE);
-    memcpy(cw->codec_ctx->extradata, mcp->extradata, mcp->extradata_size);
-    cw->codec_ctx->extradata_size = mcp->extradata_size;
-  }
-
-  if(id == CODEC_ID_H264 && concurrency > 1) {
-    cw->codec_ctx->thread_count = concurrency;
-    if(mcp && mcp->cheat_for_speed)
-      cw->codec_ctx->flags2 |= CODEC_FLAG2_FAST;
-  }
-
-  if(audio_mode_prefer_float() && cw->codec->id != CODEC_ID_AAC)
-    cw->codec_ctx->request_sample_fmt = AV_SAMPLE_FMT_FLT;
-
-  if(avcodec_open(cw->codec_ctx, cw->codec) < 0) {
-    if(ctx == NULL)
-      free(cw->codec_ctx);
-    cw->codec = NULL;
-    return -1;
-  }
-  return 0;
 }
 
 
@@ -1160,36 +1205,34 @@ media_codec_create_lavc(media_codec_t *cw, enum CodecID id,
  */
 media_codec_t *
 media_codec_create(int codec_id, int parser,
-		   media_format_t *fw, AVCodecContext *ctx,
-		   media_codec_params_t *mcp, media_pipe_t *mp)
+		   struct media_format *fw, struct AVCodecContext *ctx,
+		   const media_codec_params_t *mcp, media_pipe_t *mp)
 {
   media_codec_t *mc = calloc(1, sizeof(media_codec_t));
+  codec_def_t *cd;
 
-#if ENABLE_VDPAU
-  if(mcp && !vdpau_codec_create(mc, codec_id, ctx, mcp, mp)) {
-    
-  } else
+  mc->codec_ctx = ctx;
+  
+#if ENABLE_LIBAV
+  if(ctx != NULL && mcp != NULL) {
+    assert(ctx->extradata      == mcp->extradata);
+    assert(ctx->extradata_size == mcp->extradata_size);
+  }
 #endif
-#if ENABLE_PS3_VDEC
-  if(mcp && !video_ps3_vdec_codec_create(mc, codec_id, ctx, mcp, mp)) {
 
-  } else
-#endif
-#if ENABLE_VDA
-  if(mcp && !video_vda_codec_create(mc, codec_id, ctx, mcp, mp)) {
+  LIST_FOREACH(cd, &registeredcodecs, link)
+    if(!cd->open(mc, codec_id, mcp, mp))
+      break;
 
-  } else
-#endif
-  if(!video_overlay_codec_create(mc, codec_id, ctx, mp)) {
-
-  } else
-
-  if(media_codec_create_lavc(mc, codec_id, ctx, mcp)) {
+  if(cd == NULL) {
     free(mc);
     return NULL;
   }
 
+#if ENABLE_LIBAV
   mc->parser_ctx = parser ? av_parser_init(codec_id) : NULL;
+#endif
+
   mc->refcount = 1;
   mc->fw = fw;
   mc->codec_id = codec_id;
@@ -1198,32 +1241,6 @@ media_codec_create(int codec_id, int parser,
     atomic_add(&fw->refcount, 1);
 
   return mc;
-}
-
-
-/**
- *
- */
-media_format_t *
-media_format_create(AVFormatContext *fctx)
-{
-  media_format_t *fw = malloc(sizeof(media_format_t));
-  fw->refcount = 1;
-  fw->fctx = fctx;
-  return fw;
-}
-
-
-/**
- *
- */
-void
-media_format_deref(media_format_t *fw)
-{
-  if(atomic_add(&fw->refcount, -1) > 1)
-    return;
-  fa_libav_close_format(fw->fctx);
-  free(fw);
 }
 
 
@@ -1331,96 +1348,12 @@ mp_shutdown(struct media_pipe *mp)
 }
 
 
-
-/**
- *
- */
-static void
-codec_details(AVCodecContext *ctx, char *buf, size_t size, const char *lead)
-{
-  const char *cfg;
-
-  if(ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-
-    if(ctx->sample_rate % 1000 == 0) {
-      snprintf(buf, size, "%s%d kHz", lead, ctx->sample_rate / 1000);
-    } else {
-      snprintf(buf, size, "%s%.1f kHz", lead, (float)ctx->sample_rate / 1000);
-    }
-    lead = ", ";
-
-    switch(ctx->channels) {
-    case 1: 
-      cfg = "mono";
-      break;
-    case 2: 
-      cfg = "stereo";
-      break;
-    case 6: 
-      cfg = "5.1";
-      break;
-    default:
-      snprintf(buf + strlen(buf), size - strlen(buf), ", %d channels",
-	       ctx->channels);
-      cfg = NULL;
-      break;
-    }
-    if(cfg != NULL) {
-      snprintf(buf + strlen(buf), size - strlen(buf), ", %s", cfg);
-    }
-  }
-
-  if(ctx->width) {
-    snprintf(buf + strlen(buf), size - strlen(buf),
-	     "%s%dx%d", lead, ctx->width, ctx->height);
-    lead = ", ";
-  }
-
-  if(ctx->bit_rate > 2000000)
-    snprintf(buf + strlen(buf), size - strlen(buf),
-	     "%s%.1f Mb/s", lead, (float)ctx->bit_rate / 1000000);
-  else if(ctx->bit_rate)
-    snprintf(buf + strlen(buf), size - strlen(buf),
-	     "%s%d kb/s", lead, ctx->bit_rate / 1000);
-}
-
-/**
- * Update codec info in property
- */ 
-void
-media_update_codec_info_prop(prop_t *p, AVCodecContext *ctx)
-{
-  char tmp[100];
-
-  if(ctx == NULL) {
-    tmp[0] = 0;
-  } else {
-    snprintf(tmp, sizeof(tmp), "%s", ctx->codec->long_name);
-    codec_details(ctx, tmp + strlen(tmp), sizeof(tmp) - strlen(tmp), ", ");
-  }
-  prop_set_string(p, tmp);
-}
-
-
-/**
- * Update codec info in text widgets
- */ 
-void
-media_get_codec_info(AVCodecContext *ctx, char *buf, size_t size)
-{
-  snprintf(buf, size, "%s\n", ctx->codec->long_name);
-  codec_details(ctx, buf + strlen(buf), size - strlen(buf), "");
-}
-
-
 /**
  *
  */
 static void
 seek_by_propchange(void *opaque, prop_event_t event, ...)
 {
-  event_ts_t *ets;
-  event_t *e;
   media_pipe_t *mp = opaque;
   int64_t t;
   int how = 0;
@@ -1443,20 +1376,7 @@ seek_by_propchange(void *opaque, prop_event_t event, ...)
   if(how == PROP_SET_TENTATIVE)
     return;
 
-  /* If there already is a seek event enqueued, update it */
-  TAILQ_FOREACH(e, &mp->mp_eq, e_link) {
-    if(!event_is_type(e, EVENT_SEEK))
-      continue;
-
-    ets = (event_ts_t *)e;
-    ets->ts = t;
-    return;
-  }
-
-  ets = event_create(EVENT_SEEK, sizeof(event_ts_t));
-  ets->ts = t;
-  mp_enqueue_event_locked(mp, &ets->h);
-  event_release(&ets->h);
+  mp_direct_seek(mp, t);
 }
 
 /**
@@ -1487,14 +1407,27 @@ update_sv_delta(void *opaque, int v)
  *
  */
 void
-mp_set_current_time(media_pipe_t *mp, int64_t pts)
+mp_set_current_time(media_pipe_t *mp, int64_t ts, int epoch, int64_t delta)
 {
-  mp->mp_current_time = pts;
-  if(pts != AV_NOPTS_VALUE)
+  if(ts == PTS_UNSET)
+    return;
+
+  ts -= delta;
+
+  hts_mutex_lock(&mp->mp_mutex);
+
+  if(epoch == mp->mp_epoch) {
+
     prop_set_float_ex(mp->mp_prop_currenttime, mp->mp_sub_currenttime,
-		      pts / 1000000.0, 0);
-  else
-    prop_set_void_ex(mp->mp_prop_currenttime, mp->mp_sub_currenttime);
+		      ts / 1000000.0, 0);
+    
+    event_ts_t *ets = event_create(EVENT_CURRENT_TIME, sizeof(event_ts_t));
+    ets->ts = ts;
+    mp->mp_seek_base = ts;
+    mp_enqueue_event_locked(mp, &ets->h);
+    event_release(&ets->h);
+  }
+  hts_mutex_unlock(&mp->mp_mutex);
 }
 
 
@@ -1570,7 +1503,7 @@ mp_set_url(media_pipe_t *mp, const char *url)
  *
  */
 void
-mp_configure(media_pipe_t *mp, int caps, int buffer_size)
+mp_configure(media_pipe_t *mp, int caps, int buffer_size, int64_t duration)
 {
   mp->mp_max_realtime_delay = 0;
 
@@ -1592,78 +1525,8 @@ mp_configure(media_pipe_t *mp, int caps, int buffer_size)
     break;
   }
 
+  mp->mp_duration = duration;
   prop_set_int(mp->mp_prop_buffer_limit, mp->mp_buffer_limit);
-}
-
-
-extern void avcodec_get_channel_layout_string(char *buf, int buf_size,
-					      int nb_channels,
-					      int64_t channel_layout);
-/**
- * 
- */
-void
-metadata_from_ffmpeg(char *dst, size_t dstlen, AVCodec *codec, 
-		     AVCodecContext *avctx)
-{
-  char *n;
-  int off = snprintf(dst, dstlen, "%s", codec->name);
-
-  n = dst;
-  while(*n) {
-    *n = toupper((int)*n);
-    n++;
-  }
-
-  if(codec->id  == CODEC_ID_H264) {
-    const char *p;
-    switch(avctx->profile) {
-    case FF_PROFILE_H264_BASELINE:  p = "Baseline";  break;
-    case FF_PROFILE_H264_MAIN:      p = "Main";      break;
-    case FF_PROFILE_H264_EXTENDED:  p = "Extended";  break;
-    case FF_PROFILE_H264_HIGH:      p = "High";      break;
-    case FF_PROFILE_H264_HIGH_10:   p = "High 10";   break;
-    case FF_PROFILE_H264_HIGH_422:  p = "High 422";  break;
-    case FF_PROFILE_H264_HIGH_444:  p = "High 444";  break;
-    case FF_PROFILE_H264_CAVLC_444: p = "CAVLC 444"; break;
-    default:                        p = NULL;        break;
-    }
-
-    if(p != NULL && avctx->level != FF_LEVEL_UNKNOWN)
-      off += snprintf(dst + off, dstlen - off,
-		      ", %s (Level %d.%d)",
-		      p, avctx->level / 10, avctx->level % 10);
-  }
-    
-  if(avctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-    char buf[64];
-
-    avcodec_get_channel_layout_string(buf, sizeof(buf), avctx->channels,
-				      avctx->channel_layout);
-					    
-    off += snprintf(dst + off, dstlen - off, ", %d Hz, %s",
-		    avctx->sample_rate, buf);
-  }
-
-  if(avctx->width)
-    off += snprintf(dst + off, dstlen - off,
-		    ", %dx%d", avctx->width, avctx->height);
-  
-  if(avctx->codec_type == AVMEDIA_TYPE_AUDIO && avctx->bit_rate)
-    off += snprintf(dst + off, dstlen - off,
-		    ", %d kb/s", avctx->bit_rate / 1000);
-
-}
-
-/**
- * 
- */
-void
-mp_set_mq_meta(media_queue_t *mq, AVCodec *codec, AVCodecContext *avctx)
-{
-  char buf[128];
-  metadata_from_ffmpeg(buf, sizeof(buf), codec, avctx);
-  prop_set_string(mq->mq_prop_codec, buf);
 }
 
 
@@ -1699,7 +1562,7 @@ mp_add_trackr(prop_t *parent,
   if(isolang != NULL) {
     prop_set_rstring(prop_create(p, "isolang"), isolang);
     
-    const char *language = isolang_iso2lang(rstr_get(isolang));
+    const char *language = iso_639_2_lang(rstr_get(isolang));
     if(language != NULL) {
       prop_set_string(prop_create(p, "language"), language);
     } else {
@@ -1829,6 +1692,17 @@ mtm_rethink(media_track_mgr_t *mtm)
        mt->mt_base_score == -1 ||
        mt->mt_isolang_score == -1)
       continue;
+
+    if(mtm->mtm_user_pref != NULL && !strcmp(rstr_get(mtm->mtm_user_pref),
+					     mt->mt_url)) {
+
+      mtm->mtm_user_set = 1;
+      event_t *e = event_create_select_track(mt->mt_url,
+					     mtm_event_type(mtm), 0);
+      mp_enqueue_event_locked(mtm->mtm_mp, e);
+      event_release(e);
+      return;
+    }
 
     if(!strcmp(mt->mt_url, "sub:off") || !strcmp(mt->mt_url, "audio:off"))
       continue;
@@ -2045,6 +1919,24 @@ mtm_set_current(void *opaque, const char *str)
   mtm_rethink(mtm);
 }
 
+
+/**
+ *
+ */
+static void
+mtm_set_url(void *opaque, const char *str)
+{
+  rstr_t *r;
+  media_track_mgr_t *mtm = opaque;
+
+  mystrset(&mtm->mtm_canonical_url, str);
+  r = kv_url_opt_get_rstr(str, KVSTORE_DOMAIN_SYS, 
+			  mtm->mtm_type == MEDIA_TRACK_MANAGER_AUDIO ?
+			  "audioTrack" : "subtitleTrack");
+  rstr_set(&mtm->mtm_user_pref, r);
+  rstr_release(r);
+}
+
 /**
  *
  */
@@ -2069,6 +1961,13 @@ track_mgr_init(media_pipe_t *mp, media_track_mgr_t *mtm, prop_t *root,
 		   PROP_TAG_COURIER, mp->mp_pc,
 		   PROP_TAG_ROOT, current,
 		   NULL);
+
+  mtm->mtm_url_sub =
+    prop_subscribe(0,
+		   PROP_TAG_CALLBACK_STRING, mtm_set_url, mtm,
+		   PROP_TAG_COURIER, mp->mp_pc,
+		   PROP_TAG_ROOT, mp->mp_prop_url,
+		   NULL);
 }
 
 
@@ -2080,8 +1979,11 @@ track_mgr_destroy(media_track_mgr_t *mtm)
 {
   prop_unsubscribe(mtm->mtm_node_sub);
   prop_unsubscribe(mtm->mtm_current_sub);
+  prop_unsubscribe(mtm->mtm_url_sub);
   mtm_clear(mtm);
   free(mtm->mtm_current_url);
+  free(mtm->mtm_canonical_url);
+  rstr_release(mtm->mtm_user_pref);
 }
 
 
@@ -2116,6 +2018,28 @@ track_mgr_next_track(media_track_mgr_t *mtm)
  *
  */
 static void
+mtm_select_track(media_track_mgr_t *mtm, event_select_track_t *est)
+{
+  if(!est->manual)
+    return;
+
+  mtm->mtm_user_set = 1;
+  if(!mtm->mtm_canonical_url)
+    return;
+
+  kv_url_opt_set(mtm->mtm_canonical_url, KVSTORE_DOMAIN_SYS,
+		 mtm->mtm_type == MEDIA_TRACK_MANAGER_AUDIO ?
+		 "audioTrack" : "subtitleTrack",
+		 KVSTORE_SET_STRING, est->id);
+}
+
+
+
+
+/**
+ *
+ */
+static void
 ext_sub_dtor(media_buf_t *mb)
 {
   if(mb->mb_data != NULL)
@@ -2130,11 +2054,31 @@ void
 mp_load_ext_sub(media_pipe_t *mp, const char *url)
 {
   media_buf_t *mb = media_buf_alloc_unlocked(mp, 0);
-  mb->mb_data_type = MB_EXT_SUBTITLE;
+  mb->mb_data_type = MB_CTRL_EXT_SUBTITLE;
   
   if(url != NULL)
     mb->mb_data = subtitles_load(mp, url);
   
   mb->mb_dtor = ext_sub_dtor;
-  mb_enq_head(mp, &mp->mp_video, mb);
+  mb_enq(mp, &mp->mp_video, mb);
+}
+
+
+
+/**
+ *
+ */
+static int
+codec_def_cmp(const codec_def_t *a, const codec_def_t *b)
+{
+  return a->prio - b->prio;
+}
+
+/**
+ *
+ */
+void
+media_register_codec(codec_def_t *cd)
+{
+  LIST_INSERT_SORTED(&registeredcodecs, cd, link, codec_def_cmp);
 }
