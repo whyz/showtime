@@ -38,7 +38,7 @@ vobsub_decode_palette(uint32_t *clut, const char *str)
   int i = 0;
   while(*str && i < 16) {
     int v = strtol(str, &end, 16);
-    clut[i++] = v;
+    clut[i++] = (v & 0xff0000) >> 16 | (v & 0xff00) | (v & 0xff) << 16;
     str = end;
     while(*str == ' ')
       str++;
@@ -456,8 +456,7 @@ ve_deliver(vobsub_t *vs, vobsub_entry_t *ve)
  *
  */
 static void
-vobsub_picker(struct ext_subtitles *es, int64_t pts,
-	      struct video_decoder *vd)
+vobsub_picker(struct ext_subtitles *es, int64_t pts)
 {
   vobsub_t *vs = (vobsub_t *)es;
   vobsub_entry_t *ve = vs->vs_cur;

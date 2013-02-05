@@ -226,6 +226,7 @@ echo >>${CONFIG_MAK} "CC=$CC"
 echo >>${CONFIG_MAK} "CXX=$CXX"
 
 
+
 #
 # sqlite3
 #
@@ -604,6 +605,14 @@ if enabled libsidplay2; then
 fi
 
 
+#
+# Check for valgrind include files
+#
+if pkg-config valgrind; then
+    enable valgrind
+    echo "Valgrind development environment detected"
+fi
+
 
 #
 # libspotify
@@ -628,6 +637,7 @@ fi
 
 LIBAV_ARCH_FLAGS="--disable-shared --enable-static"
 libav_setup
+rtmpdump_setup
 
 #
 # Finalize

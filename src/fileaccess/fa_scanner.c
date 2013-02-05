@@ -53,7 +53,7 @@ typedef struct scanner {
 
   char *s_url;
   time_t s_mtime; // modifiaction time of s_url
-  char *s_playme;
+  rstr_t *s_playme;
 
   prop_t *s_nodes;
   prop_t *s_loading;
@@ -335,18 +335,14 @@ deep_probe(fa_dir_entry_t *fde, scanner_t *s)
 static void
 tryplay(scanner_t *s)
 {
-  fa_dir_entry_t *fde;
-
   if(s->s_playme == NULL)
     return;
 
-  TAILQ_FOREACH(fde, &s->s_fd->fd_entries, fde_link) {
-    if(!strcmp(s->s_playme, rstr_get(fde->fde_url))) {
-      playqueue_load_with_source(fde->fde_prop, s->s_model, 0);
-      free(s->s_playme);
-      s->s_playme = NULL;
-      return;
-    }
+  fa_dir_entry_t *fde = fa_dir_find(s->s_fd, s->s_playme);
+  if(fde != NULL) {
+    playqueue_load_with_source(fde->fde_prop, s->s_model, 0);
+    rstr_release(s->s_playme);
+    s->s_playme = NULL;
   }
 }
 
@@ -367,7 +363,7 @@ analyzer(scanner_t *s, int probe)
     tryplay(s);
 
   /* Scan all entries */
-  TAILQ_FOREACH(fde, &s->s_fd->fd_entries, fde_link) {
+  RB_FOREACH(fde, &s->s_fd->fd_entries, fde_link) {
 
     while(media_buffer_hungry && s->s_mode == BROWSER_DIR) 
       sleep(1);
@@ -474,7 +470,7 @@ scanner_notification(void *opaque, fa_notify_op_t op, const char *filename,
 
   switch(op) {
   case FA_NOTIFY_DEL:
-    TAILQ_FOREACH(fde, &s->s_fd->fd_entries, fde_link)
+    RB_FOREACH(fde, &s->s_fd->fd_entries, fde_link)
       if(!strcmp(filename, rstr_get(fde->fde_filename)))
 	break;
 
@@ -513,12 +509,10 @@ rescan(scanner_t *s)
 	  s->s_url, fd->fd_count, s->s_fd->fd_count);
   }
 
-  for(a = TAILQ_FIRST(&s->s_fd->fd_entries); a != NULL; a = n) {
-    n = TAILQ_NEXT(a, fde_link);
-    TAILQ_FOREACH(b, &fd->fd_entries, fde_link)
-      if(!strcmp(rstr_get(a->fde_url), rstr_get(b->fde_url)))
-	break;
+  for(a = RB_FIRST(&s->s_fd->fd_entries); a != NULL; a = n) {
+    n = RB_NEXT(a, fde_link);
 
+    b = fa_dir_find(fd, a->fde_url);
     if(b != NULL) {
       // Exists in old and new set
 
@@ -541,10 +535,9 @@ rescan(scanner_t *s)
     }
   }
 
-  while((b = TAILQ_FIRST(&fd->fd_entries)) != NULL) {
-    TAILQ_REMOVE(&fd->fd_entries, b, fde_link);
-    TAILQ_INSERT_TAIL(&s->s_fd->fd_entries, b, fde_link);
-    s->s_fd->fd_count++;
+  while((b = fd->fd_entries.root) != NULL) {
+    fa_dir_remove(fd, b);
+    fa_dir_insert(s->s_fd, b);
 
     changed |= scanner_entry_setup(s, b, "rescan");
   }
@@ -592,7 +585,7 @@ doscan(scanner_t *s, int with_notify)
 
       prop_vec_t *pv = prop_vec_create(s->s_fd->fd_count);
     
-      TAILQ_FOREACH(fde, &s->s_fd->fd_entries, fde_link) {
+      RB_FOREACH(fde, &s->s_fd->fd_entries, fde_link) {
         make_prop(fde);
         pv = prop_vec_append(pv, fde->fde_prop);
       }
@@ -857,7 +850,9 @@ set_sort_order(void *opaque, prop_event_t event, ...)
     if(val != NULL) {
       if(!strcmp(val, "title"))
 	prop_nf_sort(s->s_pnf, "node.metadata.title", 0, 3, NULL, 1);
-      if(!strcmp(val, "date"))
+      else if(!strcmp(val, "date"))
+	prop_nf_sort(s->s_pnf, "node.metadata.timestamp", 1, 3, NULL, 0);
+      else if(!strcmp(val, "dateold"))
 	prop_nf_sort(s->s_pnf, "node.metadata.timestamp", 0, 3, NULL, 0);
     }
     kv_url_opt_set(s->s_url, KVSTORE_DOMAIN_SYS, "sortorder", 
@@ -893,14 +888,22 @@ add_sort_option_type(scanner_t *s, prop_t *model)
     abort();
 
   prop_t *on_date = prop_create_root("date");
-  prop_link(_p("Date"), prop_create(on_date, "title"));
+  prop_link(_p("Date (newest first)"), prop_create(on_date, "title"));
   if(prop_set_parent(on_date, options))
+    abort();
+
+  prop_t *on_dateold = prop_create_root("dateold");
+  prop_link(_p("Date (oldest first)"), prop_create(on_dateold, "title"));
+  if(prop_set_parent(on_dateold, options))
     abort();
 
   rstr_t *cur = kv_url_opt_get_rstr(s->s_url, KVSTORE_DOMAIN_SYS, 
 				    "sortorder");
 
   if(cur != NULL && !strcmp(rstr_get(cur), "date")) {
+    prop_select(on_date);
+    prop_nf_sort(s->s_pnf, "node.metadata.timestamp", 1, 3, NULL, 0);
+  } else if(cur != NULL && !strcmp(rstr_get(cur), "dateold")) {
     prop_select(on_date);
     prop_nf_sort(s->s_pnf, "node.metadata.timestamp", 0, 3, NULL, 0);
   } else {
@@ -1075,7 +1078,7 @@ fa_scanner_page(const char *url, time_t url_mtime,
   s->s_url = strdup(url);
   s->s_mode = BROWSER_DIR;
   s->s_mtime = url_mtime;
-  s->s_playme = playme != NULL ? strdup(playme) : NULL;
+  s->s_playme = rstr_alloc(playme);
 
   hts_mutex_init(&s->s_mutex);
   hts_cond_init(&s->s_cond, &s->s_mutex);
@@ -1087,7 +1090,8 @@ fa_scanner_page(const char *url, time_t url_mtime,
   s->s_direct_close = prop_ref_inc(direct_close);
   s->s_title = rstr_dup(title);
 
-  add_indexed_option(s, model);
+  if(gconf.enable_experimental)
+    add_indexed_option(s, model);
 
   prop_t *onlysupported;
 

@@ -319,10 +319,12 @@ validate_cookie(const char *req_host, const char *req_path,
   /*
    * The value for the Domain attribute contains no embedded dots or
    * does not start with a dot.
+   * Unless it matches the req_host perfectly
    */
 
-  if(*domain != '.' || strchr(domain + 1, '.') == NULL)
-    return 0;
+  if(strcmp(domain, req_host))
+    if(*domain != '.' || strchr(domain + 1, '.') == NULL)
+      return 0;
 
   /*
    * The value for the request-host does not domain-match the Domain
@@ -1405,6 +1407,10 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
   nohead = !!(http_server_quirk_set_get(hf->hf_connection->hc_hostname, 0) &
 	      HTTP_SERVER_QUIRK_NO_HEAD);
+  
+  nohead = 1; // We're gonna test without HEAD requests for a while
+              // There seems to be a lot of issues with it, in particular
+              // for servers serving HLS
 
  again:
 
@@ -1840,7 +1846,7 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
 
       char range[100];
 
-      if(hf->hf_filesize == -1) {
+      if(hf->hf_filesize == -1 || hf->hf_no_ranges) {
 	range[0] = 0;
 
       } else if(hf->hf_streaming || hf->hf_consecutive_read > STREAMING_LIMIT) {
@@ -1893,6 +1899,11 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
 	  }
 	}
 	break;
+
+      case 416:
+	hf->hf_no_ranges = 1;
+	http_detach(hf, 0, "Requested Range Not Satisfiable");
+	continue;
 
       default:
 	TRACE(TRACE_DEBUG, "HTTP", 

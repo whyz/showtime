@@ -1,6 +1,6 @@
 language: Italian
 native: Italiano
-maintainer: Red Squirrel <iam@redsquirrel.tk>
+maintainer: Red Squirrel <iam@redsquirrel87.com>
 #
 # ./glwskins/default/cmdmenu.view
 #
@@ -96,6 +96,9 @@ msg: Impostazioni Audio
 
 id: Audio tracks
 msg: Tracce audio
+
+id: Chapters
+msg: Capitoli
 
 id: Seek by time
 msg: Salta per tempo
@@ -455,15 +458,6 @@ id: Master volume: %d dB
 msg: Volume principale: %d dB
 
 #
-# ./src/api/opensubtitles.c
-#
-id: Settings for opensubtitles.org
-msg: Impostazioni per opensubtitles.org
-
-id: Use opensubtitles.org
-msg: Utilizza opensubtitles.org
-
-#
 # ./src/api/tmdb.c
 #
 id: Language (ISO 639-1 code)
@@ -664,8 +658,11 @@ msg: Accesso fallito
 id: Artists
 msg: Artisti
 
-id: Date
-msg: Data
+id: Date (newest first)
+msg: Data (dal piu' recente)
+
+id: Date (oldest first)
+msg: Data (dal piu' vecchio)
 
 id: Filename
 msg: Nome file
@@ -690,12 +687,6 @@ msg: Ordina
 #
 id: Search using spotlight
 msg: Cerca usando spotlight
-
-#
-# ./src/fileaccess/fa_video.c
-#
-id: External file
-msg: File esterno
 
 #
 # ./src/i18n.c
@@ -772,6 +763,12 @@ msg: Allineare sottotitoli su frame video
 id: Audio delay
 msg: Ritardo audio
 
+id: Stretch video to fullscreen
+msg: Adatta video a Schermo Pieno
+
+id: Stretch video to widescreen
+msg: Adatta video a widescreen
+
 id: Subtitle delay
 msg: Ritardo sottotitoli
 
@@ -826,6 +823,9 @@ msg: Sorgente metadata
 id: Movie
 msg: Film
 
+id: Movie title
+msg: Titolo del Film
+
 id: No data found
 msg: Nessun dato trovato
 
@@ -840,6 +840,9 @@ msg: Provider per Video
 
 id: Refresh metadata
 msg: Aggiorna metadata
+
+id: Title, Season, Episode
+msg: Titolo, Stagione, Episodio
 
 id: Track %d
 msg: Traccia %d
@@ -959,7 +962,7 @@ id: Installed plugins
 msg: Plugin installati
 
 id: Installed version higher than available
-msg: La versione installa è più recente di quella disponibile
+msg: La versione installata è più recente di quella disponibile
 
 id: Installing
 msg: Installazione
@@ -1080,6 +1083,12 @@ msg: Impostazioni utili per sviluppatori
 
 id: System related settings
 msg: Impostazioni relative al sistema
+
+#
+# ./src/subtitles/sub_scanner.c
+#
+id: External file
+msg: File esterno
 
 #
 # ./src/text/fontstash.c
@@ -1290,12 +1299,6 @@ msg: Colore ombra
 
 id: Shadow offset
 msg: Offset ombra
-
-id: Stretch video to fullscreen
-msg: Adatta video a Schermo Pieno
-
-id: Stretch video to widescreen
-msg: Adatta video a widescreen
 
 id: Subtitle position
 msg: Posizione sottotitoli
