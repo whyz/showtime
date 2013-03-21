@@ -16,7 +16,6 @@ BUILD=${CONFIGURE_POSTFIX}
 TMPDIR=${TOPDIR}/tmp
 GLW_DEFAULT_SKIN="default"
 DEFAULT_LOGTARGET=""
-LIBSPOTIFY_VERSION="12.1.51"
 
 CONFIG_LIST="
  libasound
@@ -231,7 +230,7 @@ common_opt(){
   --cleanbuild) enable cleanbuild
   ;;
 
-  --ccache) CC="ccache $CC"
+  --ccache) enable ccache
   ;;
 
   --release) enable release
@@ -248,6 +247,10 @@ setup_env(){
     if enabled cleanbuild; then
 	echo "Cleaning builddir: ${BUILDDIR}"
 	rm -rf ${BUILDDIR}
+    fi
+
+    if enabled ccache; then
+	CC="ccache $CC"
     fi
 
     mkdir -p ${BUILDDIR}
@@ -317,7 +320,7 @@ libav_setup() {
     mkdir -p "${LIBAV_BUILD_DIR}"
     mkdir -p "${LIBAV_INSTALL_DIR}"
 
-    LIBAV_COMMON_FLAGS="--disable-encoders --disable-bsfs --disable-filters --disable-muxers --disable-devices --disable-demuxer=rtp --disable-protocol=rtp --disable-bzlib --disable-decoder=twinvq --disable-decoder=snow --disable-decoder=cavs --enable-encoder=png --disable-avconv --disable-avprobe --disable-avfilter"
+    LIBAV_COMMON_FLAGS="--disable-encoders --disable-bsfs --disable-filters --disable-muxers --disable-devices --disable-demuxer=rtp --disable-protocol=rtp --disable-bzlib --disable-decoder=twinvq --disable-decoder=snow --disable-decoder=cavs --enable-encoder=mjpeg --disable-avconv --disable-avprobe --disable-avfilter"
 
     (cd ${LIBAV_BUILD_DIR} && ${TOPDIR}/ext/libav/configure ${LIBAV_ARCH_FLAGS} ${LIBAV_COMMON_FLAGS} --prefix=${LIBAV_INSTALL_DIR} --extra-cflags="${LIBAV_CFLAGS} ${EXTRA_CFLAGS}" --extra-ldflags="${LIBAV_LDFLAGS} ${EXTRA_LDFLAGS}" --cc="${CC}") || die
 
@@ -432,7 +435,20 @@ freetype_setup()
 
 
 
-
+#
+#
+#
+libspotify_setup() {
+     download_file https://developer.spotify.com/download/libspotify/libspotify-$1-release.tar.gz libspotifytarball
+     tar -x -C "${BUILDDIR}" -f "$libspotifytarball"
+     P=${BUILDDIR}/libspotify-$1-release
+     echo >>${CONFIG_H} "#define LIBSPOTIFY_PATH \"${P}\""
+     echo >>${CONFIG_MAK} "LIBSPOTIFY_PATH=${P}"
+     echo >>${CONFIG_MAK} "CFLAGS_cfg += -I$P/include"
+     support/spotifysyms.sh "$P/include/libspotify/api.h" "$P/include/libspotify/apifunctions.h"
+     enable spotify
+     enable libspotify_load_runtime
+}
 
 
 #

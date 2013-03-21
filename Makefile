@@ -32,8 +32,10 @@ PROG=${BUILDDIR}/showtime
 
 include ${BUILDDIR}/config.mak
 
-CFLAGS  = -Wall -Werror -Wwrite-strings -Wno-deprecated-declarations 
-CFLAGS += -Wmissing-prototypes -Wno-multichar -Iext/dvd ${OPTFLAGS}
+CFLAGS_std = -Wall -Werror -Wwrite-strings -Wno-deprecated-declarations \
+		-Wmissing-prototypes -Wno-multichar  -Iext/dvd
+
+CFLAGS = ${CFLAGS_std} ${OPTFLAGS}
 
 
 
@@ -90,6 +92,7 @@ SRCS +=	src/misc/ptrvec.c \
 	src/misc/rstr.c \
 	src/misc/pixmap.c \
 	src/misc/svg.c \
+	src/misc/rasterizer_ft.c \
 	src/misc/jpeg.c \
 	src/misc/gz.c \
 	src/misc/str.c \
@@ -101,6 +104,7 @@ SRCS +=	src/misc/ptrvec.c \
 	src/misc/json.c \
 	src/misc/unicode_composition.c \
 	src/misc/pool.c \
+	src/misc/buf.c \
 
 SRCS-${CONFIG_TREX} += ext/trex/trex.c
 
@@ -154,6 +158,7 @@ SRCS += src/fileaccess/fileaccess.c \
 	src/fileaccess/fa_sidfile.c \
 	src/fileaccess/fa_nativesmb.c \
 	src/fileaccess/fa_buffer.c \
+	src/fileaccess/fa_slice.c \
 	src/fileaccess/fa_imageloader.c \
 	src/fileaccess/fa_indexer.c \
 
@@ -196,6 +201,7 @@ SRCS += 		src/api/xmlrpc.c \
 			src/api/tvdb.c \
 
 SRCS-$(CONFIG_HTTPSERVER) += src/api/httpcontrol.c
+SRCS-$(CONFIG_HTTPSERVER) += src/api/stpp.c
 SRCS-$(CONFIG_AIRPLAY) += src/api/airplay.c
 
 ##############################################################
@@ -223,7 +229,7 @@ SRCS += src/video/video_playback.c \
 	src/video/video_settings.c \
 
 SRCS-$(CONFIG_VDPAU)    += src/video/vdpau.c
-SRCS-$(CONFIG_PS3_VDEC) += src/video/ps3_vdec.c
+SRCS-$(CONFIG_PS3_VDEC) += src/video/ps3_vdec.c src/video/h264_annexb.c
 SRCS-$(CONFIG_VDA)      += src/video/vda.c
 
 ##############################################################
@@ -261,6 +267,11 @@ SRCS-$(CONFIG_CDDA)      += src/backend/dvd/cdda.c
 # TV
 ##############################################################
 SRCS  += src/backend/htsp/htsp.c \
+
+##############################################################
+# TV
+##############################################################
+SRCS  += src/backend/hls/hls.c \
 
 ##############################################################
 # Shoutcast
@@ -366,6 +377,8 @@ SRCS-$(CONFIG_NVCTRL)             += src/ui/linux/nvidia.c
 BUNDLES-$(CONFIG_GLW_BACKEND_OPENGL) += src/ui/glw/glsl
 BUNDLES-$(CONFIG_GLW_BACKEND_OPENGL_ES) += src/ui/glw/glsl
 
+${BUILDDIR}/src/ui/glw/%.o : CFLAGS = ${OPTFLAGS} ${CFLAGS_std} -ffast-math
+
 ##############################################################
 # GTK based interface
 ##############################################################
@@ -390,8 +403,7 @@ SRCS-$(CONFIG_GU) +=    src/ui/gu/gu.c \
 			src/ui/gu/gu_video.c \
 			src/ui/linux/x11_common.c \
 
-${BUILDDIR}/src/ui/gu/%.o : CFLAGS = $(CFLAGS_GTK) ${OPTFLAGS} \
--Wall -Werror -Wmissing-prototypes -Wno-cast-qual -Wno-deprecated-declarations
+${BUILDDIR}/src/ui/gu/%.o : CFLAGS = $(CFLAGS_GTK) ${OPTFLAGS} ${CFLAGS_std}
 
 
 ##############################################################
