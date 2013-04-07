@@ -607,7 +607,7 @@ vq_entries_callback(void *opaque, prop_event_t event, ...)
   case PROP_MOVE_CHILD:
     p1 = va_arg(ap, prop_t *);
     p2 = va_arg(ap, prop_t *);
-    vq_move_node(vq, prop_tag_get(p1, vq), prop_tag_get(p2, vq));
+    vq_move_node(vq, prop_tag_get(p1, vq), p2 ? prop_tag_get(p2, vq) : NULL);
     break;
 
   case PROP_SET_DIR:
@@ -825,7 +825,7 @@ video_playback_create(media_pipe_t *mp)
 {
   mp_ref_inc(mp);
   hts_thread_create_detached("video player",  video_player_idle, mp,
-			     THREAD_PRIO_NORMAL);
+			     THREAD_PRIO_DEMUXER);
 }
 
 

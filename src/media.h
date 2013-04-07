@@ -138,11 +138,10 @@ typedef struct media_codec {
   int refcount;
   struct media_format *fw;
   int codec_id;
-  int codec_ctx_alloced; /* Set if this struct owns the allocation
-			    of codec_ctx */
 
-  struct AVCodec *codec; // This may be NULL for HW accelerated decoders
-  struct AVCodecContext *codec_ctx;
+  struct AVCodecContext *fmt_ctx;     // Context owned by AVFormatContext
+  struct AVCodecContext *ctx;         // Context owned by decoder thread
+  
   struct AVCodecParserContext *parser_ctx;
 
   void *opaque;
@@ -151,6 +150,8 @@ typedef struct media_codec {
 
   void (*decode)(struct media_codec *mc, struct video_decoder *vd,
 		 struct media_queue *mq, struct media_buf *mb, int reqsize);
+
+  void (*flush)(struct media_codec *mc, struct video_decoder *vd);
 
   void (*close)(struct media_codec *mc);
   void (*reinit)(struct media_codec *mc);
@@ -187,7 +188,6 @@ typedef struct media_buf {
     MB_CTRL_PLAY,
     MB_CTRL_EXIT,
     MB_CTRL_FLUSH_SUBTITLES,
-    MB_CTRL_BLACKOUT,
 
     MB_CTRL_DVD_HILITE,
     MB_CTRL_EXT_SUBTITLE,
@@ -352,6 +352,7 @@ typedef struct media_pipe {
   prop_t *mp_prop_notifications;
   prop_t *mp_prop_primary;
   prop_t *mp_prop_metadata;
+  prop_t *mp_prop_metadata_source;
   prop_t *mp_prop_model;
   prop_t *mp_prop_playstatus;
   prop_t *mp_prop_pausereason;
@@ -431,6 +432,10 @@ typedef struct media_pipe {
    */
   void *mp_extra;
 
+  void (*mp_seek_initiate)(struct media_pipe *mp);
+  void (*mp_seek_audio_done)(struct media_pipe *mp);
+  void (*mp_seek_video_done)(struct media_pipe *mp);
+
 } media_pipe_t;
 
 extern void (*media_pipe_init_extra)(media_pipe_t *mp);
@@ -461,8 +466,7 @@ typedef struct media_codec_params {
 typedef struct codec_def {
   LIST_ENTRY(codec_def) link;
   void (*init)(void);
-  int (*open)(media_codec_t *mc, int id,
-	      const media_codec_params_t *mcp,
+  int (*open)(media_codec_t *mc, const media_codec_params_t *mcp,
 	      media_pipe_t *mp);
   int prio;
 } codec_def_t;
@@ -590,6 +594,8 @@ void mp_set_url(media_pipe_t *mp, const char *url);
 
 void mp_configure(media_pipe_t *mp, int caps, int buffer_mode,
 		  int64_t duration);
+
+void mp_set_duration(media_pipe_t *mp, int64_t duration);
 
 void mp_load_ext_sub(media_pipe_t *mp, const char *url);
 

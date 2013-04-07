@@ -22,7 +22,7 @@
 #include <sys/ioctl.h>
 #include <linux/fb.h>
 #include <linux/kd.h>
-
+#include <signal.h>
 #include <assert.h>
 
 #include <bcm_host.h>
@@ -42,6 +42,8 @@
 #include "navigator.h"
 #include "omx.h"
 #include "backend/backend.h"
+#include "notifications.h"
+
 
 static uint32_t screen_width, screen_height;
 static EGLDisplay display;
@@ -310,6 +312,21 @@ set_bg_alpha(float alpha, void *opaque)
 
 
 
+static void
+the_alarm(int x)
+{
+  extern int alarm_fired;
+  alarm_fired = 1;
+}
+
+static int avgit(const int *p, int num)
+{
+  int i, v = 0;
+  for(i = 0; i < num; i++)
+    v += p[i];
+  return v / num;
+}
+
 
 /**
  *
@@ -318,6 +335,7 @@ static void
 run(void)
 {
   glw_root_t *gr = calloc(1, sizeof(glw_root_t));
+  gr->gr_reduce_cpu = 1;
   gr->gr_prop_ui = prop_create_root("ui");
   gr->gr_prop_nav = nav_spawn();
   prop_set(gr->gr_prop_ui, "nobackground", PROP_SET_INT, 1);
@@ -338,6 +356,31 @@ run(void)
 
   glClearColor(0,0,0,0);
 
+  // Arrange for prop_courier_poll_with_alarm
+
+  struct sigaction sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = the_alarm;
+  sa.sa_flags = SA_RESTART;
+  sigaction(SIGALRM, &sa, NULL);
+
+
+  sigset_t set;
+  sigemptyset(&set);
+  sigaddset(&set, SIGALRM);
+  pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+
+  gr->gr_prop_dispatcher = &prop_courier_poll_with_alarm;
+  gr->gr_prop_maxtime = 5000;
+
+  int numframes = 0;
+  int tprep[10] = {};
+  int tlayout[10] = {};
+  int trender[10] = {};
+  int tpost[10] = {};
+
+  int64_t t1, t2, t3, t4, t5;
+
   while(!gr->gr_stop) {
 
     glw_lock(gr);
@@ -345,17 +388,40 @@ run(void)
     glViewport(0, 0, gr->gr_width, gr->gr_height);
     glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
 
+    t1 = showtime_get_ts();
     glw_prepare_frame(gr, 0);
 
     glw_rctx_t rc;
     glw_rctx_init(&rc, gr->gr_width, gr->gr_height, 1);
+    t2 = showtime_get_ts();
     glw_layout0(gr->gr_universe, &rc);
+    t3 = showtime_get_ts();
     glw_render0(gr->gr_universe, &rc);
+    t4 = showtime_get_ts();
 
     glw_unlock(gr);
     glw_post_scene(gr);
-
+    t5 = showtime_get_ts();
     eglSwapBuffers(display, surface);
+
+
+    tprep[numframes]   = t2 - t1;
+    tlayout[numframes] = t3 - t2;
+    trender[numframes] = t4 - t3;
+    tpost[numframes]   = t5 - t4;
+
+    numframes++;
+
+    if(numframes == 10) {
+      numframes = 0;
+      if(0) {
+	printf("%10d %10d %10d %10d\n",
+	       avgit(tprep, 10),
+	       avgit(tlayout, 10),
+	       avgit(trender, 10),
+	       avgit(tpost, 10));
+      }
+    }
   }
 }
 
@@ -369,6 +435,13 @@ main(int argc, char **argv)
   asm volatile("vmrs r0, fpscr\n"
 	       "orr r0, $(1 << 24)\n"
 	       "vmsr fpscr, r0" : : : "r0");
+
+  linux_check_capabilities();
+
+  sigset_t set;
+  sigemptyset(&set);
+  sigaddset(&set, SIGALRM);
+  sigprocmask(SIG_BLOCK, &set, NULL);
 
   bcm_host_init();
 
@@ -389,6 +462,19 @@ main(int argc, char **argv)
   linux_init_monitors();
 
   egl_init();
+
+  extern int posix_set_thread_priorities;
+
+  if(!posix_set_thread_priorities) {
+    char buf[512];
+    
+    snprintf(buf, sizeof(buf),
+	     "Showtime runs without realtime scheduling on your Raspberry Pi\n"
+	     "This may impact performance during video playback.\n"
+	     "You have been warned! Please set SYS_CAP_NICE:\n"
+	     "  sudo setcap 'cap_sys_nice+ep %s'", gconf.binary);
+    notify_add(NULL, NOTIFY_WARNING, NULL, 10,  rstr_alloc(buf));
+  }
 
   run();
 
