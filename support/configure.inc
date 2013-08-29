@@ -51,7 +51,6 @@ CONFIG_LIST="
  libgme
  libxss
  libxv
- serdev
  openssl
  polarssl
  librtmp
@@ -82,8 +81,12 @@ CONFIG_LIST="
  tlsf
  airplay
  webpopup
+ webkit
  valgrind
  xmp
+ bughunt
+ bspatch
+ connman
 "
 
 cleanup() {
@@ -167,7 +170,7 @@ cp_if_changed(){
 
 download_file() {
     local __resultvar=$2
-    local URL_HASH=`echo "$1" | shasum  | awk '{print $1}'`
+    local URL_HASH=`echo "$1" | ${SHASUM}  | awk '{print $1}'`
     mkdir -p ${TOPDIR}/.downloadcache
     local DLPATH=${TOPDIR}/.downloadcache/${URL_HASH}
     if [ ! -f "${DLPATH}" ]; then
@@ -254,6 +257,9 @@ setup_env(){
 	CXX="ccache $CXX"
     fi
 
+    which >/dev/null 2>&1 shasum  && SHASUM=shasum
+    which >/dev/null 2>&1 sha1sum && SHASUM=sha1sum
+
     mkdir -p ${BUILDDIR}
     BUILDDIR=`cd ${BUILDDIR} && pwd`
 
@@ -265,7 +271,7 @@ setup_env(){
 
     rm -rf "${BUILDDIR}/stamps"
 
-    EXT_INSTALL_DIR=${BUILDDIR}/ext
+    EXT_INSTALL_DIR=${BUILDDIR}/inst
 
     mkdir -p ${EXT_INSTALL_DIR}/include ${EXT_INSTALL_DIR}/lib
 
@@ -302,19 +308,28 @@ EOF
 }
 
 enable libav
+enable xmp
+
+
+update_ext_submodule() {
+    status=`git submodule status ext/$1 | cut -b 1`
+    echo "Updating $1, submodule status = $status"
+    git submodule update --init ext/$1
+}
+
+
+
+
 
 libav_setup() {
-    status=`git submodule status ext/libav | cut -b 1`
-    echo "Updating libav, submodule status = $status"
-    git submodule update --init ext/libav
+    update_ext_submodule libav
     echo "Configuring libav..."
     
     LIBAV_BUILD_DIR=${BUILDDIR}/libav/build
 
-    [ "$status" = "+" ] && echo "Cleaning libav build dir" && rm -rf "${LIBAV_BUILD_DIR}"
     mkdir -p "${LIBAV_BUILD_DIR}"
 
-    LIBAV_COMMON_FLAGS="--disable-encoders --disable-bsfs --disable-filters --disable-muxers --disable-devices --disable-demuxer=rtp --disable-protocol=rtp --disable-bzlib --disable-decoder=twinvq --disable-decoder=snow --disable-decoder=cavs --enable-encoder=mjpeg --disable-avconv --disable-avprobe --disable-avfilter"
+    LIBAV_COMMON_FLAGS="--disable-encoders --disable-bsfs --disable-filters --disable-muxers --disable-devices --disable-demuxer=rtp --disable-protocol=rtp --disable-bzlib --disable-decoder=twinvq --disable-decoder=snow --disable-decoder=cavs --enable-encoder=mjpeg --disable-avconv --disable-avprobe --disable-avfilter --enable-muxer=spdif"
 
     (cd ${LIBAV_BUILD_DIR} && ${TOPDIR}/ext/libav/configure ${LIBAV_ARCH_FLAGS} ${LIBAV_COMMON_FLAGS} --prefix=${EXT_INSTALL_DIR} --extra-cflags="${LIBAV_CFLAGS} ${EXTRA_CFLAGS}" --extra-ldflags="${LIBAV_LDFLAGS} ${EXTRA_LDFLAGS}" --cc="${CC}") || die
 
@@ -329,9 +344,7 @@ libav_setup() {
 #
 #
 rtmpdump_setup() {
-    status=`git submodule status ext/rtmpdump | cut -b 1`
-    echo "Updating rtmpdump, submodule status = $status"
-    git submodule update --init ext/rtmpdump
+    update_ext_submodule rtmpdump
 }
 
 
@@ -343,10 +356,7 @@ xmp_setup() {
         return
     fi
 
-    status=`git submodule status ext/xmp | cut -b 1`
-    echo "Updating XMP, submodule status = $status"
-    git submodule update --init ext/xmp
-
+    update_ext_submodule xmp
     echo >>${CONFIG_MAK} "LDFLAGS_cfg += -lxmp"
     add_stamp xmp
 }
@@ -384,12 +394,13 @@ bzip2_setup()
 
     tar -x -C "${BUILDDIR}" -f "${bzip2tarball}"
 
-    sed -i s#^CC=gcc\$#CC=${TOOLCHAIN}gcc# ${BZIP2_SRC_DIR}/Makefile
-    sed -i s#^AR=ar\$#AR=${TOOLCHAIN}ar# ${BZIP2_SRC_DIR}/Makefile
-    sed -i s#^RANLIB=ranlib\$#RANLIB=${TOOLCHAIN}ranlib# ${BZIP2_SRC_DIR}/Makefile
+    sed -ibak s#^CC=gcc\$#CC=${TOOLCHAIN}gcc# ${BZIP2_SRC_DIR}/Makefile
+    sed -ibak s#^AR=ar\$#AR=${TOOLCHAIN}ar# ${BZIP2_SRC_DIR}/Makefile
+    sed -ibak s#^RANLIB=ranlib\$#RANLIB=${TOOLCHAIN}ranlib# ${BZIP2_SRC_DIR}/Makefile
 
     echo >>${CONFIG_MAK} "BZIP2_BUILD_DIR=${BZIP2_SRC_DIR}"
 
+    echo >>${CONFIG_MAK} "LDFLAGS_cfg += -lbz2"
     add_stamp bzip2
 }
 
@@ -452,12 +463,13 @@ finalize() {
     cat >>${CONFIG_MAK} <<EOF
 CC=$CC
 CXX=$CXX
-CFLAGS_cfg += -I${BUILDDIR}/ext/include
-LDFLAGS_cfg += -L${BUILDDIR}/ext/lib
+CFLAGS_cfg  += -I${EXT_INSTALL_DIR}/include
+LDFLAGS_cfg += -L${EXT_INSTALL_DIR}/lib
 STRIP=${TOOLCHAIN}strip
 OBJDUMP=${TOOLCHAIN}objdump
 OBJCOPY=${TOOLCHAIN}objcopy
 RANLIB=${TOOLCHAIN}ranlib
+EXT_INSTALL_DIR=${EXT_INSTALL_DIR}
 EOF
 
     if enabled libav; then

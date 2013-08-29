@@ -407,8 +407,10 @@ prop_notify_free_payload(prop_notify_t *n)
   case PROP_SET_STRING:
   case PROP_SUBSCRIPTION_MONITOR_ACTIVE:
   case PROP_WANT_MORE_CHILDS:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
   case PROP_DESTROYED:
+  case PROP_ADOPT_RSTRING:
     break;
   }
 }
@@ -735,7 +737,8 @@ prop_dispatch_one(prop_notify_t *n)
 
   case PROP_SUBSCRIPTION_MONITOR_ACTIVE:
   case PROP_WANT_MORE_CHILDS:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
     if(pt != NULL)
       pt(s, n->hpn_event, s->hps_user_int);
     else
@@ -763,6 +766,7 @@ prop_dispatch_one(prop_notify_t *n)
     prop_ref_dec(n->hpn_prop2);
     break;
   case PROP_SET_STRING:
+  case PROP_ADOPT_RSTRING:
     break;
   }
 
@@ -1542,6 +1546,70 @@ prop_create_root_ex(const char *name, int noalloc)
 }
 
 
+/**
+ *
+ */
+prop_t *
+prop_create_after(prop_t *parent, const char *name, prop_t *after,
+		  prop_sub_t *skipme)
+{
+  prop_t *p;
+  hts_mutex_lock(&prop_mutex);
+
+  if(parent != NULL && parent->hp_type != PROP_ZOMBIE) {
+
+    prop_make_dir(parent, skipme, "prop_create_after()");
+
+    TAILQ_FOREACH(p, &parent->hp_childs, hp_parent_link)
+      if(p->hp_name != NULL && !strcmp(p->hp_name, name))
+	break;
+
+    if(p == NULL) {
+
+      p = prop_make(name, 0, parent);
+  
+      if(after == NULL) {
+	TAILQ_INSERT_HEAD(&parent->hp_childs, p, hp_parent_link);
+      } else {
+	TAILQ_INSERT_AFTER(&parent->hp_childs, after, p, hp_parent_link);
+      }
+
+      prop_t *next = TAILQ_NEXT(p, hp_parent_link);
+      if(next == NULL) {
+	prop_notify_child2(p, parent, next, PROP_ADD_CHILD_BEFORE, skipme, 0);
+      } else {
+	prop_notify_child(p, parent, PROP_ADD_CHILD, skipme, 0);
+      }
+
+    } else {
+
+      prop_t *prev = TAILQ_PREV(p, prop_queue, hp_parent_link);
+
+      if(prev != after) {
+	
+	TAILQ_REMOVE(&parent->hp_childs, p, hp_parent_link);
+
+	if(after == NULL) {
+	  TAILQ_INSERT_HEAD(&parent->hp_childs, p, hp_parent_link);
+	} else {
+	  TAILQ_INSERT_AFTER(&parent->hp_childs, after, p, hp_parent_link);
+	}
+	
+	prop_t *next = TAILQ_NEXT(p, hp_parent_link);
+	prop_notify_child2(p, parent, next, PROP_MOVE_CHILD, skipme, 0);
+      }
+    }
+
+
+  } else {
+    p = NULL;
+  }
+
+  hts_mutex_unlock(&prop_mutex);
+  return p;
+}
+
+
 
 /**
  *
@@ -1828,6 +1896,41 @@ prop_destroy_childs(prop_t *p)
       prop_destroy_child(p, c);
     }
   }
+  hts_mutex_unlock(&prop_mutex);
+}
+
+
+/**
+ *
+ */
+static void
+prop_void_childs0(prop_t *p)
+{
+  if(p->hp_type == PROP_ZOMBIE)
+    return;
+  if(p->hp_type == PROP_DIR) {
+    prop_t *c;
+    TAILQ_FOREACH(c, &p->hp_childs, hp_parent_link)
+      prop_void_childs0(c);
+  } else {
+    if(prop_clean(p))
+      return;
+    p->hp_type = PROP_VOID;
+    prop_notify_value(p, NULL, "prop_void_childs()", 0);
+  }
+}
+
+
+/**
+ *
+ */
+void
+prop_void_childs(prop_t *p)
+{
+  if(p == NULL)
+    return;
+  hts_mutex_lock(&prop_mutex);
+  prop_void_childs0(p);
   hts_mutex_unlock(&prop_mutex);
 }
 
@@ -3382,6 +3485,9 @@ prop_link0(prop_t *src, prop_t *dst, prop_sub_t *skipme, int hard)
 void
 prop_link_ex(prop_t *src, prop_t *dst, prop_sub_t *skipme, int hard)
 {
+  if(src == NULL || dst == NULL)
+    return;
+
   hts_mutex_lock(&prop_mutex);
   prop_link0(src, dst, skipme, hard);
   hts_mutex_unlock(&prop_mutex);
@@ -3504,6 +3610,29 @@ prop_unselect_ex(prop_t *parent, prop_sub_t *skipme)
  *
  */
 void
+prop_select_by_value_ex(prop_t *p, const char *name, prop_sub_t *skipme)
+{
+  hts_mutex_lock(&prop_mutex);
+
+  if(p->hp_type == PROP_DIR) {
+    prop_t *c;
+    TAILQ_FOREACH(c, &p->hp_childs, hp_parent_link)
+      if(c->hp_name != NULL && !strcmp(c->hp_name, name))
+        break;
+
+    prop_notify_child(c, p, PROP_SELECT_CHILD, skipme, 0);
+    p->hp_selected = c;
+  }
+  hts_mutex_unlock(&prop_mutex);
+}
+
+
+
+
+/**
+ *
+ */
+void
 prop_suggest_focus(prop_t *p)
 {
   prop_t *parent;
@@ -3565,6 +3694,20 @@ prop_find(prop_t *p, ...)
   prop_t *c = prop_ref_inc(prop_find0(p, ap));
   hts_mutex_unlock(&prop_mutex);
   va_end(ap);
+  return c;
+}
+
+
+/**
+ *
+ */
+prop_t *
+prop_first_child(prop_t *p)
+{
+  hts_mutex_lock(&prop_mutex);
+  prop_t *c = p && p->hp_type == PROP_DIR ? TAILQ_FIRST(&p->hp_childs) : NULL;
+  c = prop_ref_inc(c);
+  hts_mutex_unlock(&prop_mutex);
   return c;
 }
 
@@ -3751,6 +3894,18 @@ prop_courier_wait(prop_courier_t *pc, struct prop_notify_queue *q, int timeout)
  *
  */
 void
+prop_courier_wakeup(prop_courier_t *pc)
+{
+  hts_mutex_lock(&prop_mutex);
+  hts_cond_signal(&pc->pc_cond);
+  hts_mutex_unlock(&prop_mutex);
+}
+
+
+/**
+ *
+ */
+void
 prop_courier_wait_and_dispatch(prop_courier_t *pc)
 {
   struct prop_notify_queue q;
@@ -3877,10 +4032,10 @@ prop_get_string(prop_t *p, ...)
   va_start(ap, p);
 
   hts_mutex_lock(&prop_mutex);
-
   p = prop_find0(p, ap);
 
   if(p != NULL) {
+
     switch(p->hp_type) {
     case PROP_RSTRING:
       r = rstr_dup(p->hp_rstring);
@@ -3927,11 +4082,15 @@ prop_seti(prop_sub_t *skipme, prop_t *p, va_list ap)
       prop_set_string_exl(p, skipme, str, PROP_STR_UTF8);
     break;
   case PROP_SET_RSTRING:
+  case PROP_ADOPT_RSTRING:
     rstr = va_arg(ap, rstr_t *);
     if(rstr == NULL)
       prop_set_void_exl(p, skipme);
-    else
+    else {
       prop_set_rstring_exl(p, skipme, rstr);
+      if(ev == PROP_ADOPT_RSTRING)
+        rstr_release(rstr);
+    }
     break;
   case PROP_SET_INT:
     prop_set_int_exl(p, skipme, va_arg(ap, int));
@@ -4131,9 +4290,10 @@ prop_want_more_childs(prop_sub_t *s)
  *
  */
 void
-prop_have_more_childs0(prop_t *p)
+prop_have_more_childs0(prop_t *p, int yes)
 {
-  prop_send_event(p, PROP_HAVE_MORE_CHILDS);
+  prop_send_event(p,
+                  yes ? PROP_HAVE_MORE_CHILDS_YES : PROP_HAVE_MORE_CHILDS_NO);
 }
 
 
@@ -4141,10 +4301,10 @@ prop_have_more_childs0(prop_t *p)
  *
  */
 void
-prop_have_more_childs(prop_t *p)
+prop_have_more_childs(prop_t *p, int yes)
 {
   hts_mutex_lock(&prop_mutex);
-  prop_have_more_childs0(p);
+  prop_have_more_childs0(p, yes);
   hts_mutex_unlock(&prop_mutex);
 }
 

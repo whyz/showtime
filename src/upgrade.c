@@ -26,6 +26,7 @@
 #include "showtime.h"
 #include "upgrade.h"
 #include "arch/arch.h"
+#include "arch/halloc.h"
 #include "fileaccess/fileaccess.h"
 #include "htsmsg/htsmsg_json.h"
 #include "htsmsg/htsmsg_store.h"
@@ -34,6 +35,9 @@
 #include "settings.h"
 #include "notifications.h"
 
+#if CONFIG_BSPATCH
+#include "ext/bspatch/bspatch.h"
+#endif
 
 extern char *showtime_bin;
 
@@ -62,7 +66,9 @@ static prop_t *news_ref;
  *   .status   upToDate
  *             checking
  *             canUpgrade
- *             downloading
+ *             prepare
+ *             download
+ *             patch
  *             installing
  *             upgradeError
  *             checkError
@@ -106,7 +112,7 @@ check_upgrade(int set_news)
 	   archname);
 
   b = fa_load(url, NULL, errbuf, sizeof(errbuf),
-              NULL, 0, NULL, NULL);
+              NULL, FA_DISABLE_AUTH, NULL, NULL);
   if(b == NULL) {
     prop_set_string(upgrade_error, errbuf);
   err:
@@ -249,41 +255,128 @@ install_error(const char *str)
 /**
  *
  */
-static void *
-install_thread(void *aux)
+static int
+attempt_upgrade(int accept_patch)
 {
+  const char *fname = gconf.binary;
+  uint8_t digest[20];
+  char digeststr[41];
   char errbuf[1024];
+  int fd;
+  struct http_header_list req_headers;
+  struct http_header_list response_headers;
+
+  void *current_data = NULL;
+  int current_size = 0;
+
+  sha1_decl(shactx);
+
+  LIST_INIT(&req_headers);
+  LIST_INIT(&response_headers);
 
   prop_set_float(upgrade_progress, 0);
+  prop_set_string(upgrade_status, "prepare");
+
+#if CONFIG_BSPATCH
+  char ae[128];
+  ae[0] = 0;
+  if(accept_patch) {
+
+    // Figure out SHA-1 of currently running binary
+
+    fd = open(fname, O_RDONLY);
+    if(fd == -1)
+      return -1;
+
+    struct stat st;
+    if(fstat(fd, &st)) {
+      close(fd);
+      return -1;
+    }
+
+    current_size = st.st_size;
+    current_data = halloc(current_size);
+    if(current_data == NULL) {
+      close(fd);
+      return -1;
+    }
+    if(read(fd, current_data, current_size) != current_size) {
+      hfree(current_data, current_size);
+      close(fd);
+      return -1;
+    }
+    close(fd);
+
+    sha1_init(shactx);
+    sha1_update(shactx, current_data, current_size);
+    sha1_final(shactx, digest);
+    bin2hex(digeststr, sizeof(digeststr), digest, sizeof(digest));
+    snprintf(ae, sizeof(ae), "bspatch-from-%s", digeststr);
+    http_header_add(&req_headers, "Accept-Encoding", ae, 0);
+  }
+#endif
+
   prop_set_string(upgrade_status, "download");
   TRACE(TRACE_INFO, "upgrade", "Starting download of %s (%d bytes)", 
 	download_url, download_size);
  
   buf_t *b;
 
-  int r = http_request(download_url, NULL, &b,
-		       errbuf, sizeof(errbuf), NULL, NULL, 0,
-		       NULL, NULL, NULL, download_callback, NULL);
+  int r = http_req(download_url,
+                   HTTP_RESULT_PTR(&b),
+                   HTTP_ERRBUF(errbuf, sizeof(errbuf)),
+                   HTTP_FLAGS(FA_COMPRESSION),
+                   HTTP_RESPONSE_HEADERS(&response_headers),
+                   HTTP_REQUEST_HEADERS(&req_headers),
+                   HTTP_PROGRESS_CALLBACK(download_callback, NULL),
+                   NULL);
   
   if(r) {
     install_error(errbuf);
-    return NULL;
+
+    if(current_data)
+      hfree(current_data, current_size);
+
+    return -1;
   }
+
+#if CONFIG_BSPATCH
+
+  const char *encoding = http_header_get(&response_headers,
+					 "Content-Encoding");
+
+  int got_patch = encoding && !strcmp(encoding, ae);
+
+  if(current_data) {
+
+    if(got_patch) {
+      TRACE(TRACE_DEBUG, "upgrade", "Received upgrade as patch (%d bytes)",
+	    (int)b->b_size);
+
+      prop_set_string(upgrade_status, "patch");
+      buf_t *new = bspatch(current_data, current_size, b->b_ptr, b->b_size);
+      buf_release(b);
+      if(new == NULL) {
+	TRACE(TRACE_DEBUG, "upgrade", "Patch is corrupt");
+	hfree(current_data, current_size);
+	return -1;
+      }
+      b = new;
+    }
+    hfree(current_data, current_size);
+  }
+#endif
 
   TRACE(TRACE_DEBUG, "upgrade", "Verifying SHA-1 of %d bytes",
         (int)b->b_size);
 
   prop_set_string(upgrade_status, "install");
 
-  sha1_decl(shactx);
-  uint8_t digest[20];
-  char digeststr[41];
   int match;
 
   sha1_init(shactx);
   sha1_update(shactx, b->b_ptr, b->b_size);
   sha1_final(shactx, digest);
-
 
   match = !memcmp(digest, download_digest, 20);
 
@@ -294,10 +387,8 @@ install_thread(void *aux)
   if(!match) {
     install_error("SHA-1 sum mismatch");
     buf_release(b);
-    return NULL;
+    return -1;
   }
-
-  const char *fname = gconf.binary;
 
   TRACE(TRACE_INFO, "upgrade", "Replacing %s with %d bytes received",
 	fname, (int)b->b_size);
@@ -305,16 +396,16 @@ install_thread(void *aux)
   if(unlink(fname)) {
     install_error("Unlink failed");
     buf_release(b);
-    return NULL;
+    return -1;
   }
 
   TRACE(TRACE_DEBUG, "upgrade", "Executable removed, rewriting");
 
-  int fd = open(fname, O_CREAT | O_RDWR, 0777);
+  fd = open(fname, O_CREAT | O_RDWR, 0777);
   if(fd == -1) {
     install_error("Unable to open file");
     buf_release(b);
-    return NULL;
+    return -1;
   }
 
   int fail = write(fd, b->b_ptr, b->b_size) != b->b_size;
@@ -323,7 +414,7 @@ install_thread(void *aux)
 
   if(fail) {
     install_error("Unable to write to file");
-    return NULL;
+    return -1;
   }
 
   TRACE(TRACE_INFO, "upgrade", "All done, restarting");
@@ -335,6 +426,21 @@ install_thread(void *aux)
     sleep(1);
   }
   showtime_shutdown(13);
+
+  return 0;
+}
+
+
+
+static void *
+install_thread(void *aux)
+{
+  if(gconf.enable_patched_upgrade) {
+    if(!attempt_upgrade(1))
+      return NULL;
+  }
+
+  attempt_upgrade(0);
   return NULL;
 }
 
@@ -386,16 +492,6 @@ set_upgrade_track(void *opaque, const char *str)
 }
 
 
-
-/**
- *
- */
-static void
-set_notify_upgrades(void *opaque, int v)
-{
-  notify_upgrades = v;
-}
-
 /**
  *
  */
@@ -425,27 +521,25 @@ upgrade_init(void)
   if((store = htsmsg_store_load("upgrade")) == NULL)
     store = htsmsg_create_map();
 
-  setting_t *x;
-
   settings_create_separator(gconf.settings_general,
 			  _p("Software upgrade"));
 
-  x = settings_create_multiopt(gconf.settings_general, "track",
-			       _p("Upgrade to releases from"), 0);
+  setting_create(SETTING_MULTIOPT, gconf.settings_general,
+                 SETTINGS_INITIAL_UPDATE,
+                 SETTING_TITLE(_p("Upgrade to releases from")),
+                 SETTING_HTSMSG("track", store, "upgrade"),
+                 SETTING_OPTION("stable",  _p("Stable")),
+                 SETTING_OPTION("testing", _p("Testing")),
+                 SETTING_CALLBACK(set_upgrade_track, NULL),
+                 NULL);
 
-  settings_multiopt_add_opt(x, "stable", _p("Stable"), 1);
-  settings_multiopt_add_opt(x, "testing", _p("Testing"), 0);
 
-  settings_multiopt_initiate(x, set_upgrade_track, NULL, NULL, 
-			     store, settings_generic_save_settings,
-                             (void *)"upgrade");
-
-  settings_create_bool(gconf.settings_general, "check",
-		       _p("Notify about upgrades"), 1,
-		       store, set_notify_upgrades, NULL, 
-		       SETTINGS_INITIAL_UPDATE, NULL,
-		       settings_generic_save_settings, 
-		       (void *)"upgrade");
+  setting_create(SETTING_BOOL, gconf.settings_general, SETTINGS_INITIAL_UPDATE,
+                 SETTING_TITLE(_p("Notify about upgrades")),
+                 SETTING_VALUE(1),
+                 SETTING_HTSMSG("check", store, "upgrade"),
+                 SETTING_WRITE_BOOL(&notify_upgrades),
+                 NULL);
 
   prop_t *p = prop_create_root(NULL);
   prop_link(_p("Check for updates now"),

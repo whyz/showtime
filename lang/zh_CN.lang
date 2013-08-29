@@ -16,6 +16,12 @@ msg: 将当前页从书签删除
 #
 # ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
+id: Activate sleep timer
+msg: 启用休眠定时器
+
+id: Disable sleep timer
+msg: 禁用休眠定时器
+
 id: Exit Showtime
 msg: 退出Showtime
 
@@ -42,6 +48,12 @@ msg: 关机
 
 id: System
 msg: 系统
+
+id: Time until sleep
+msg: 直到休眠
+
+id: min
+msg: 最小
 
 #
 # ./glwskins/default/cmdmenu/cmdmenu_dir.view
@@ -131,60 +143,6 @@ id: System log
 msg: 系统日志
 
 #
-# ./glwskins/default/pages/about.view
-#
-id: Allocated by application: %d kB
-msg: 程序已分配：%d kB
-
-id: Allocated by malloc: %d kB
-msg: mallock已分配：%d kB
-
-id: Avail system RAM: %d kB
-msg: 系统可用内存: %d kB
-
-id: Detected CPUs: %d
-msg: 检测到CPU数: %d
-
-id: Display info
-msg: 显示信息
-
-id: Framerate: %.2f Hz
-msg: 帧速: %.2f Hz
-
-id: Free chunks: %d
-msg: 剩余块：%d
-
-id: GPU: %s
-msg: GPU: %s
-
-id: Height: %d px
-msg: 高: %d px
-
-id: Memory status
-msg: 内存状态
-
-id: Renderer: %s
-msg: 渲染器: %s
-
-id: System info
-msg: 系统信息
-
-id: Total system RAM: %d kB
-msg: 系统内存总数: %d kB
-
-id: Unused memory: %d kB
-msg: 剩余内存：%d kB
-
-id: Version: %s
-msg: 版本: %s
-
-id: Width: %d px
-msg: 宽: %d px
-
-id: Windowmanager: %s
-msg: 窗口管理器: %s
-
-#
 # ./glwskins/default/pages/directory.view
 #
 id: Album
@@ -226,14 +184,11 @@ msg: 平铺
 #
 # ./glwskins/default/pages/home_clist.view
 #
-id: About Showtime
-msg: 关于Showtime
+id: Apps
+msg: 应用
 
 id: Dismiss
 msg: 删除
-
-id: Plugins
-msg: 插件
 
 id: Search / Open URL
 msg: 查找/打开URL
@@ -282,6 +237,10 @@ msg: 评分
 
 id: Year:
 msg: 年份
+
+id: Seen %d times
+msg[0]: 
+msg[1]: 
 
 #
 # ./glwskins/default/pages/listitems/add.view
@@ -355,6 +314,10 @@ msg: 版本%s更新记录
 id: Check for updates now
 msg: 立刻检查更新
 
+id: Checking current installed version
+# Missing translation
+msg: 
+
 id: Checking for updates...
 msg: 正在检查更新...
 
@@ -375,6 +338,10 @@ msg: 新版本%s可用
 
 id: No upgrade available
 msg: 无可用更新
+
+id: Patching binary
+# Missing translation
+msg: 
 
 id: Restarting Showtime in %d seconds...
 msg: %d秒后重启Showtime...
@@ -407,7 +374,8 @@ msg: 播放信息
 # ./glwskins/default/pages/wideinfo/video.view
 #
 id: Seen:
-msg: 看过
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/playdecks/dvd.view
@@ -479,39 +447,6 @@ id: System is low on memory (%d kB RAM available)
 msg: 系统内存偏少(%d kB RAM可用)
 
 #
-# ./src/audio/audio.c
-#
-id: Audio output
-msg: 音频输出
-
-id: Audio/Video sync delay
-msg: 音频/视频同步延迟
-
-id: Current output device
-msg: 当前输出设备
-
-id: Force stereo downmix
-msg: 强制混音到立体声
-
-id: Phantom LFE
-msg: 虚拟低音
-
-id: Phantom center
-msg: 虚拟中置
-
-id: Select audio output device and related configurations
-msg: 选择音频输出设备及相关配置
-
-id: Small front speakers
-msg: 小型前置音箱
-
-id: Swap LFE+center with surround
-msg: 切换低音+中置和环绕
-
-id: Switching audio output to %s
-msg: 切换音频输出到%s
-
-#
 # ./src/backend/dvd/cdda.c
 #
 id: Invalid CD URL
@@ -562,9 +497,6 @@ msg: 协作
 id: Compilations
 msg: 选集
 
-id: Enable Spotify
-msg: 启用Spotify
-
 id: Forget me
 msg: 忘记我
 
@@ -606,9 +538,6 @@ msg: Spotify上的朋友
 
 id: Spotify music service
 msg: Spotify音乐服务
-
-id: Spotify offers you legal and free access to a huge library of music. To use Spotify in Showtime you need a Spotify Preemium account.\nFor more information about Spotify, visit http://www.spotify.com/\n\nYou will be prompted for your Spotify username and password when first accessing any of the Spotify features in Showtime.
-msg: Spotify可以让你合法和免费的访问巨量音乐库。你需要一个Spotify的Preemium账号才能在Showtime中访问Spotify。\n请访问http://www.spotify.com/以了解更多关于Spotify的信息。\n\n你在Showtime中第一次使用Spotify功能时会提示您输入Spotify用户名和密码。
 
 id: Spotify playlists
 msg: Spotify播放列表
@@ -670,6 +599,9 @@ msg: 日期（新的优先）
 id: Date (oldest first)
 msg: 日期（老的优先）
 
+id: Deleted %s
+msg: 删除%s
+
 id: Filename
 msg: 文件名
 
@@ -688,6 +620,9 @@ msg: 排序时文件夹优先
 id: Sort on
 msg: 排序
 
+id: Unable to delete %s\n%s
+msg: 无法删除%s\n%s
+
 #
 # ./src/fileaccess/fa_spotlight.c
 #
@@ -695,8 +630,35 @@ id: Search using spotlight
 msg: 使用spotlight搜索
 
 #
+# ./src/fileaccess/fileaccess.c
+#
+id: Are you sure you want to delete:
+msg: 是否确定要删除：
+
+id: Enable file deletion from item menu
+msg: 启用文件删除功能
+
+id: File access
+msg: 文件访问
+
+id: %d archive parts
+msg[0]: 
+msg[1]: 
+
+id: %d directories
+msg[0]: %d个文件夹
+msg[1]: %d个文件夹
+
+id: %d files
+msg[0]: %d个文件
+msg[1]: %d个文件
+
+#
 # ./src/i18n.c
 #
+id: Ignore 'The' at beginning of words when sorting
+msg: 排序时忽略开头的'The'
+
 id: Language
 msg: 语言
 
@@ -731,18 +693,6 @@ id: Tertiary subtitle language code
 msg: 字幕第三语言代码
 
 #
-# ./src/ipc/serdev/lgtv.c
-#
-id: Automatic TV power on/off
-msg: 自动开启/关闭电视
-
-id: Input source
-msg: 输入源
-
-id: LG Television set
-msg: LG电视机
-
-#
 # ./src/keymapper.c
 #
 id: Configure mapping of keyboard and remote controller keys
@@ -769,6 +719,14 @@ msg: 字幕显示在视频帧内
 id: Audio delay
 msg: 音频延迟
 
+id: Audio volume
+# Missing translation
+msg: 
+
+id: Go to standby after video ends
+# Missing translation
+msg: 
+
 id: Stretch video to fullscreen
 msg: 拉升视频至全屏
 
@@ -778,8 +736,16 @@ msg: 拉伸视频至宽屏
 id: Subtitle delay
 msg: 字幕延迟
 
+id: Subtitle horizontal displacement
+# Missing translation
+msg: 
+
 id: Subtitle scaling
 msg: 字幕缩放
+
+id: Subtitle vertical displacement
+# Missing translation
+msg: 
 
 id: Video zoom
 msg: 视频缩放
@@ -791,11 +757,30 @@ id: Indexing
 msg: 正在索引
 
 #
-# ./src/metadata/metadata.c
+# ./src/metadata/decoration.c
 #
 id: Automatic
 msg: 自动
 
+id: Manual
+# Missing translation
+msg: 
+
+id: Mark all as seen
+# Missing translation
+msg: 
+
+id: Mark all as unseen
+# Missing translation
+msg: 
+
+id: Metadata mode
+# Missing translation
+msg: 
+
+#
+# ./src/metadata/metadata.c
+#
 id: Custom search query
 msg: 设置搜索条件
 
@@ -904,6 +889,10 @@ msg: 其它
 id: Photos
 msg: 照片
 
+id: Published in Virtual File System
+# Missing translation
+msg: 
+
 id: Removed bookmark: %s
 msg: 删除书签: %s
 
@@ -920,6 +909,21 @@ id: URL
 msg: URL
 
 #
+# ./src/networking/ftp_server.c
+#
+id: Enable FTP server
+# Missing translation
+msg: 
+
+id: FTP server
+# Missing translation
+msg: 
+
+id: Server TCP port
+# Missing translation
+msg: 
+
+#
 # ./src/plugins.c
 #
 id: Alternate plugin Repository URL
@@ -928,8 +932,8 @@ msg: 更改插件库URL
 id: Automatically upgrade plugins
 msg: 自动更新插件
 
-id: Available plugins
-msg: 可用插件
+id: Available apps
+msg: 可用应用
 
 id: Background
 msg: 背景
@@ -937,8 +941,8 @@ msg: 背景
 id: Beta testing passwords
 msg: Beta测试用密码
 
-id: Browse available plugins
-msg: 浏览可用插件
+id: Browse available apps
+msg: 浏览可用的应用
 
 id: Browsing
 msg: 浏览
@@ -964,8 +968,8 @@ msg: 打开文件错误
 id: Home page
 msg: 首页
 
-id: Installed plugins
-msg: 已安装插件
+id: Installed apps
+msg: 已安装的应用
 
 id: Installed version higher than available
 msg: 安装版本比可用版本高
@@ -996,6 +1000,12 @@ msg: 不可升级
 
 id: Online TV
 msg: 在线电视
+
+id: Plugin %s %s has been uninstalled because it may cause problems.\nYou may try reinstalling a different version manually.
+msg: 由于可能引起问题，插件%s %s已被卸载。\n您可以尝试手工安装此插件的其它版本。
+
+id: Plugins
+msg: 插件
 
 id: Preferred views from plugins
 msg: 插件默认视图
@@ -1084,6 +1094,14 @@ msg: 全局设置
 id: Look and feel
 msg: 外观
 
+id: Network services, etc
+# Missing translation
+msg: 
+
+id: Network settings
+# Missing translation
+msg: 
+
 id: Settings useful for developers
 msg: 供开发者使用的设置
 
@@ -1091,10 +1109,82 @@ id: System related settings
 msg: 系统相关设置
 
 #
-# ./src/subtitles/sub_scanner.c
+# ./src/subtitles/subtitles.c
 #
+id: Any subtitle in central folder
+msg: 主文件夹的所有字幕
+
+id: Any subtitle in same folder as video
+msg: 视频相同文件夹下的所有字幕
+
+id: Auto
+msg: 自动
+
+id: Automatically select from this source
+msg: 自动选择
+
+id: Center
+msg: 居中
+
+id: Central subtitle folder
+msg: 字幕主文件夹
+
+id: Color
+msg: 颜色
+
 id: External file
 msg: 外部文件
+
+id: Force subtitles to reside on video frame
+msg: 强制字幕在视频帧内显示
+
+id: Generic settings for video subtitles
+msg: 视频字幕通用设置
+
+id: Ignore embedded styling
+msg: 忽略嵌入样式
+
+id: Left
+msg: 靠左
+
+id: Outline color
+msg: 边框颜色
+
+id: Outline size
+msg: 边框大小
+
+id: Path to central folder
+msg: 主文件夹路径
+
+id: Providers for Subtitles
+msg: 字幕源
+
+id: Right
+msg: 靠右
+
+id: Shadow color
+msg: 阴影颜色
+
+id: Shadow offset
+msg: 阴影偏移
+
+id: Subtitle position
+msg: 字幕位置
+
+id: Subtitle size
+msg: 字幕大小
+
+id: Subtitle size and positioning
+msg: 字幕大小和位置
+
+id: Subtitles embedded in video file
+msg: 视频内嵌字幕
+
+id: Subtitles with matching filename in central folder
+msg: 主文件夹中文件名匹配的字幕
+
+id: Subtitles with matching filename in same folder as video
+msg: 视频所在文件夹中文件名匹配的字幕
 
 #
 # ./src/text/fontstash.c
@@ -1120,14 +1210,9 @@ msg: 重置窄字体
 id: Reset subtitle font to default
 msg: 重置字幕字体
 
-id: Unable to load %s -- %s
-msg: 无法载入%s -- %s
-
-id: Unable to open %s for writing
-msg: 无法打开%s
-
-id: Unable to write to %s
-msg: 无法写入%s
+id: Unable to install font: %s
+# Missing translation
+msg: 
 
 id: Use font %s for
 msg: 使用字体%s
@@ -1136,19 +1221,36 @@ id: User interface
 msg: 用户界面
 
 #
+# ./src/ui/glw/glw_ps3.c
+#
+id: Seek using L2 and R2 button
+# Missing translation
+msg: 
+
+id: Yes with Select button
+# Missing translation
+msg: 
+
+#
 # ./src/ui/glw/glw_settings.c
 #
+id: Font and icon size
+# Missing translation
+msg: 
+
 id: Horizontal underscan
 msg: 水平欠扫描
 
 id: Screensaver delay
 msg: 屏幕保护延迟
 
-id: Userinterface size
-msg: 用户界面大小
-
 id: Vertical underscan
-msg: 垂直欠扫描
+# Missing translation
+msg: 
+
+id: Wrap when reaching beginning/end of lists
+# Missing translation
+msg: 
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1231,29 +1333,8 @@ msg: 无法查询Cell解码器，错误码0x%x
 #
 # ./src/video/video_settings.c
 #
-id: 1080
-msg: 1080
-
-id: 576
-msg: 576
-
-id: 720
-msg: 720
-
-id: Always try to select a subtitle
-msg: 总是显示字幕
-
-id: Auto
-msg: 自动
-
 id: Automatically play next video in list
 msg: 文件播放结束时自动播放列表中的下一个文件
-
-id: Center
-msg: 居中
-
-id: Color
-msg: 颜色
 
 id: Count video as played when reaching
 msg: 将视频视为已播放当播放进度达到
@@ -1264,59 +1345,17 @@ msg: 启用VDA
 id: Enable VDPAU
 msg: 启用VDPAU
 
-id: Force subtitles to reside on video frame
-msg: 强制字幕在视频帧内显示
-
-id: Generic settings for video subtitles
-msg: 视频字幕通用设置
-
-id: Ignore embedded styling
-msg: 忽略嵌入样式
-
-id: Include all subtitle files from movie directory
-msg: 载入视频目录下所有字幕文件
-
-id: Left
-msg: 靠左
-
 id: Maximum resolution for deinterlacer
 msg: 去隔行化使用最大可能的分辨率
 
 id: No limit
 msg: 无限制
 
-id: Outline color
-msg: 边框颜色
-
-id: Outline size
-msg: 边框大小
-
 id: Preferred VDPAU deinterlacer method
 msg: 优先使用VDPAU去隔行化方式
 
 id: Resume video playback
 msg: 从上次结束位置开始播放
-
-id: Right
-msg: 靠右
-
-id: Shadow color
-msg: 阴影颜色
-
-id: Shadow offset
-msg: 阴影偏移
-
-id: Subtitle position
-msg: 字幕位置
-
-id: Subtitle size
-msg: 字幕大小
-
-id: Subtitle size and positioning
-msg: 字幕大小和位置
-
-id: Subtitle styling
-msg: 字幕样式
 
 id: Temporal
 msg: 临时的

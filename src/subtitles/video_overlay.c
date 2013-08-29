@@ -22,9 +22,9 @@
 #include "misc/pixmap.h"
 #include "misc/str.h"
 #include "video_overlay.h"
-#include "video/video_settings.h"
 #include "dvdspu.h"
 #include "sub.h"
+#include "subtitles/subtitles.h"
 
 void
 video_overlay_enqueue(media_pipe_t *mp, video_overlay_t *vo)
@@ -73,7 +73,9 @@ video_subtitles_lavc(media_pipe_t *mp, media_buf_t *mb,
 
 	vo->vo_start = mb->mb_pts + sub.start_display_time * 1000;
 	vo->vo_stop  = mb->mb_pts + sub.end_display_time * 1000;
-		  
+        vo->vo_canvas_width  = ctx->width;
+        vo->vo_canvas_height = ctx->height;
+
 	vo->vo_x = r->x;
 	vo->vo_y = r->y;
 

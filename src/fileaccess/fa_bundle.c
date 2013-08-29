@@ -185,7 +185,8 @@ b_fsize(fa_handle_t *handle)
  *
  */
 static int
-b_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
+b_scandir(fa_protocol_t *fap, fa_dir_t *fd, const char *url,
+          char *errbuf, size_t errlen)
 {
   fa_dir_entry_t *fde, *last = NULL;
   struct filebundle *fb;
@@ -325,7 +326,7 @@ b_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
     return FAP_STAT_OK;
   }
 
-  if(b_scandir(NULL, url, errbuf, errlen))
+  if(b_scandir(fap, NULL, url, errbuf, errlen))
     return FAP_STAT_ERR;
 
   fs->fs_type = CONTENT_DIR;
@@ -468,4 +469,18 @@ memfile_unregister(int id)
     LIST_REMOVE(mf, mf_link);
   hts_mutex_unlock(&memfile_mutex);
   free(mf);
+}
+
+
+/**
+ *
+ */
+fa_handle_t *
+memfile_make(const void *mem, size_t len)
+{
+  fa_bundle_fh_t *fh = calloc(1, sizeof(fa_bundle_fh_t));
+  fh->ptr = mem;
+  fh->size = len;
+  fh->h.fh_proto = &fa_protocol_memfile;
+  return &fh->h;
 }

@@ -34,6 +34,7 @@
 #include "video/video_settings.h"
 #include "subtitles/ext_subtitles.h"
 #include "subtitles/dvdspu.h"
+#include "subtitles/subtitles.h"
 #include "settings.h"
 #include "db/kvstore.h"
 
@@ -67,6 +68,8 @@ static void seek_by_propchange(void *opaque, prop_event_t event, ...);
 static void update_av_delta(void *opaque, int value);
 
 static void update_sv_delta(void *opaque, int value);
+
+static void update_audio_volume(void *opaque, int value);
 
 static void media_eventsink(void *opaque, prop_event_t event, ...);
 
@@ -305,6 +308,8 @@ mp_create(const char *name, int flags, const char *type)
   mp->mp_prop_url         = prop_create(mp->mp_prop_root, "url");
 
 
+  mp->mp_setting_root = prop_create(mp->mp_prop_root, "settings");
+
   //--------------------------------------------------
   // Video
 
@@ -378,8 +383,6 @@ mp_create(const char *name, int flags, const char *type)
   mp->mp_prop_avdiff      = prop_create(mp->mp_prop_root, "avdiff");
   mp->mp_prop_avdiff_error= prop_create(mp->mp_prop_root, "avdiffError");
 
-  mp->mp_prop_audio_channels_root = prop_create(mp->mp_prop_audio, "channels");
-
   mp->mp_prop_canSkipBackward = 
     prop_create(mp->mp_prop_root, "canSkipBackward");
 
@@ -403,6 +406,8 @@ mp_create(const char *name, int flags, const char *type)
 
   prop_set_int(prop_create(mp->mp_prop_root, "canStop"), 1);
 
+  mp->mp_prop_ctrl = prop_create(mp->mp_prop_root, "ctrl");
+
   mp->mp_prop_model = prop_create(mp->mp_prop_root, "model");
 
   mp->mp_sub_currenttime = 
@@ -423,59 +428,178 @@ mp_create(const char *name, int flags, const char *type)
   //--------------------------------------------------
   // Settings
 
-  mp->mp_setting_vzoom = 
-    settings_create_int(mp->mp_setting_video_root, "vzoom",
-			_p("Video zoom"),
-			video_settings.vzoom, NULL,
-			50, 200, 1,
-			NULL, NULL, SETTINGS_INITIAL_UPDATE,
-			"%", mp->mp_pc, NULL, NULL);
-
-  mp->mp_setting_hstretch = 
-    settings_create_bool(mp->mp_setting_video_root, "hstretch",
-			 _p("Stretch video to widescreen"),
-			 video_settings.stretch_horizontal, NULL,
-			 NULL, NULL, SETTINGS_INITIAL_UPDATE,
-			 mp->mp_pc, NULL, NULL);
-
-  mp->mp_setting_fstretch = 
-    settings_create_bool(mp->mp_setting_video_root, "fstretch",
-			 _p("Stretch video to fullscreen"),
-			 video_settings.stretch_fullscreen, NULL,
-			 NULL, NULL, SETTINGS_INITIAL_UPDATE,
-			 mp->mp_pc, NULL, NULL);
-
-
-  mp->mp_setting_av_delta = 
-    settings_create_int(mp->mp_setting_audio_root, "avdelta",
-			_p("Audio delay"), 0, NULL, -5000, 5000,
-			50, update_av_delta, mp, SETTINGS_INITIAL_UPDATE,
-			"ms", mp->mp_pc, NULL, NULL);
-
-  mp->mp_setting_sv_delta = 
-    settings_create_int(mp->mp_setting_subtitle_root, "svdelta",
-			_p("Subtitle delay"), 0, NULL, -600000, 600000,
-			500, update_sv_delta, mp, SETTINGS_INITIAL_UPDATE,
-			"ms", mp->mp_pc, NULL, NULL);
-
-  mp->mp_setting_sub_scale = 
-    settings_create_int(mp->mp_setting_subtitle_root, "subscale",
-			_p("Subtitle scaling"), subtitle_settings.scaling,
-			NULL, 30, 500, 5, NULL, NULL, 0,
-			"%", mp->mp_pc, NULL, NULL);
-
-  mp->mp_setting_sub_on_video = 
-    settings_create_bool(mp->mp_setting_subtitle_root, "subonvideoframe",
-			 _p("Align subtitles on video frame"), 
-			 subtitle_settings.align_on_video, NULL,
-			 NULL, NULL, 0,
-			 mp->mp_pc, NULL, NULL);
 
 
   if(media_pipe_init_extra != NULL)
     media_pipe_init_extra(mp);
 
   return mp;
+}
+
+
+
+
+
+/**
+ *
+ */
+static void
+mp_settings_clear(media_pipe_t *mp)
+{
+  setting_destroyp(&mp->mp_setting_av_delta);
+  setting_destroyp(&mp->mp_setting_audio_vol);
+  setting_destroyp(&mp->mp_setting_sv_delta);
+  setting_destroyp(&mp->mp_setting_sub_scale);
+  setting_destroyp(&mp->mp_setting_sub_displace_x);
+  setting_destroyp(&mp->mp_setting_sub_displace_y);
+  setting_destroyp(&mp->mp_setting_sub_on_video);
+  setting_destroyp(&mp->mp_setting_vzoom);
+  setting_destroyp(&mp->mp_setting_hstretch);
+  setting_destroyp(&mp->mp_setting_fstretch);
+  setting_destroyp(&mp->mp_setting_standby_after_eof);
+  kvstore_deferred_flush();
+}
+
+
+/**
+ *
+ */
+static void
+mp_settings_init(media_pipe_t *mp, const char *url)
+{
+  prop_t *c = mp->mp_prop_ctrl;
+
+  mp_settings_clear(mp);
+
+  if(url == NULL || !(mp->mp_flags & MP_VIDEO))
+    return;
+
+  TRACE(TRACE_DEBUG, "media", "Settings initialized for URL %s", url);
+
+  mp->mp_setting_vzoom =
+    setting_create(SETTING_INT, mp->mp_setting_video_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Video zoom")),
+                   SETTING_RANGE(50, 200),
+                   SETTING_UNIT_CSTR("%"),
+                   SETTING_VALUE(video_settings.vzoom),
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_WRITE_PROP(prop_create(c, "vzoom")),
+                   SETTING_KVSTORE(url, "vzoom"),
+                   NULL);
+
+  mp->mp_setting_hstretch =
+    setting_create(SETTING_BOOL, mp->mp_setting_video_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Stretch video to widescreen")),
+                   SETTING_VALUE(video_settings.stretch_horizontal),
+                   SETTING_WRITE_PROP(prop_create(c, "hstretch")),
+                   SETTING_KVSTORE(url, "hstretch"),
+                   NULL);
+
+  mp->mp_setting_fstretch =
+    setting_create(SETTING_BOOL, mp->mp_setting_video_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Stretch video to fullscreen")),
+                   SETTING_VALUE(video_settings.stretch_fullscreen),
+                   SETTING_WRITE_PROP(prop_create(c, "fstretch")),
+                   SETTING_KVSTORE(url, "fstretch"),
+                   NULL);
+
+  mp->mp_setting_av_delta =
+    setting_create(SETTING_INT, mp->mp_setting_audio_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Audio delay")),
+                   SETTING_RANGE(-5000, 5000),
+                   SETTING_STEP(50),
+                   SETTING_UNIT_CSTR("ms"),
+                   SETTING_CALLBACK(update_av_delta, mp),
+                   SETTING_KVSTORE(url, "avdelta"),
+                   NULL);
+
+  mp->mp_setting_audio_vol =
+    setting_create(SETTING_INT, mp->mp_setting_audio_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Audio volume")),
+                   SETTING_RANGE(-50, 50),
+                   SETTING_UNIT_CSTR("dB"),
+                   SETTING_CALLBACK(update_audio_volume, mp),
+                   SETTING_KVSTORE(url, "audiovolume"),
+                   SETTING_PROP_ENABLER(prop_create(c, "canAdjustVolume")),
+                   NULL);
+
+  mp->mp_setting_sv_delta =
+    setting_create(SETTING_INT, mp->mp_setting_subtitle_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Subtitle delay")),
+                   SETTING_RANGE(-600000, 600000),
+                   SETTING_STEP(500),
+                   SETTING_UNIT_CSTR("ms"),
+                   SETTING_CALLBACK(update_sv_delta, mp),
+                   SETTING_KVSTORE(url, "svdelta"),
+                   NULL);
+
+  mp->mp_setting_sub_scale =
+    setting_create(SETTING_INT, mp->mp_setting_subtitle_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Subtitle scaling")),
+                   SETTING_RANGE(30, 500),
+                   SETTING_STEP(5),
+                   SETTING_UNIT_CSTR("%"),
+                   SETTING_VALUE(subtitle_settings.scaling),
+                   SETTING_WRITE_PROP(prop_create(c, "subscale")),
+                   SETTING_KVSTORE(url, "subscale"),
+                   NULL);
+
+  mp->mp_setting_sub_on_video =
+    setting_create(SETTING_BOOL, mp->mp_setting_subtitle_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_TITLE(_p("Align subtitles on video frame")),
+                   SETTING_VALUE(subtitle_settings.align_on_video),
+                   SETTING_WRITE_PROP(prop_create(c, "subalign")),
+                   SETTING_KVSTORE(url, "subalign"),
+                   NULL);
+
+  mp->mp_setting_sub_displace_y =
+    setting_create(SETTING_INT, mp->mp_setting_subtitle_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_RANGE(-300, 300),
+                   SETTING_STEP(5),
+                   SETTING_UNIT_CSTR("px"),
+                   SETTING_TITLE(_p("Subtitle vertical displacement")),
+                   SETTING_WRITE_PROP(prop_create(c, "subvdisplace")),
+                   SETTING_KVSTORE(url, "subvdisplace"),
+                   NULL);
+
+  mp->mp_setting_sub_displace_x =
+    setting_create(SETTING_INT, mp->mp_setting_subtitle_root,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_COURIER(mp->mp_pc),
+                   SETTING_RANGE(-300, 300),
+                   SETTING_STEP(5),
+                   SETTING_UNIT_CSTR("px"),
+                   SETTING_TITLE(_p("Subtitle horizontal displacement")),
+                   SETTING_WRITE_PROP(prop_create(c, "subhdisplace")),
+                   SETTING_KVSTORE(url, "subhdisplace"),
+                   NULL);
+
+  if(mp->mp_flags & MP_VIDEO && gconf.can_standby) {
+    mp->mp_setting_standby_after_eof =
+      setting_create(SETTING_BOOL, mp->mp_setting_root,
+                     SETTINGS_INITIAL_UPDATE,
+                     SETTING_COURIER(mp->mp_pc),
+                     SETTING_WRITE_INT(&mp->mp_auto_standby),
+                     SETTING_TITLE(_p("Go to standby after video ends")),
+                     NULL);
+  }
 }
 
 
@@ -544,13 +668,10 @@ mp_destroy(media_pipe_t *mp)
   if(media_pipe_fini_extra != NULL)
     media_pipe_fini_extra(mp);
 
-  setting_destroy(mp->mp_setting_av_delta);
-  setting_destroy(mp->mp_setting_sv_delta);
-  setting_destroy(mp->mp_setting_sub_scale);
-  setting_destroy(mp->mp_setting_sub_on_video);
-  setting_destroy(mp->mp_setting_vzoom);
-  setting_destroy(mp->mp_setting_hstretch);
-  setting_destroy(mp->mp_setting_fstretch);
+  mp_settings_clear(mp);
+
+  if(mp->mp_setting_standby_after_eof)
+    setting_destroy(mp->mp_setting_standby_after_eof);
 
   prop_unsubscribe(mp->mp_sub_currenttime);
   prop_unsubscribe(mp->mp_sub_stats);
@@ -558,7 +679,6 @@ mp_destroy(media_pipe_t *mp)
   track_mgr_destroy(&mp->mp_audio_track_mgr);
   track_mgr_destroy(&mp->mp_subtitle_track_mgr);
 
-  prop_courier_destroy(mp->mp_pc);
 
   while((e = TAILQ_FIRST(&mp->mp_eq)) != NULL) {
     TAILQ_REMOVE(&mp->mp_eq, e, e_link);
@@ -572,6 +692,8 @@ mp_destroy(media_pipe_t *mp)
   mq_destroy(&mp->mp_video);
 
   prop_destroy(mp->mp_prop_root);
+
+  prop_courier_destroy(mp->mp_pc);
 
   video_overlay_flush_locked(mp, 0);
   dvdspu_destroy_all(mp);
@@ -619,7 +741,7 @@ mp_direct_seek(media_pipe_t *mp, int64_t ts)
   mp->mp_seek_base = ts;
 
   if(!mp_seek_in_queues(mp, ts + mp->mp_start_time)) {
-    prop_set_float(prop_create(mp->mp_prop_root, "seektime"), ts / 1000000.0);
+    prop_set(mp->mp_prop_root, "seektime", PROP_SET_FLOAT, ts / 1000000.0);
   } else {
 
     /* If there already is a seek event enqueued, update it */
@@ -649,7 +771,7 @@ mp_direct_seek(media_pipe_t *mp, int64_t ts)
 /**
  *
  */
-static void
+void
 mb_enq(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 {
   if(mb->mb_data_type == MB_SUBTITLE) {
@@ -699,6 +821,8 @@ send_hold(media_pipe_t *mp)
   event_t *e = event_create_int(EVENT_HOLD, mp->mp_hold);
   TAILQ_INSERT_TAIL(&mp->mp_eq, e, e_link);
   hts_cond_signal(&mp->mp_backpressure);
+  if(mp->mp_hold_changed != NULL)
+    mp->mp_hold_changed(mp);
 }
 
 
@@ -883,11 +1007,12 @@ mq_update_stats(media_pipe_t *mp, media_queue_t *mq)
   }
 }
 
+
 /**
  *
  */
 static int64_t
-mq_realtime_delay(media_queue_t *mq)
+mq_realtime_delay_locked(media_queue_t *mq)
 {
   media_buf_t *f, *l;
 
@@ -907,8 +1032,22 @@ mq_realtime_delay(media_queue_t *mq)
 /**
  *
  */
+int64_t
+mq_realtime_delay(media_queue_t *mq)
+{
+  hts_mutex_lock(&mq->mq_mp->mp_mutex);
+  int64_t r = mq_realtime_delay_locked(mq);
+  hts_mutex_unlock(&mq->mq_mp->mp_mutex);
+  return r;
+}
+
+
+/**
+ *
+ */
 event_t *
-mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
+mb_enqueue_with_events_ex(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb,
+			  int *blocked)
 {
   event_t *e = NULL;
   
@@ -924,9 +1063,12 @@ mb_enqueue_with_events(media_pipe_t *mp, media_queue_t *mq, media_buf_t *mb)
 	mp->mp_audio.mq_packets_current >= (mp->mp_audio.mq_stream != -1 ? 5 : 0) &&
 	(mp->mp_buffer_current + mb->mb_size > mp->mp_buffer_limit ||
 	 (mp->mp_max_realtime_delay != 0 && 
-	  mq_realtime_delay(mq) > mp->mp_max_realtime_delay)))
+	  mq_realtime_delay_locked(mq) > mp->mp_max_realtime_delay))) {
+    if(blocked != NULL)
+      *blocked = *blocked + 1;
     hts_cond_wait(&mp->mp_backpressure, &mp->mp_mutex);
-  
+  }
+
   if(e != NULL) {
     TAILQ_REMOVE(&mp->mp_eq, e, e_link);
   } else {
@@ -1436,6 +1578,21 @@ update_sv_delta(void *opaque, int v)
 /**
  *
  */
+static void
+update_audio_volume(void *opaque, int value)
+{
+  media_pipe_t *mp = opaque;
+
+  media_buf_t *mb = media_buf_alloc_locked(mp, 0);
+  mb->mb_data_type = MB_CTRL_SET_VOLUME;
+  mb->mb_data32 = value;
+  mb_enq(mp, &mp->mp_audio, mb);
+}
+
+
+/**
+ *
+ */
 void
 mp_set_current_time(media_pipe_t *mp, int64_t ts, int epoch, int64_t delta)
 {
@@ -1453,6 +1610,7 @@ mp_set_current_time(media_pipe_t *mp, int64_t ts, int epoch, int64_t delta)
     
     event_ts_t *ets = event_create(EVENT_CURRENT_TIME, sizeof(event_ts_t));
     ets->ts = ts;
+    ets->epoch = epoch;
     mp->mp_seek_base = ts;
     mp_enqueue_event_locked(mp, &ets->h);
     event_release(&ets->h);
@@ -1527,6 +1685,9 @@ void
 mp_set_url(media_pipe_t *mp, const char *url)
 {
   prop_set_string(mp->mp_prop_url, url);
+  hts_mutex_lock(&mp->mp_mutex);
+  mp_settings_init(mp, url);
+  hts_mutex_unlock(&mp->mp_mutex);
 }
 
 
@@ -1590,7 +1751,8 @@ mp_add_trackr(prop_t *parent,
 	      rstr_t *isolang,
 	      rstr_t *source,
 	      prop_t *sourcep,
-	      int score)
+	      int score,
+              int autosel)
 {
   prop_t *p = prop_create_root(NULL);
   prop_t *s = prop_create(p, "source");
@@ -1617,6 +1779,7 @@ mp_add_trackr(prop_t *parent,
 
   prop_set(p, "title", PROP_SET_RSTRING, title);
   prop_set(p, "basescore", PROP_SET_INT, score);
+  prop_set(p, "autosel", PROP_SET_INT, autosel);
 
   if(prop_set_parent(p, parent))
     prop_destroy(p);
@@ -1635,7 +1798,8 @@ mp_add_track(prop_t *parent,
 	     const char *isolang,
 	     const char *source,
 	     prop_t *sourcep,
-	     int score)
+	     int score,
+             int autosel)
 {
   rstr_t *rtitle      = rstr_alloc(title);
   rstr_t *rformat     = rstr_alloc(format);
@@ -1644,7 +1808,7 @@ mp_add_track(prop_t *parent,
   rstr_t *rsource     = rstr_alloc(source);
 
   mp_add_trackr(parent, rtitle, url, rformat, rlongformat, risolang,
-		rsource, sourcep, score);
+		rsource, sourcep, score, autosel);
   
   rstr_release(rtitle);
   rstr_release(rformat);
@@ -1660,7 +1824,7 @@ mp_add_track(prop_t *parent,
 void
 mp_add_track_off(prop_t *prop, const char *url)
 {
-  mp_add_track(prop, "Off", url, NULL, NULL, NULL, NULL, NULL, 10000);
+  mp_add_track(prop, "Off", url, NULL, NULL, NULL, NULL, NULL, 100000, 1);
 }
 
 
@@ -1675,7 +1839,10 @@ typedef struct media_track {
   int mt_isolang_score;
 
   prop_sub_t *mt_sub_basescore;
-  int mt_base_score;
+  int mt_basescore;
+
+  prop_sub_t *mt_sub_autosel;
+  int mt_autosel;
 
   media_track_mgr_t *mt_mtm;
   prop_t *mt_root;
@@ -1706,7 +1873,6 @@ static void
 mtm_rethink(media_track_mgr_t *mtm)
 {
   media_track_t *mt, *best = NULL;
-  int thres = 20;
   int best_score = 0;
 
   if (mtm->mtm_current_url) {
@@ -1725,16 +1891,13 @@ mtm_rethink(media_track_mgr_t *mtm)
     return;
   }
 
-  if(mtm->mtm_type == MEDIA_TRACK_MANAGER_AUDIO ||
-     subtitle_settings.always_select)
-    thres = 0;
-
   if(mtm->mtm_user_set)
     return;
 
   TAILQ_FOREACH(mt, &mtm->mtm_tracks, mt_link) {
     if(mt->mt_url == NULL ||
-       mt->mt_base_score == -1 ||
+       mt->mt_basescore == -1 ||
+       mt->mt_autosel == -1 ||
        mt->mt_isolang_score == -1)
       continue;
 
@@ -1752,12 +1915,12 @@ mtm_rethink(media_track_mgr_t *mtm)
     if(!strcmp(mt->mt_url, "sub:off") || !strcmp(mt->mt_url, "audio:off"))
       continue;
 
-    int score = mt->mt_base_score + mt->mt_isolang_score;
+    if(!mt->mt_autosel)
+      continue;
 
-    
+    int score = mt->mt_basescore + mt->mt_isolang_score;
 
-    if(score < 10000 &&
-       score >= thres && (best == NULL || score > best_score)) {
+    if(score < 100000 && (best == NULL || score > best_score)) {
       best = mt;
       best_score = score;
     }
@@ -1810,9 +1973,9 @@ mt_set_isolang(void *opaque, const char *str)
     mt->mt_isolang_score = 0;
     break;
   }
-  if(mt->mt_base_score >= 0)
+  if(mt->mt_basescore >= 0)
     prop_set(mt->mt_root, "score", PROP_SET_INT,
-	     mt->mt_base_score + mt->mt_isolang_score);
+	     mt->mt_basescore + mt->mt_isolang_score);
 
   mtm_rethink(mt->mt_mtm);
 }
@@ -1825,10 +1988,22 @@ static void
 mt_set_basescore(void *opaque, int v)
 {
   media_track_t *mt = opaque;
-  mt->mt_base_score = v;
+  mt->mt_basescore = v;
   if(mt->mt_isolang_score >= 0)
     prop_set(mt->mt_root, "score", PROP_SET_INT,
-	     mt->mt_base_score + mt->mt_isolang_score);
+	     mt->mt_basescore + mt->mt_isolang_score);
+  mtm_rethink(mt->mt_mtm);
+}
+
+
+/**
+ *
+ */
+static void
+mt_set_autosel(void *opaque, int v)
+{
+  media_track_t *mt = opaque;
+  mt->mt_autosel = v;
   mtm_rethink(mt->mt_mtm);
 }
 
@@ -1846,7 +2021,8 @@ mtm_add_track(media_track_mgr_t *mtm, prop_t *root, media_track_t *before)
   mt->mt_root = root;
 
   mt->mt_isolang_score = -1;
-  mt->mt_base_score = -1;
+  mt->mt_basescore = -1;
+  mt->mt_autosel = -1;
 
   if(before) {
     TAILQ_INSERT_BEFORE(before, mt, mt_link);
@@ -1877,6 +2053,14 @@ mtm_add_track(media_track_mgr_t *mtm, prop_t *root, media_track_t *before)
 		   PROP_TAG_COURIER, mtm->mtm_mp->mp_pc,
 		   PROP_TAG_NAMED_ROOT, root, "node",
 		   NULL);
+
+  mt->mt_sub_autosel =
+    prop_subscribe(0,
+		   PROP_TAG_NAME("node", "autosel"),
+		   PROP_TAG_CALLBACK_INT, mt_set_autosel, mt,
+		   PROP_TAG_COURIER, mtm->mtm_mp->mp_pc,
+		   PROP_TAG_NAMED_ROOT, root, "node",
+		   NULL);
 }
 
 
@@ -1897,6 +2081,7 @@ mt_destroy(media_track_mgr_t *mtm, media_track_t *mt)
   prop_unsubscribe(mt->mt_sub_url);
   prop_unsubscribe(mt->mt_sub_isolang);
   prop_unsubscribe(mt->mt_sub_basescore);
+  prop_unsubscribe(mt->mt_sub_autosel);
   free(mt->mt_url);
   free(mt);
 }
@@ -2106,13 +2291,13 @@ ext_sub_dtor(media_buf_t *mb)
  *
  */
 void
-mp_load_ext_sub(media_pipe_t *mp, const char *url)
+mp_load_ext_sub(media_pipe_t *mp, const char *url, AVRational *framerate)
 {
   media_buf_t *mb = media_buf_alloc_unlocked(mp, 0);
   mb->mb_data_type = MB_CTRL_EXT_SUBTITLE;
   
   if(url != NULL)
-    mb->mb_data = subtitles_load(mp, url);
+    mb->mb_data = subtitles_load(mp, url, framerate);
   
   mb->mb_dtor = ext_sub_dtor;
   hts_mutex_lock(&mp->mp_mutex);

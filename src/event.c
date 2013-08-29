@@ -28,15 +28,7 @@
 #include "event.h"
 #include "misc/strtab.h"
 #include "prop/prop.h"
-
-/**
- *
- */
-static void
-event_default_dtor(event_t *e)
-{
-  free(e);
-}
+#include "arch/arch.h"
 
 /**
  *
@@ -45,7 +37,8 @@ void *
 event_create(event_type_t type, size_t size)
 {
   event_t *e = malloc(size);
-  e->e_dtor = event_default_dtor;
+  e->e_nav = NULL;
+  e->e_dtor = NULL;
   e->e_refcount = 1;
   e->e_mapped = 0;
   assert(type > EVENT_OFFSET);
@@ -95,8 +88,12 @@ event_addref(event_t *e)
 void
 event_release(event_t *e)
 {
-  if(atomic_add(&e->e_refcount, -1) == 1)
-    e->e_dtor(e);
+  if(atomic_add(&e->e_refcount, -1) == 1) {
+    if(e->e_dtor != NULL)
+      e->e_dtor(e);
+    prop_ref_dec(e->e_nav);
+    free(e);
+  }
 }
 
 
@@ -185,6 +182,8 @@ static struct strtab actionnames[] = {
   { "Playqueue",             ACTION_PLAYQUEUE },
   { "Sysinfo",               ACTION_SYSINFO },
 
+  { "SwitchUI",              ACTION_SWITCH_UI },
+
 };
 
 
@@ -225,7 +224,6 @@ event_playurl_dtor(event_t *e)
     prop_destroy(ep->model);
   free(ep->url);
   free(ep->how);
-  free(ep);
 }
 
 /**
@@ -259,7 +257,6 @@ event_openurl_dtor(event_t *e)
   free(ou->url);
   free(ou->view);
   free(ou->how);
-  free(ou);
 }
 
 
@@ -292,7 +289,6 @@ playtrack_dtor(event_t *e)
   prop_destroy(ep->track);
   if(ep->source != NULL)
     prop_destroy(ep->source);
-  free(ep);
 }
 
 
@@ -321,7 +317,6 @@ event_select_track_dtor(event_t *e)
 {
   event_select_track_t *est = (void *)e;
   free(est->id);
-  free(e);
 }
 
 
@@ -393,7 +388,7 @@ event_create_action_str(const char *str)
 {
   action_type_t a = action_str2code(str);
 
-  if(a == -1)
+  if(a == ACTION_invalid)
     return event_create_str(EVENT_DYNAMIC_ACTION, str);
   return event_create_action(a);
 }
@@ -428,7 +423,6 @@ event_prop_dtor(event_t *e)
 {
   event_prop_t *ep = (event_prop_t *)e;
   prop_ref_dec(ep->p);
-  free(e);
 }
 
 
@@ -462,7 +456,7 @@ event_to_prop(prop_t *p, event_t *e)
 void
 event_to_ui(event_t *e)
 {
-  event_to_prop(prop_get_by_name(PNVEC("global", "ui", "eventSink"),
+  event_to_prop(prop_get_by_name(PNVEC("global", "userinterfaces", "ui", "eventSink"),
 				 1, NULL), e);
   event_release(e);
 }
@@ -501,7 +495,7 @@ event_dispatch(event_t *e)
 	    event_is_action(e, ACTION_PLAYQUEUE) ||
 	    event_is_action(e, ACTION_RELOAD_DATA) ||
 	    event_is_type(e, EVENT_OPENURL)) {
-    event_to_prop(prop_get_by_name(PNVEC("global", "nav", "eventsink"),
+    event_to_prop(prop_get_by_name(PNVEC("global", "navigators", "nav", "eventsink"),
 				   1, NULL), e);
 
   } else if(event_is_action(e, ACTION_VOLUME_UP) ||
@@ -567,7 +561,7 @@ const static int action_from_fkey[13][2] = {
   { ACTION_SWITCH_VIEW,       0 },
   { 0,                        ACTION_VOLUME_MUTE_TOGGLE },
   { ACTION_FULLSCREEN_TOGGLE, ACTION_VOLUME_DOWN },
-  { 0,                        ACTION_VOLUME_UP },
+  { ACTION_SWITCH_UI,         ACTION_VOLUME_UP },
 };
 
 

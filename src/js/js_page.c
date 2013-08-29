@@ -293,7 +293,7 @@ item_finalize(JSContext *cx, JSObject *obj)
   prop_ref_dec(ji->ji_root);
   rstr_release(ji->ji_url);
   if(ji->ji_mlv != NULL)
-    mlv_unbind(ji->ji_mlv);
+    mlv_unbind(ji->ji_mlv, 0);
   free(ji);
 }
 
@@ -574,16 +574,17 @@ js_item_bindVideoMetadata(JSContext *cx, JSObject *obj,
 {
   js_item_t *ji = JS_GetPrivate(cx, obj);
   JSObject *o = NULL;
-
+  rstr_t *title;
   if(!JS_ConvertArguments(cx, argc, argv, "o", &o))
     return JS_FALSE;
   
-  rstr_t *title = js_prop_rstr(cx, o, "filename");
-  int year      = js_prop_int_or_default(cx, o, "year", 0);
+  rstr_t *filename = js_prop_rstr(cx, o, "filename");
+  int year         = js_prop_int_or_default(cx, o, "year", 0);
 
-  if(title != NULL) {
+  if(filename != NULL) {
     // Raw filename case
-    title = metadata_remove_postfix_rstr(title);
+    title = metadata_remove_postfix_rstr(filename);
+    rstr_release(filename);
     year = -1;
   } else {
     title = js_prop_rstr(cx, o, "title");
@@ -595,11 +596,12 @@ js_item_bindVideoMetadata(JSContext *cx, JSObject *obj,
   int duration  = js_prop_int_or_default(cx, o, "duration", 0);
 
   if(ji->ji_mlv != NULL)
-    mlv_unbind(ji->ji_mlv);
+    mlv_unbind(ji->ji_mlv, 0);
 
   ji->ji_mlv =
     metadata_bind_video_info(ji->ji_url, title, imdb, duration,
-			     ji->ji_root, NULL, 0, 0, year, season, episode);
+			     ji->ji_root, NULL, 0, 0, year, season, episode,
+                             0);
   rstr_release(imdb);
   rstr_release(title);
   
@@ -1070,14 +1072,26 @@ static JSFunctionSpec model_functions[] = {
 /**
  *
  */
-static JSBool 
-js_page_subscribe(JSContext *cx, JSObject *obj, uintN argc, 
+static int
+js_page_subscription_destroyed(void *aux)
+{
+  js_model_t *jm = aux;
+  jm->jm_subs--;
+  return 1;
+}
+
+/**
+ *
+ */
+static JSBool
+js_page_subscribe(JSContext *cx, JSObject *obj, uintN argc,
 		  jsval *argv, jsval *rval)
 {
   js_model_t *jm = JS_GetPrivate(cx, obj);
+  jm->jm_subs++;
   return js_subscribe(cx, argc, argv, rval, jm->jm_root, "page",
 		      &jm->jm_subscriptions, jm->jm_pc,
-		      &jm->jm_subs);
+                      js_page_subscription_destroyed, jm);
 }
 
 /**
@@ -1182,8 +1196,8 @@ js_model_nodesub(void *opaque, prop_event_t event, ...)
 
   case PROP_WANT_MORE_CHILDS:
     if(jm->jm_paginator) {
-      if(js_model_fill(jm->jm_cx, jm))
-	prop_have_more_childs(jm->jm_nodes);
+      int r = js_model_fill(jm->jm_cx, jm);
+      prop_have_more_childs(jm->jm_nodes, r);
     } else {
       jm->jm_pending_want_more = 1;
     }
@@ -1414,8 +1428,8 @@ js_open(js_model_t *jm)
 
     if(jm->jm_pending_want_more && jm->jm_paginator) {
       jm->jm_pending_want_more = 0;
-      if(js_model_fill(jm->jm_cx, jm))
-	prop_have_more_childs(jm->jm_nodes);
+      int r = js_model_fill(jm->jm_cx, jm);
+      prop_have_more_childs(jm->jm_nodes, r);
     }
   }
 

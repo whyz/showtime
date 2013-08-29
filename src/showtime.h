@@ -60,6 +60,7 @@ extern const char *showtime_dataroot(void);
 
 
 #define _(string) nls_get_rstring(string)
+#define _pl(a,b,c) nls_get_rstringp(a,b,c)
 #define _p(string) nls_get_prop(string)
 
 rstr_t *nls_get_rstring(const char *string);
@@ -80,6 +81,8 @@ rstr_t *nls_get_rstringp(const char *string, const char *singularis, int val);
 #define HOSTNAME_MAX 256 /* FQDN is max 255 bytes including ending dot */
 
 void showtime_shutdown(int retcode);
+
+void showtime_flush_caches(void);
 
 uint32_t showtime_get_version_int(void);
 
@@ -163,8 +166,6 @@ void my_localtime(const time_t *timep, struct tm *tm);
  * OOM conditions
  */
 
-#if defined(ENABLE_TLSF) && defined(PS3)
-
 void *mymalloc(size_t size);
 
 void *myrealloc(void *ptr, size_t size);
@@ -173,21 +174,9 @@ void *mycalloc(size_t count, size_t size);
 
 void *mymemalign(size_t align, size_t size);
 
-#else
-
-#define mymalloc(size) malloc(size)
-#define myrealloc(ptr, size) realloc(ptr, size)
-#define mycalloc(count, size) calloc(count, size)
-static inline void *mymemalign(size_t align, size_t size)
-{
-  void *p;
-  return posix_memalign(&p, align, size) ? NULL : p;
-}
-
-#endif
-
-
 void runcontrol_activity(void);
+
+void shutdown_hook_run(int early);
 
 void *shutdown_hook_add(void (*fn)(void *opaque, int exitcode), void *opaque,
 			int early);
@@ -219,10 +208,6 @@ typedef struct gconf {
   int noui;
   int fullscreen;
 
-#if ENABLE_SERDEV
-  int enable_serdev;
-#endif
-
   int can_standby;
   int can_poweroff;
   int can_open_shell;
@@ -240,6 +225,9 @@ typedef struct gconf {
   int disable_http_reuse;
   int enable_experimental;
   int enable_detailed_avdiff;
+  int enable_hls_debug;
+  int enable_ftp_debug;
+  int enable_patched_upgrade;
 
   const char *devplugin;
   const char *plugin_repo;
@@ -256,12 +244,18 @@ typedef struct gconf {
   struct prop *settings_sd;
   struct prop *settings_general;
   struct prop *settings_dev;
+  struct prop *settings_network;
   struct prop_concat *settings_look_and_feel;
 
   hts_mutex_t state_mutex;
   hts_cond_t state_cond;
 
   int state_plugins_loaded;
+
+  int fa_allow_delete;
+
+  int ignore_the_prefix;
+
 
 } gconf_t;
 
@@ -278,6 +272,7 @@ typedef struct inithelper {
     INIT_GROUP_API,
     INIT_GROUP_IPC,
     INIT_GROUP_STATIC_APPS,
+    INIT_GROUP_ASYNCIO,
   } group;
   void (*fn)(void);
 } inithelper_t;

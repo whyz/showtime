@@ -113,6 +113,8 @@ glw_view_token_free(glw_root_t *gr, token_t *t)
 
   case TOKEN_RSTRING:
   case TOKEN_IDENTIFIER:
+    rstr_release(t->t_rstring);
+    break;
   case TOKEN_PROPERTY_NAME:
     for(i = 0; i < t->t_elements; i++)
       rstr_release(t->t_pnvec[i]);
@@ -150,6 +152,7 @@ glw_view_token_copy(glw_root_t *gr, token_t *src)
 
   dst->type = src->type;
   dst->t_propsubr = src->t_propsubr;
+  dst->t_flags = src->t_flags;
 
   switch(src->type) {
   case TOKEN_FLOAT:

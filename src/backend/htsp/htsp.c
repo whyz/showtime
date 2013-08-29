@@ -189,7 +189,7 @@ htsp_recv(htsp_connection_t *hc)
   uint8_t len[4];
   uint32_t l;
 
-  if(tc->read(tc, len, 4, 1, NULL, NULL) < 0)
+  if(tcp_read_data(tc, len, 4, NULL, NULL) < 0)
     return NULL;
   
   l = (len[0] << 24) | (len[1] << 16) | (len[2] << 8) | len[3];
@@ -198,7 +198,7 @@ htsp_recv(htsp_connection_t *hc)
 
   buf = mymalloc(l);
 
-  if(buf == NULL || tc->read(tc, buf, l, 1, NULL, NULL) < 0) {
+  if(buf == NULL || tcp_read_data(tc, buf, l, NULL, NULL) < 0) {
     free(buf);
     return NULL;
   }
@@ -286,7 +286,7 @@ htsp_reqreply(htsp_connection_t *hc, htsmsg_t *m)
     hts_mutex_unlock(&hc->hc_rpc_mutex);
   }
 
-  if(tc->write(tc, buf, len)) {
+  if(tcp_write_data(tc, buf, len)) {
     free(buf);
     htsmsg_destroy(m);
     
@@ -2086,7 +2086,7 @@ htsp_subscriptionStart(htsp_connection_t *hc, htsmsg_t *m)
 
 	snprintf(url, sizeof(url), "sub:%d", idx);
 	mp_add_track(mp->mp_prop_subtitle_tracks,
-		     NULL, url, nicename, NULL, lang, "HTSP", NULL, 0);
+		     NULL, url, nicename, NULL, lang, "HTSP", NULL, 0, 1);
 	break;
 
       case MEDIA_TYPE_AUDIO:
@@ -2098,7 +2098,7 @@ htsp_subscriptionStart(htsp_connection_t *hc, htsmsg_t *m)
 
 	snprintf(url, sizeof(url), "audio:%d", idx);
 	mp_add_track(mp->mp_prop_audio_tracks,
-		     NULL, url, nicename, NULL, lang, "HTSP", NULL, 0);
+		     NULL, url, nicename, NULL, lang, "HTSP", NULL, 0, 1);
 	break;
       }
 

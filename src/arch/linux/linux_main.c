@@ -24,13 +24,16 @@
 #include "showtime.h"
 #include "arch/arch.h"
 #include "arch/posix/posix.h"
-
 #include "linux.h"
 #include "prop/prop.h"
-
+#include "navigator.h"
+#include "service.h"
+#include "prop/prop_glib_courier.h"
 
 hts_mutex_t gdk_mutex;
 prop_courier_t *glibcourier;
+
+static void add_xdg_paths(void);
 
 /**
  *
@@ -51,59 +54,86 @@ gdk_release(void)
   hts_mutex_unlock(&gdk_mutex);
 }
 
+static int running;
+extern const linux_ui_t ui_glw, ui_gu;
+static const linux_ui_t *ui_wanted = &ui_glw, *ui_current;
 
+
+/**
+ *
+ */
+int
+arch_stop_req(void)
+{
+  running = 0;
+  g_main_context_wakeup(g_main_context_default());
+  return 0;
+}
 
 
 /**
  *
  */
 static void
-wakeup_glib_mainloop(void *aux)
+switch_ui(void)
 {
-  g_main_context_wakeup(g_main_context_default());
+  if(ui_current == &ui_glw)
+    ui_wanted = &ui_gu;
+  else
+    ui_wanted = &ui_glw;
 }
 
 
 /**
  *
  */
-static gboolean
-courier_prepare(GSource *s, gint *timeout)
+static void
+mainloop(void)
 {
-  *timeout = -1;
-  return FALSE;
+  void *aux = NULL;
+
+  running = 1;
+
+  while(running) {
+
+    if(ui_current != ui_wanted) {
+
+      prop_t *nav;
+
+      if(ui_current != NULL) {
+	nav = ui_current->stop(aux);
+      } else {
+	nav = NULL;
+      }
+
+      ui_current = ui_wanted;
+
+      aux= ui_current->start(nav);
+    }
+
+#if ENABLE_WEBPOPUP
+    linux_webpopup_check();
+#endif
+    gtk_main_iteration();
+  }
+
+  if(ui_current != NULL) {
+    prop_t *nav = ui_current->stop(aux);
+    if(nav != NULL)
+      prop_destroy(nav);
+  }
 }
 
 
 /**
  *
  */
-static gboolean
-courier_check(GSource *s)
+static void
+linux_global_eventsink(void *opaque, event_t *e)
 {
-  return prop_courier_check(glibcourier);
+  if(event_is_action(e, ACTION_SWITCH_UI))
+    switch_ui();
 }
-
-
-/**
- *
- */
-static gboolean
-courier_dispatch(GSource *s, GSourceFunc callback, gpointer aux)
-{
-  prop_courier_poll(glibcourier);
-  return TRUE;
-}
-
-
-/**
- *
- */
-static GSourceFuncs source_funcs = {
-  courier_prepare, 
-  courier_check,
-  courier_dispatch,
-};
 
 
 /**
@@ -118,8 +148,10 @@ main(int argc, char **argv)
 
   XInitThreads();
   hts_mutex_init(&gdk_mutex);
+
   g_thread_init(NULL);
   gdk_threads_set_lock_functions(gdk_obtain, gdk_release);
+
   gdk_threads_init();
   gdk_threads_enter();
   gtk_init(&argc, &argv);
@@ -132,22 +164,22 @@ main(int argc, char **argv)
 
   showtime_init();
 
-  glibcourier = prop_courier_create_notify(wakeup_glib_mainloop, NULL);
-  g_source_attach(g_source_new(&source_funcs, sizeof(GSource)),
-		  g_main_context_default());
+  glibcourier = glib_courier_create(g_main_context_default());
 
+  prop_subscribe(0,
+		 PROP_TAG_NAME("global", "eventsink"),
+		 PROP_TAG_CALLBACK_EVENT, linux_global_eventsink, NULL,
+		 PROP_TAG_COURIER, glibcourier, 
+		 NULL);
+
+#if ENABLE_WEBPOPUP
+  linux_webpopup_init();
+#endif
   linux_init_monitors();
 
-#if ENABLE_GU
-  if(gconf.ui && !strcmp(gconf.ui, "gu")) {
-    extern void gu_start(void);
-    gu_start();
-  } else
-#endif
- {
-  extern void glw_x11_start(void);
-  glw_x11_start();
- }
+  add_xdg_paths();
+
+  mainloop();
 
   showtime_fini();
 
@@ -162,4 +194,42 @@ void
 arch_exit(void)
 {
   exit(gconf.exit_code);
+}
+
+/**
+ *
+ */
+static void
+add_xdg_path(const char *class, const char *type)
+{
+  char id[64];
+  char cmd[256];
+  char path[512];
+  snprintf(cmd, sizeof(cmd), "xdg-user-dir %s", class);
+  FILE *fp = popen(cmd, "r");
+  if(fp == NULL)
+    return;
+
+  if(fscanf(fp, "%511[^\n]", path) == 1) {
+    char *title = strrchr(path, '/');
+    title = title ? title + 1 : path;
+
+    snprintf(id, sizeof(id), "xdg-user-dir-%s", class);
+
+    service_create(id, title, path, type, NULL, 0, 1,
+		   SVC_ORIGIN_SYSTEM);
+  }
+  fclose(fp);
+}
+
+
+/**
+ *
+ */
+static void
+add_xdg_paths(void)
+{
+  add_xdg_path("MUSIC", "music");
+  add_xdg_path("PICTURES", "photos");
+  add_xdg_path("VIDEOS", "video");
 }

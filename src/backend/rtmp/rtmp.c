@@ -31,7 +31,7 @@
 #include "misc/isolang.h"
 #include "video/video_playback.h"
 #include "video/video_settings.h"
-#include "subtitles/sub_scanner.h"
+#include "subtitles/subtitles.h"
 #include "metadata/metadata.h"
 
 typedef struct {
@@ -222,9 +222,10 @@ rtmp_process_event(rtmp_t *r, event_t *e, media_buf_t **mbp)
     event_select_track_t *est = (event_select_track_t *)e;
     prop_set_string(mp->mp_prop_subtitle_track_current, est->id);
     if(!strcmp(est->id, "sub:off")) {
-      mp_load_ext_sub(mp, NULL);
+      mp_load_ext_sub(mp, NULL, NULL);
       } else {
-      mp_load_ext_sub(mp, est->id);
+      AVRational framerate = {1000000, r->vframeduration};
+      mp_load_ext_sub(mp, est->id, &framerate);
     }
 
   }
@@ -437,7 +438,8 @@ get_packet_a(rtmp_t *r, uint8_t *data, int size, int64_t dts,
 		 NULL, 
 		 NULL,
 		 NULL,
-		 0);
+		 0,
+                 1);
 
     prop_set_string(mp->mp_prop_audio_track_current, "rtmp:1");
 

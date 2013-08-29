@@ -16,6 +16,12 @@ msg: Remover página atual dos favoritos
 #
 # ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
+id: Activate sleep timer
+msg: Ativar temporização de suspensão
+
+id: Disable sleep timer
+msg: Desativar temporização de suspensão
+
 id: Exit Showtime
 msg: Sair do Showtime
 
@@ -42,6 +48,12 @@ msg: Suspender
 
 id: System
 msg: Sistema
+
+id: Time until sleep
+msg: Tempo até suspensão
+
+id: min
+msg: min
 
 #
 # ./glwskins/default/cmdmenu/cmdmenu_dir.view
@@ -131,60 +143,6 @@ id: System log
 msg: Log de sistema
 
 #
-# ./glwskins/default/pages/about.view
-#
-id: Allocated by application: %d kB
-msg: Alocada pela aplicação: %d kB
-
-id: Allocated by malloc: %d kB
-msg: Alocada pelo malloc: %d kB
-
-id: Avail system RAM: %d kB
-msg: Memória RAM disponível: %d kB
-
-id: Detected CPUs: %d
-msg: CPUs detetados: %d
-
-id: Display info
-msg: Informações de visualização
-
-id: Framerate: %.2f Hz
-msg: Framerate: %.2f Hz
-
-id: Free chunks: %d
-msg: Chunks livres: %d
-
-id: GPU: %s
-msg: GPU: %s
-
-id: Height: %d px
-msg: Altura: %d px
-
-id: Memory status
-msg: Estado da memória
-
-id: Renderer: %s
-msg: Renderizador: %s
-
-id: System info
-msg: Informações de sistema
-
-id: Total system RAM: %d kB
-msg: Total de memória RAM: %d kB
-
-id: Unused memory: %d kB
-msg: Memória livre: %d kB
-
-id: Version: %s
-msg: Versão: %s
-
-id: Width: %d px
-msg: Largura: %d px
-
-id: Windowmanager: %s
-msg: Gestor de janelas: %s
-
-#
 # ./glwskins/default/pages/directory.view
 #
 id: Album
@@ -226,14 +184,11 @@ msg: Azulejos
 #
 # ./glwskins/default/pages/home_clist.view
 #
-id: About Showtime
-msg: Acerca do Showtime
+id: Apps
+msg: Apps
 
 id: Dismiss
 msg: Anular
-
-id: Plugins
-msg: Plugins
 
 id: Search / Open URL
 msg: Procurar / Abrir URL
@@ -282,6 +237,10 @@ msg: Avaliação:
 
 id: Year:
 msg: Ano:
+
+id: Seen %d times
+msg[0]: 
+msg[1]: 
 
 #
 # ./glwskins/default/pages/listitems/add.view
@@ -355,6 +314,10 @@ msg: Log de alterações para as releases %s
 id: Check for updates now
 msg: Procurar por atualizações agora
 
+id: Checking current installed version
+# Missing translation
+msg: 
+
 id: Checking for updates...
 msg: A procurar por atualizações...
 
@@ -375,6 +338,10 @@ msg: Uma nova versão %s está disponível para download
 
 id: No upgrade available
 msg: Não existem atualizações disponíveis
+
+id: Patching binary
+# Missing translation
+msg: 
 
 id: Restarting Showtime in %d seconds...
 msg: A reiniciar o Showtime em %s segundos
@@ -407,7 +374,8 @@ msg: Estado da reprodução
 # ./glwskins/default/pages/wideinfo/video.view
 #
 id: Seen:
-msg: Visto:
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/playdecks/dvd.view
@@ -479,39 +447,6 @@ id: System is low on memory (%d kB RAM available)
 msg: O sistema está com pouca memória (%d kB RAM disponível)
 
 #
-# ./src/audio/audio.c
-#
-id: Audio output
-msg: Saída de áudio
-
-id: Audio/Video sync delay
-msg: Atraso de sincronização de áudio/vídeo
-
-id: Current output device
-msg: Dispositivo de saída atual
-
-id: Force stereo downmix
-msg: Forçar stereo downmix
-
-id: Phantom LFE
-msg: Fantasma LFE
-
-id: Phantom center
-msg: Fantasma center
-
-id: Select audio output device and related configurations
-msg: Selecionar o dispositivo de saída de áudio e configurações relacionadas
-
-id: Small front speakers
-msg: Pequenos altifalantes frontais
-
-id: Swap LFE+center with surround
-msg: Trocar LFE+center com surround
-
-id: Switching audio output to %s
-msg: A alterar a saída de áudio para %s
-
-#
 # ./src/backend/dvd/cdda.c
 #
 id: Invalid CD URL
@@ -562,9 +497,6 @@ msg: Colaborativo
 id: Compilations
 msg: Compilações
 
-id: Enable Spotify
-msg: Ativar Spotify
-
 id: Forget me
 msg: Esquecer-me
 
@@ -606,9 +538,6 @@ msg: Amigos do Spotify
 
 id: Spotify music service
 msg: Serviço de música do Spotify
-
-id: Spotify offers you legal and free access to a huge library of music. To use Spotify in Showtime you need a Spotify Preemium account.\nFor more information about Spotify, visit http://www.spotify.com/\n\nYou will be prompted for your Spotify username and password when first accessing any of the Spotify features in Showtime.
-msg: O Spotify oferece-lhe acesso livre e legal a uma enorme biblioteca de música. Para usar o Spotify no Showtime você precisa de uma conta Premium Spotify.\nPara mais informações sobre o Spotify, visite http://www.spotify.com/\n\nYou e será requisitado o seu nome de utilizador e palavra-passe quando tentar aceder a qualquer recurso do Spotify no Showtime.
 
 id: Spotify playlists
 msg: Listas de reprodução do Spotify
@@ -665,12 +594,13 @@ id: Artists
 msg: Artistas
 
 id: Date (newest first)
-# Missing translation
-msg: 
+msg: Data (mais recentes primeiro)
 
 id: Date (oldest first)
-# Missing translation
-msg: 
+msg: Data (mais antigos primeiro)
+
+id: Deleted %s
+msg: %s eliminado
 
 id: Filename
 msg: Nome de ficheiro
@@ -690,6 +620,9 @@ msg: Ordenar pastas primeiro
 id: Sort on
 msg: Ordenar por
 
+id: Unable to delete %s\n%s
+msg: Não foi possível eliminar %s\n%s
+
 #
 # ./src/fileaccess/fa_spotlight.c
 #
@@ -697,8 +630,35 @@ id: Search using spotlight
 msg: Procurar utilizando o spotlight
 
 #
+# ./src/fileaccess/fileaccess.c
+#
+id: Are you sure you want to delete:
+msg: Tem a certeza que pretende eliminar:
+
+id: Enable file deletion from item menu
+msg: Ativar eliminação de ficheiros através do item de menu
+
+id: File access
+msg: Acesso a ficheiros
+
+id: %d archive parts
+msg[0]: 
+msg[1]: 
+
+id: %d directories
+msg[0]: %d diretórios
+msg[1]: %d diretório
+
+id: %d files
+msg[0]: %d ficheiros
+msg[1]: %d ficheiro
+
+#
 # ./src/i18n.c
 #
+id: Ignore 'The' at beginning of words when sorting
+msg: Na ordenação, ignorar 'The' no ínicio das palavras
+
 id: Language
 msg: Idioma
 
@@ -733,18 +693,6 @@ id: Tertiary subtitle language code
 msg: Código do idioma de legendas terciário
 
 #
-# ./src/ipc/serdev/lgtv.c
-#
-id: Automatic TV power on/off
-msg: Ligar/Desligar TV automaticamente
-
-id: Input source
-msg: Fonte de entrada
-
-id: LG Television set
-msg: Aparelho de TV LG
-
-#
 # ./src/keymapper.c
 #
 id: Configure mapping of keyboard and remote controller keys
@@ -771,6 +719,14 @@ msg: Alinhar as legendas no quadro de vídeo
 id: Audio delay
 msg: Atraso de áudio
 
+id: Audio volume
+# Missing translation
+msg: 
+
+id: Go to standby after video ends
+# Missing translation
+msg: 
+
 id: Stretch video to fullscreen
 msg: Esticar vídeo para fullscreen
 
@@ -780,8 +736,16 @@ msg: Esticar vídeo para widescreen
 id: Subtitle delay
 msg: Atraso de legendas
 
+id: Subtitle horizontal displacement
+# Missing translation
+msg: 
+
 id: Subtitle scaling
 msg: Redimensionamento de legendas
+
+id: Subtitle vertical displacement
+# Missing translation
+msg: 
 
 id: Video zoom
 msg: Zoom de vídeo
@@ -793,11 +757,30 @@ id: Indexing
 msg: A indexar
 
 #
-# ./src/metadata/metadata.c
+# ./src/metadata/decoration.c
 #
 id: Automatic
 msg: Automático
 
+id: Manual
+# Missing translation
+msg: 
+
+id: Mark all as seen
+# Missing translation
+msg: 
+
+id: Mark all as unseen
+# Missing translation
+msg: 
+
+id: Metadata mode
+# Missing translation
+msg: 
+
+#
+# ./src/metadata/metadata.c
+#
 id: Custom search query
 msg: Chave de pesquisa personalizada
 
@@ -906,6 +889,10 @@ msg: Outro
 id: Photos
 msg: Fotografias
 
+id: Published in Virtual File System
+# Missing translation
+msg: 
+
 id: Removed bookmark: %s
 msg: Favorito removido: %s
 
@@ -922,6 +909,21 @@ id: URL
 msg: Endereço
 
 #
+# ./src/networking/ftp_server.c
+#
+id: Enable FTP server
+# Missing translation
+msg: 
+
+id: FTP server
+# Missing translation
+msg: 
+
+id: Server TCP port
+# Missing translation
+msg: 
+
+#
 # ./src/plugins.c
 #
 id: Alternate plugin Repository URL
@@ -930,8 +932,8 @@ msg: Repositótio de plugins alternativo
 id: Automatically upgrade plugins
 msg: Atualizar automaticamente os plugins
 
-id: Available plugins
-msg: Plugins disponíveis
+id: Available apps
+msg: Apps disponíveis
 
 id: Background
 msg: Fundo
@@ -939,8 +941,8 @@ msg: Fundo
 id: Beta testing passwords
 msg: Palavras-passe de testes beta
 
-id: Browse available plugins
-msg: Listar plugins disponíveis
+id: Browse available apps
+msg: Navegar pelas apps disponíveis
 
 id: Browsing
 msg: Navegando
@@ -966,8 +968,8 @@ msg: Erro ao abrir o ficheiro
 id: Home page
 msg: Página inicial
 
-id: Installed plugins
-msg: Plugins instalados
+id: Installed apps
+msg: Apps instaladas
 
 id: Installed version higher than available
 msg: Está instalada uma versão mais atual que a disponível
@@ -998,6 +1000,12 @@ msg: Não atualizável
 
 id: Online TV
 msg: TV online
+
+id: Plugin %s %s has been uninstalled because it may cause problems.\nYou may try reinstalling a different version manually.
+msg: O plugin %s %s foi desinstalado porque poderia causar problemas.\nPode tentar reinstalar manualmente uma versão diferente.
+
+id: Plugins
+msg: Plugins
 
 id: Preferred views from plugins
 msg: Vistas de plugins preferidas
@@ -1086,6 +1094,14 @@ msg: Definições globais
 id: Look and feel
 msg: Olhar e sentir
 
+id: Network services, etc
+# Missing translation
+msg: 
+
+id: Network settings
+# Missing translation
+msg: 
+
 id: Settings useful for developers
 msg: Configurações úteis para programadores
 
@@ -1093,10 +1109,82 @@ id: System related settings
 msg: Configurações relacionadas com o sistema
 
 #
-# ./src/subtitles/sub_scanner.c
+# ./src/subtitles/subtitles.c
 #
+id: Any subtitle in central folder
+msg: Qualquer legenda numa pasta central
+
+id: Any subtitle in same folder as video
+msg: Qualquer legenda na mesma pasta do vídeo
+
+id: Auto
+msg: Automático
+
+id: Automatically select from this source
+msg: Selecionar automaticamente a partir desta fonte
+
+id: Center
+msg: Centrado
+
+id: Central subtitle folder
+msg: Pasta de lengendas central
+
+id: Color
+msg: Cor
+
 id: External file
 msg: Ficheiro externo
+
+id: Force subtitles to reside on video frame
+msg: Forçar as legendas a residerem no quadro de vídeo
+
+id: Generic settings for video subtitles
+msg: Definições genéricas para legendas de vídeo
+
+id: Ignore embedded styling
+msg: Ignorar estilos embutidos
+
+id: Left
+msg: Esquerda
+
+id: Outline color
+msg: Cor do contorno
+
+id: Outline size
+msg: Tamanho do contorno
+
+id: Path to central folder
+msg: Caminho para a pasta central
+
+id: Providers for Subtitles
+msg: Fornecedores de legendas
+
+id: Right
+msg: Direita
+
+id: Shadow color
+msg: Cor da sombra
+
+id: Shadow offset
+msg: Deslocamento da sombra
+
+id: Subtitle position
+msg: Posicionamento das legendas
+
+id: Subtitle size
+msg: Tamanho das legendas
+
+id: Subtitle size and positioning
+msg: Tamanho e posição das legendas
+
+id: Subtitles embedded in video file
+msg: Legendas incorporadas no ficheiro de vídeo
+
+id: Subtitles with matching filename in central folder
+msg: Legendas com um nome idêntico na pasta central
+
+id: Subtitles with matching filename in same folder as video
+msg: Legendas com um nome idêntico na pasta do vídeo
 
 #
 # ./src/text/fontstash.c
@@ -1122,14 +1210,9 @@ msg: Repor tipo de letra estreito por defeito
 id: Reset subtitle font to default
 msg: Repor tipo de letra de legenda por defeito
 
-id: Unable to load %s -- %s
-msg: Não foi possível carregar %s -- %s
-
-id: Unable to open %s for writing
-msg: Não foi possível abrir para escrita %s
-
-id: Unable to write to %s
-msg: Não foi possível escrever em %s
+id: Unable to install font: %s
+# Missing translation
+msg: 
 
 id: Use font %s for
 msg: Usar a fonte %s para
@@ -1138,19 +1221,36 @@ id: User interface
 msg: Interface de utilizador
 
 #
+# ./src/ui/glw/glw_ps3.c
+#
+id: Seek using L2 and R2 button
+# Missing translation
+msg: 
+
+id: Yes with Select button
+# Missing translation
+msg: 
+
+#
 # ./src/ui/glw/glw_settings.c
 #
+id: Font and icon size
+# Missing translation
+msg: 
+
 id: Horizontal underscan
 msg: Underscan horizontal
 
 id: Screensaver delay
 msg: Atraso da proteção de ecrã
 
-id: Userinterface size
-msg: Tamanho do interface do utilizador
-
 id: Vertical underscan
-msg: Underscan vertical
+# Missing translation
+msg: 
+
+id: Wrap when reaching beginning/end of lists
+# Missing translation
+msg: 
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1233,29 +1333,8 @@ msg: Não foi possível pesquisar no codificador Cell. Erro 0x%x
 #
 # ./src/video/video_settings.c
 #
-id: 1080
-msg: 1080
-
-id: 576
-msg: 576
-
-id: 720
-msg: 720
-
-id: Always try to select a subtitle
-msg: Tentar sempre selecionar as legendas
-
-id: Auto
-msg: Automático
-
 id: Automatically play next video in list
 msg: Reproduzir automaticamente o próximo vídeo da lista
-
-id: Center
-msg: Centrado
-
-id: Color
-msg: Cor
 
 id: Count video as played when reaching
 msg: Marcar vídeo como reproduzido quando chegar a
@@ -1266,59 +1345,17 @@ msg: Ativar VDA
 id: Enable VDPAU
 msg: Ativar VDPAU
 
-id: Force subtitles to reside on video frame
-msg: Forçar as legendas a residerem no quadro de vídeo
-
-id: Generic settings for video subtitles
-msg: Definições genéricas para legendas de vídeo
-
-id: Ignore embedded styling
-msg: Ignorar estilos embutidos
-
-id: Include all subtitle files from movie directory
-msg: Incluir todos os ficheiros de legendas do directório do filme
-
-id: Left
-msg: Esquerda
-
 id: Maximum resolution for deinterlacer
 msg: Resolução máxima para o deinterlacer
 
 id: No limit
 msg: Sem limite
 
-id: Outline color
-msg: Cor do contorno
-
-id: Outline size
-msg: Tamanho do contorno
-
 id: Preferred VDPAU deinterlacer method
 msg: Método preferido de VDPAU deinterlacer
 
 id: Resume video playback
 msg: Retomar a reprodução de vídeo
-
-id: Right
-msg: Direita
-
-id: Shadow color
-msg: Cor da sombra
-
-id: Shadow offset
-msg: Deslocamento da sombra
-
-id: Subtitle position
-msg: Posicionamento das legendas
-
-id: Subtitle size
-msg: Tamanho das legendas
-
-id: Subtitle size and positioning
-msg: Tamanho e posição das legendas
-
-id: Subtitle styling
-msg: Estilo das legendas
 
 id: Temporal
 msg: Temporal

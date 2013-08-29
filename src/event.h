@@ -118,7 +118,11 @@ typedef enum {
 
   ACTION_SYSINFO,
 
+  ACTION_SWITCH_UI,
+
   ACTION_mappable_end,
+
+  ACTION_invalid = -1,
 } action_type_t;
 
 
@@ -163,6 +167,8 @@ typedef enum {
 
   EVENT_REDIRECT,
 
+  EVENT_PROPREF,
+
   EVENT_DYNAMIC_ACTION,
 
 } event_type_t;
@@ -187,6 +193,7 @@ typedef struct event_queue {
 typedef struct event {
   int     e_refcount;
   int     e_mapped;
+  struct prop *e_nav;
   event_type_t e_type_x;
   void (*e_dtor)(struct event *e);
   TAILQ_ENTRY(event) e_link;

@@ -3,6 +3,7 @@
 
 #include "media.h"
 #include "omx.h"
+#include "rpi_pixmap.h"
 
 /**
  *
@@ -13,40 +14,58 @@ oc_event_handler(OMX_HANDLETYPE component, OMX_PTR opaque, OMX_EVENTTYPE event,
 {
   omx_component_t *oc = opaque;
 
+#if 1
   omxdbg("%s: event  0x%x 0x%x 0x%x %p\n",
          oc->oc_name, event, (int)data1, (int)data2, eventdata);
-
-  hts_mutex_lock(&oc->oc_event_mtx);
+#endif
 
   switch(event) {
   case OMX_EventCmdComplete:
+  complete:
+
+    hts_mutex_lock(&oc->oc_event_mtx);
     oc->oc_cmd_done = 1;
     hts_cond_broadcast(&oc->oc_event_cond);
+    hts_mutex_unlock(&oc->oc_event_mtx);
     break;
+
   case OMX_EventError:
-    if(data1 == OMX_ErrorPortUnpopulated) {
-      printf("Port unpopulated\n");
+
+    switch(data1) {
+    case OMX_ErrorPortUnpopulated:
+      break;
+
+    case OMX_ErrorSameState:
+      goto complete;
+
+    case OMX_ErrorStreamCorrupt:
+      TRACE(TRACE_INFO, "OMX", "%s: Corrupt stream", oc->oc_name);
+      hts_mutex_lock(oc->oc_avail_mtx);
+      oc->oc_stream_corrupt = 1;
+      hts_cond_signal(oc->oc_avail_cond);
+      hts_mutex_unlock(oc->oc_avail_mtx);
+      break;
+
+      
+    default:
+      TRACE(TRACE_ERROR, "OMX", "%s: ERROR 0x%x\n", oc->oc_name, (int)data1);
       break;
     }
+    break;
 
-    if(data1 == OMX_ErrorSameState) {
-      oc->oc_cmd_done = 1;
-      hts_cond_broadcast(&oc->oc_event_cond);
-      break;
-    }
+  case OMX_EventPortSettingsChanged:
+    if(oc->oc_port_settings_changed_cb != NULL)
+      oc->oc_port_settings_changed_cb(oc);
+    break;
 
-    printf("%s: ERROR 0x%x\n", oc->oc_name, (int)data1);
-    exit(1);
-
-  case OMX_EventPortSettingsChanged: 
-    oc->oc_port_settings_changed = 1;
+  case OMX_EventMark:
+    if(oc->oc_event_mark_cb != NULL)
+      oc->oc_event_mark_cb(oc, eventdata);
     break;
     
   default:
     break;
   }
-
-  hts_mutex_unlock(&oc->oc_event_mtx);
   return 0;
 }
 
@@ -74,7 +93,26 @@ oc_empty_buffer_done(OMX_HANDLETYPE hComponent,
 /**
  *
  */
-static void
+static OMX_ERRORTYPE
+oc_fill_buffer_done(OMX_HANDLETYPE hComponent,
+                     OMX_PTR opaque,
+                     OMX_BUFFERHEADERTYPE* buf)
+{
+  omx_component_t *oc = opaque;
+
+  hts_mutex_lock(oc->oc_avail_mtx);
+  oc->oc_filled = buf;
+  hts_cond_signal(oc->oc_avail_cond);
+  hts_mutex_unlock(oc->oc_avail_mtx);
+  return 0;
+}
+
+
+
+/**
+ *
+ */
+void
 omx_wait_command(omx_component_t *oc)
 {
   hts_mutex_lock(&oc->oc_event_mtx);
@@ -87,7 +125,7 @@ omx_wait_command(omx_component_t *oc)
 /**
  *
  */
-static void
+void
 omx_send_command(omx_component_t *oc, OMX_COMMANDTYPE cmd, int v, void *p,
 		 int wait)
 {
@@ -124,7 +162,7 @@ omx_component_create(const char *name, hts_mutex_t *mtx, hts_cond_t *avail)
 
   cb.EventHandler    = oc_event_handler;
   cb.EmptyBufferDone = oc_empty_buffer_done;
-  cb.FillBufferDone  = NULL;
+  cb.FillBufferDone  = oc_fill_buffer_done;
 
   //  omxdbg("Creating %s\n", oc->oc_name);
   omxchk(OMX_GetHandle(&oc->oc_handle, oc->oc_name, oc, &cb));
@@ -137,15 +175,18 @@ omx_component_create(const char *name, hts_mutex_t *mtx, hts_cond_t *avail)
     ports.nVersion.nVersion = OMX_VERSION;
 
     omxchk(OMX_GetParameter(oc->oc_handle, types[i], &ports));
-    //    omxdbg("%s: type:%d: ports: %ld +%ld\n", name, i, ports.nStartPortNumber, ports.nPorts);
+    omxdbg("%s: type:%d: ports: %ld +%ld\n", name, i, ports.nStartPortNumber, ports.nPorts);
 
-    int i;
-    for(i = 0; i < ports.nPorts; i++)
-      omx_send_command(oc, OMX_CommandPortDisable, ports.nStartPortNumber + i, NULL, 0);
+    if(ports.nPorts > 0) {
+      oc->oc_inport = ports.nStartPortNumber;
+      oc->oc_outport = ports.nStartPortNumber + 1;
+    }
+
+    for(int j = 0; j < ports.nPorts; j++)
+      omx_send_command(oc, OMX_CommandPortDisable, ports.nStartPortNumber + j, NULL, 0);
+
   }
 
-  //  oc->oc_inport = ports.nStartPortNumber;
-  //  oc->oc_outport = ports.nStartPortNumber + 1;
 
   return oc;
 }
@@ -269,7 +310,10 @@ omx_release_buffers(omx_component_t *oc, int port)
   for(buf = oc->oc_avail; buf; buf = n) {
     n = buf->pAppPrivate;
     int r = OMX_FreeBuffer(oc->oc_handle, port, buf);
-    printf("%s freeing buf %p : %x\n", oc->oc_name, buf, r);
+    if(r) {
+      TRACE(TRACE_ERROR, "OMX", "Unable to free buffer");
+      exit(1);
+    }
   }
 }
 
@@ -295,7 +339,10 @@ omx_tunnel_create(omx_component_t *src, int srcport, omx_component_t *dst,
   omxchk(OMX_SetupTunnel(src->oc_handle, srcport, dst->oc_handle, dstport));
   omx_send_command(src, OMX_CommandPortEnable, srcport, NULL, 0);
   omx_send_command(dst, OMX_CommandPortEnable, dstport, NULL, 0);
-  omx_set_state(dst, OMX_StateIdle);
+
+  omxchk(OMX_GetState(dst->oc_handle, &state));
+  if(state == OMX_StateLoaded)
+    omx_set_state(dst, OMX_StateIdle);
 
   omx_tunnel_t *ot = malloc(sizeof(omx_tunnel_t));
   ot->ot_src = src;
@@ -310,6 +357,15 @@ omx_tunnel_create(omx_component_t *src, int srcport, omx_component_t *dst,
  *
  */
 void
+omx_port_enable(omx_component_t *c, int port)
+{
+  omx_send_command(c, OMX_CommandPortEnable, port, NULL, 0);
+}
+
+/**
+ *
+ */
+void
 omx_tunnel_destroy(omx_tunnel_t *ot)
 {
   omxdbg("Destroying tunnel\n");
@@ -318,6 +374,21 @@ omx_tunnel_destroy(omx_tunnel_t *ot)
   omxchk(OMX_SetupTunnel(ot->ot_src->oc_handle, ot->ot_srcport, NULL, 0));
   free(ot);
 }
+
+
+/**
+ *
+ */
+int
+omx_wait_fill_buffer(omx_component_t *oc, OMX_BUFFERHEADERTYPE *buf)
+{
+  hts_mutex_lock(oc->oc_avail_mtx);
+  while(oc->oc_filled == NULL)
+    hts_cond_wait(oc->oc_avail_cond, oc->oc_avail_mtx);
+  hts_mutex_unlock(oc->oc_avail_mtx);
+  return 0;
+}
+
 
 
 /**
@@ -341,13 +412,126 @@ omx_get_media_time(omx_component_t *oc)
  *
  */
 void
+omx_enable_buffer_marks(omx_component_t *oc)
+{
+  OMX_CONFIG_BOOLEANTYPE t;
+  OMX_INIT_STRUCTURE(t);
+  t.bEnabled = 1;
+  omxchk(OMX_SetParameter(oc->oc_handle, OMX_IndexParamPassBufferMarks, &t));
+}
+
+
+
+/**
+ *
+ */
+void
 omx_flush_port(omx_component_t *oc, int port)
 {
-  printf("Flushing %s %d\n", oc->oc_name, port);
   omx_send_command(oc, OMX_CommandFlush, port, NULL, 1);
 }
 
 
+/**
+ *
+ */
+TAILQ_HEAD(omx_clk_cmd_queue, omx_clk_cmd);
+
+typedef struct omx_clk_cmd {
+  TAILQ_ENTRY(omx_clk_cmd) link;
+  enum {
+    OMX_CLK_QUIT,
+    OMX_CLK_PAUSE,
+    OMX_CLK_PLAY,
+  } cmd;
+} omx_clk_cmd_t;
+
+
+typedef struct omx_clk {
+  hts_thread_t tid;
+  struct omx_clk_cmd_queue q;
+  omx_component_t *c;
+  hts_cond_t cond;
+  media_pipe_t *mp;
+} omx_clk_t;
+
+
+/**
+ *
+ */
+static void
+omx_clk_set_speed(omx_clk_t *clk, int v)
+{
+  omx_component_t *c = clk->c;
+
+  OMX_TIME_CONFIG_SCALETYPE scale;
+  OMX_INIT_STRUCTURE(scale);
+
+  scale.xScale = v;
+  omxchk(OMX_SetConfig(c->oc_handle, OMX_IndexConfigTimeScale, &scale));
+}
+
+
+/**
+ *
+ */
+static void *
+omx_clk_thread(void *aux)
+{
+  omx_clk_cmd_t *cmd;
+  omx_clk_t *clk = aux;
+  int run = 1;
+
+  hts_mutex_lock(&clk->mp->mp_mutex);
+
+  while(run) {
+    while((cmd = TAILQ_FIRST(&clk->q)) == NULL) {
+      hts_cond_wait(&clk->cond, &clk->mp->mp_mutex);
+      continue;
+    }
+
+    TAILQ_REMOVE(&clk->q, cmd, link);
+    hts_mutex_unlock(&clk->mp->mp_mutex);
+
+    switch(cmd->cmd) {
+    case OMX_CLK_QUIT:
+      run = 0;
+      break;
+
+    case OMX_CLK_PAUSE:
+      omx_clk_set_speed(clk, 0);
+      break;
+
+    case OMX_CLK_PLAY:
+      omx_clk_set_speed(clk, 1 << 16);
+      break;
+    }
+
+    free(cmd);
+    hts_mutex_lock(&clk->mp->mp_mutex);
+  }
+
+  hts_mutex_unlock(&clk->mp->mp_mutex);
+  return NULL;
+}
+
+
+
+
+/**
+ *
+ */
+static void
+omx_clk_do(omx_clk_t *clk, int op)
+{
+  omx_clk_cmd_t *cmd = malloc(sizeof(omx_clk_cmd_t));
+  cmd->cmd = op;
+  TAILQ_INSERT_TAIL(&clk->q, cmd, link);
+  hts_cond_signal(&clk->cond);
+}
+
+
+#if 0
 static int cnt;
 
 /**
@@ -356,7 +540,6 @@ static int cnt;
 static void
 omx_mp_begin_seek(media_pipe_t *mp)
 {
-  printf("OMX Begin seek\n");
   omx_component_t *c = mp->mp_extra;
 
   OMX_TIME_CONFIG_CLOCKSTATETYPE cs;
@@ -374,7 +557,6 @@ static void
 omx_mp_seek_audio_done(media_pipe_t *mp)
 {
   cnt--;
-  printf("hej cnt=%d\n", cnt);
 
   if(cnt == 0) {
     omx_component_t *c = mp->mp_extra;
@@ -398,6 +580,20 @@ omx_mp_seek_video_done(media_pipe_t *mp)
   omx_mp_seek_audio_done(mp);
 }
 
+#endif
+
+
+
+/**
+ *
+ */
+static void
+omx_mp_hold_changed(media_pipe_t *mp)
+{
+  omx_clk_t *clk = mp->mp_extra;
+  omx_clk_do(clk, mp->mp_hold ? OMX_CLK_PAUSE : OMX_CLK_PLAY);
+}
+
 
 /**
  *
@@ -408,19 +604,26 @@ omx_mp_init(media_pipe_t *mp)
   if(!(mp->mp_flags & MP_VIDEO))
     return;
 
+#if 0
   if(0) {
     mp->mp_seek_initiate = omx_mp_begin_seek;
     mp->mp_seek_audio_done = omx_mp_seek_audio_done;
     mp->mp_seek_video_done = omx_mp_seek_video_done;
   }
+#endif
 
-  omx_component_t *c;
+  mp->mp_hold_changed = omx_mp_hold_changed;
 
-  c = omx_component_create("OMX.broadcom.clock", &mp->mp_mutex, NULL);
-  mp->mp_extra = c;
 
-  omx_set_state(c, OMX_StateIdle);
+  omx_clk_t *clk = calloc(1, sizeof(omx_clk_t));
+  TAILQ_INIT(&clk->q);
+  clk->mp = mp;
+  clk->c = omx_component_create("OMX.broadcom.clock", &mp->mp_mutex, NULL);
+  hts_cond_init(&clk->cond, &mp->mp_mutex);
+  mp->mp_extra = clk;
 
+  omx_set_state(clk->c, OMX_StateIdle);
+#if 0
   OMX_TIME_CONFIG_CLOCKSTATETYPE cstate;
   OMX_INIT_STRUCTURE(cstate);
   cstate.eState = OMX_TIME_ClockStateWaitingForStartTime;
@@ -433,11 +636,25 @@ omx_mp_init(media_pipe_t *mp)
   refClock.eClock = OMX_TIME_RefClockAudio;
   //  refClock.eClock = OMX_TIME_RefClockVideo;
   // refClock.eClock = OMX_TIME_RefClockNone;
+#else
+  OMX_TIME_CONFIG_CLOCKSTATETYPE cstate;
+  OMX_INIT_STRUCTURE(cstate);
+  cstate.eState = OMX_TIME_ClockStateRunning;
+  omxchk(OMX_SetParameter(clk->c->oc_handle,
+			  OMX_IndexConfigTimeClockState, &cstate));
 
-  omxchk(OMX_SetConfig(c->oc_handle,
+  OMX_TIME_CONFIG_ACTIVEREFCLOCKTYPE refClock;
+  OMX_INIT_STRUCTURE(refClock);
+  refClock.eClock = OMX_TIME_RefClockAudio;
+#endif
+
+  omxchk(OMX_SetConfig(clk->c->oc_handle,
 		       OMX_IndexConfigTimeActiveRefClock, &refClock));
 
-  omx_set_state(c, OMX_StateExecuting);
+  omx_set_state(clk->c, OMX_StateExecuting);
+
+  hts_thread_create_joinable("omxclkctrl", &clk->tid, omx_clk_thread, clk,
+			     THREAD_PRIO_DEMUXER);
 }
 
 
@@ -447,10 +664,29 @@ omx_mp_init(media_pipe_t *mp)
 static void
 omx_mp_fini(media_pipe_t *mp)
 {
-  if(mp->mp_extra != NULL)
-    omx_component_destroy(mp->mp_extra);
+  if(mp->mp_extra == NULL)
+    return;
+
+  omx_clk_t *clk = mp->mp_extra;
+
+  hts_mutex_lock(&mp->mp_mutex);
+  omx_clk_do(clk, OMX_CLK_QUIT);
+  hts_mutex_unlock(&mp->mp_mutex);
+  hts_thread_join(&clk->tid);
+  omx_component_destroy(clk->c);
+  free(clk);
 }
 
+
+/**
+ *
+ */
+omx_component_t *
+omx_get_clock(media_pipe_t *mp)
+{
+  omx_clk_t *clk = mp->mp_extra;
+  return clk ? clk->c : NULL;
+}
 
 /**
  *
@@ -462,5 +698,7 @@ omx_init(void)
 
   media_pipe_init_extra = omx_mp_init;
   media_pipe_fini_extra = omx_mp_fini;
+
+  rpi_pixmap_init();
 }
 

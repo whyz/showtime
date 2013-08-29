@@ -1,6 +1,6 @@
 language: French
 native: Français
-maintainer: Jérôme Steunou <g_rom_sempai@hotmail.com>
+maintainer: Niconico27
 #
 # ./glwskins/default/cmdmenu.view
 #
@@ -16,6 +16,12 @@ msg: Supprimer la page actuel des favoris
 #
 # ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
+id: Activate sleep timer
+msg: Activer la mise en veille
+
+id: Disable sleep timer
+msg: Désactiver la mise en veille
+
 id: Exit Showtime
 msg: Sortie Showtime
 
@@ -42,6 +48,12 @@ msg: Suspendre
 
 id: System
 msg: Système
+
+id: Time until sleep
+msg: Veille dans
+
+id: min
+msg: minutes
 
 #
 # ./glwskins/default/cmdmenu/cmdmenu_dir.view
@@ -131,60 +143,6 @@ id: System log
 msg: Fichier d'évènements systèmes
 
 #
-# ./glwskins/default/pages/about.view
-#
-id: Allocated by application: %d kB
-msg: Alloué par l'application : %d kB
-
-id: Allocated by malloc: %d kB
-msg: Alloué par malloc : %d kB
-
-id: Avail system RAM: %d kB
-msg: Mémoire système disponible : %d kB
-
-id: Detected CPUs: %d
-msg: CPUs détectés: %d
-
-id: Display info
-msg: Afficher les informations
-
-id: Framerate: %.2f Hz
-msg: Fréquence d'affichage %.2f Hz
-
-id: Free chunks: %d
-msg: Morceaux disponibles : %d
-
-id: GPU: %s
-msg: GPU: %s
-
-id: Height: %d px
-msg: Hauteur: %d px
-
-id: Memory status
-msg: Statut de la mémoire
-
-id: Renderer: %s
-msg: Interpréteur de rendu : %s
-
-id: System info
-msg: Informations système
-
-id: Total system RAM: %d kB
-msg: Mémoire système totale : %d kB
-
-id: Unused memory: %d kB
-msg: Mémoire inutilisée : %d kB
-
-id: Version: %s
-msg: Version: %s
-
-id: Width: %d px
-msg: Largeur : %d px
-
-id: Windowmanager: %s
-msg: Gestionnaire de fenêtres : %s
-
-#
 # ./glwskins/default/pages/directory.view
 #
 id: Album
@@ -226,14 +184,11 @@ msg: Carrelée
 #
 # ./glwskins/default/pages/home_clist.view
 #
-id: About Showtime
-msg: A propos de Showtime
+id: Apps
+msg: Applications
 
 id: Dismiss
 msg: Rejeter
-
-id: Plugins
-msg: Extensions
 
 id: Search / Open URL
 msg: Recherche / Ouvrir URL
@@ -241,22 +196,22 @@ msg: Recherche / Ouvrir URL
 #
 # ./glwskins/default/pages/iteminfo/image.view
 #
-id: Camera:
-msg: Modèle de Caméra:
+id: Camera: 
+msg: Caméra:
 
-id: Date:
+id: Date: 
 msg: Date:
 
 #
 # ./glwskins/default/pages/iteminfo/plugin.view
 #
-id: Author:
+id: Author: 
 msg: Auteur:
 
-id: Available version:
+id: Available version: 
 msg: Version disponible:
 
-id: Installed version:
+id: Installed version: 
 msg: Version installée:
 
 id: Showtime %s or newer is required
@@ -282,6 +237,10 @@ msg: Note:
 
 id: Year:
 msg: Année:
+
+id: Seen %d times
+msg[0]: Vu %d fois
+msg[1]: Vu %d fois
 
 #
 # ./glwskins/default/pages/listitems/add.view
@@ -355,6 +314,9 @@ msg: Changement effectuée pour la version %s
 id: Check for updates now
 msg: Rechercher les mises à jour
 
+id: Checking current installed version
+msg: Vérification de version installée
+
 id: Checking for updates...
 msg: Recherche de mises à jour...
 
@@ -375,6 +337,9 @@ msg: La version %s est disponible au téléchargement
 
 id: No upgrade available
 msg: Pas de mise à jour disponible
+
+id: Patching binary
+msg: Patch des fichiers binaires
 
 id: Restarting Showtime in %d seconds...
 msg: Showtime va redémarrer dans %d seconds...
@@ -479,39 +444,6 @@ id: System is low on memory (%d kB RAM available)
 msg: Mémoire système faible (%d kB de RAM restant)
 
 #
-# ./src/audio/audio.c
-#
-id: Audio output
-msg: Sortie audio
-
-id: Audio/Video sync delay
-msg: Délai de la synchro Audio/Video
-
-id: Current output device
-msg: Appareil en sortie
-
-id: Force stereo downmix
-msg: Forcer le remixage en stéréo
-
-id: Phantom LFE
-msg: LFE (basse) fantôme
-
-id: Phantom center
-msg: Centre fantôme
-
-id: Select audio output device and related configurations
-msg: Sélectionner la sortie audio et les configurations liées
-
-id: Small front speakers
-msg: Petites enceintes frontales
-
-id: Swap LFE+center with surround
-msg: Inverser LFE+centre avec le surround
-
-id: Switching audio output to %s
-msg: Changer la sortie pour %s
-
-#
 # ./src/backend/dvd/cdda.c
 #
 id: Invalid CD URL
@@ -562,9 +494,6 @@ msg: En collaboration
 id: Compilations
 msg: Compilations
 
-id: Enable Spotify
-msg: Activer Spotify
-
 id: Forget me
 msg: Oublie moi
 
@@ -606,9 +535,6 @@ msg: Amis de Spotify
 
 id: Spotify music service
 msg: Service musical de Spotify
-
-id: Spotify offers you legal and free access to a huge library of music. To use Spotify in Showtime you need a Spotify Preemium account.\nFor more information about Spotify, visit http://www.spotify.com/\n\nYou will be prompted for your Spotify username and password when first accessing any of the Spotify features in Showtime.
-msg: Grâce à Spotify, vous pouvez accéder gratuitement et en toute légalité à un énorme catalogue musical. Pour utiliser Spotify dans Showtime vous devez posséder un compte Spotify Premium.\nPour plus d'informations sur Spotify, visitez http://www.spotify.com/\n\nIl vous sera demandé votre nom d'utilisateur et votre mot de passe Spotify la première fois que vous voudrez accéder aux fonctions de Spotify dans Showtime.
 
 id: Spotify playlists
 msg: Listes de lecture Spotify
@@ -670,6 +596,9 @@ msg: Date (plus récent)
 id: Date (oldest first)
 msg: Date (plus ancien)
 
+id: Deleted %s
+msg: Suppression de %s
+
 id: Filename
 msg: Nom du fichier
 
@@ -688,6 +617,9 @@ msg: Trier les dossiers en premier
 id: Sort on
 msg: Activer le tri
 
+id: Unable to delete %s\n%s
+msg: Impossible de supprimer %s\n%s
+
 #
 # ./src/fileaccess/fa_spotlight.c
 #
@@ -695,8 +627,35 @@ id: Search using spotlight
 msg: Chercher via spotlight
 
 #
+# ./src/fileaccess/fileaccess.c
+#
+id: Are you sure you want to delete:
+msg: Etes-vous sur de vouloir supprimer:
+
+id: Enable file deletion from item menu
+msg: Activer l'option Supprimer depuis le menu du fichier
+
+id: File access
+msg: Accès au fichier
+
+id: %d archive parts
+msg[0]: %d fichiers d'archive
+msg[1]: %d fichiers d'archive
+
+id: %d directories
+msg[0]: %d répertoires
+msg[1]: %d répertoires
+
+id: %d files
+msg[0]: %d fichiers
+msg[1]: %d fichiers
+
+#
 # ./src/i18n.c
 #
+id: Ignore 'The' at beginning of words when sorting
+msg: Ignorer 'The' au début du fichier pour le tri
+
 id: Language
 msg: Langue
 
@@ -731,18 +690,6 @@ id: Tertiary subtitle language code
 msg: Code tertiaire de la langue pour les sous-titres
 
 #
-# ./src/ipc/serdev/lgtv.c
-#
-id: Automatic TV power on/off
-msg: Marche/Arrêt automatique de la TV
-
-id: Input source
-msg: Source d'entrée
-
-id: LG Television set
-msg: Paramètres des TV LG
-
-#
 # ./src/keymapper.c
 #
 id: Configure mapping of keyboard and remote controller keys
@@ -769,6 +716,12 @@ msg: Faire correspondre les sous-titres avec l'image vidéo
 id: Audio delay
 msg: Délai audio
 
+id: Audio volume
+msg: Volume Audio
+
+id: Go to standby after video ends
+msg: Mettre en veille à la fin de la vidéo
+
 id: Stretch video to fullscreen
 msg: Étirer la vidéo en plein écran
 
@@ -778,8 +731,14 @@ msg: Étirer la vidéo pour les écrans large
 id: Subtitle delay
 msg: Délai des sous-titres
 
+id: Subtitle horizontal displacement
+msg: Déplacement horizontal des sous titres
+
 id: Subtitle scaling
 msg: Échelle des sous-titres
+
+id: Subtitle vertical displacement
+msg: Déplacement vertical des sous titres
 
 id: Video zoom
 msg: Zoom vidéo
@@ -791,11 +750,26 @@ id: Indexing
 msg: Indexage
 
 #
-# ./src/metadata/metadata.c
+# ./src/metadata/decoration.c
 #
 id: Automatic
 msg: Automatique
 
+id: Manual
+msg: Manuel
+
+id: Mark all as seen
+msg: Marquer tout les éléments comme vu
+
+id: Mark all as unseen
+msg: Marquer tout les éléments comme non-vu
+
+id: Metadata mode
+msg: Metadata mode
+
+#
+# ./src/metadata/metadata.c
+#
 id: Custom search query
 msg: Recherche personnalisée
 
@@ -904,6 +878,9 @@ msg: Autre
 id: Photos
 msg: Photos
 
+id: Published in Virtual File System
+msg: Publié dans le Système de fichiers virtuels
+
 id: Removed bookmark: %s
 msg: Favori supprimé: %s
 
@@ -920,6 +897,18 @@ id: URL
 msg: URL
 
 #
+# ./src/networking/ftp_server.c
+#
+id: Enable FTP server
+msg: Activer le serveur FTP
+
+id: FTP server
+msg: Serveur FTP
+
+id: Server TCP port
+msg: Port TCP du serveur
+
+#
 # ./src/plugins.c
 #
 id: Alternate plugin Repository URL
@@ -928,8 +917,8 @@ msg: Adresse URL de Repositroy alternative
 id: Automatically upgrade plugins
 msg: Mise à jour automatique des extensions
 
-id: Available plugins
-msg: Extensions disponibles
+id: Available apps
+msg: Applications disponible
 
 id: Background
 msg: Fond
@@ -937,8 +926,8 @@ msg: Fond
 id: Beta testing passwords
 msg: Mots de passe de test bêta
 
-id: Browse available plugins
-msg: Parcourir les extensions disponibles
+id: Browse available apps
+msg: Parcourir les applications disponible
 
 id: Browsing
 msg: Navigation
@@ -964,8 +953,8 @@ msg: Impossible d'ouvrir le fichier
 id: Home page
 msg: Page d'accueil
 
-id: Installed plugins
-msg: Extensions installées
+id: Installed apps
+msg: Applications installées
 
 id: Installed version higher than available
 msg: Version installée supérieure à celle disponible
@@ -996,6 +985,12 @@ msg: Mise à jour impossible
 
 id: Online TV
 msg: TV en ligne
+
+id: Plugin %s %s has been uninstalled because it may cause problems.\nYou may try reinstalling a different version manually.
+msg: Le plugin %s %s a été désintallé car il peut causer des problèmes.\nVous devez essayer d'installer une version différente manuellement.
+
+id: Plugins
+msg: Extensions
 
 id: Preferred views from plugins
 msg: Vues privilégiées des plugins
@@ -1084,6 +1079,12 @@ msg: Paramètres globaux
 id: Look and feel
 msg: Aspect
 
+id: Network services, etc
+msg: Services réseaux, etc
+
+id: Network settings
+msg: Paramètres réseaux
+
 id: Settings useful for developers
 msg: Paramètres utiles pour les développeurs
 
@@ -1091,10 +1092,82 @@ id: System related settings
 msg: Paramètres liés au système
 
 #
-# ./src/subtitles/sub_scanner.c
+# ./src/subtitles/subtitles.c
 #
+id: Any subtitle in central folder
+msg: Sous-titres dans le dossier principal
+
+id: Any subtitle in same folder as video
+msg: Sous-titres dans le dossier de la vidéo
+
+id: Auto
+msg: Auto
+
+id: Automatically select from this source
+msg: Sélectionner automatiquement depuis cette source
+
+id: Center
+msg: Centrer
+
+id: Central subtitle folder
+msg: Dossier principal des sous-titres
+
+id: Color
+msg: Couleur
+
 id: External file
 msg: Fichier externe
+
+id: Force subtitles to reside on video frame
+msg: Forcer les sous-titres à rester sur l'image vidéo
+
+id: Generic settings for video subtitles
+msg: Paramètres génériques pour les sous-titres
+
+id: Ignore embedded styling
+msg: Ignorer les styles embarqués
+
+id: Left
+msg: Gauche
+
+id: Outline color
+msg: Couleur du contour
+
+id: Outline size
+msg: Taille du contour
+
+id: Path to central folder
+msg: Adresse du dossier principal
+
+id: Providers for Subtitles
+msg: Fournisseurs de sous-titres
+
+id: Right
+msg: Droite
+
+id: Shadow color
+msg: Couleur de l'ombre
+
+id: Shadow offset
+msg: Décalage de l'ombre
+
+id: Subtitle position
+msg: Position des sous-titres
+
+id: Subtitle size
+msg: Taille des sous-titres
+
+id: Subtitle size and positioning
+msg: Taille et position des sous-titres
+
+id: Subtitles embedded in video file
+msg: Sous-titres intégrés à la vidéo
+
+id: Subtitles with matching filename in central folder
+msg: Sous-titres ayant le même nom que le fichier trouvés dans le dossier principal
+
+id: Subtitles with matching filename in same folder as video
+msg: Sous-titres ayant le même nom que le fichier trouvés dans le dossier du fichier
 
 #
 # ./src/text/fontstash.c
@@ -1120,14 +1193,8 @@ msg: Réinitialiser l'espacement par défaut
 id: Reset subtitle font to default
 msg: Réinitialiser la police des sous-titres par défaut
 
-id: Unable to load %s -- %s
-msg: Impossible de charger %s -- %s
-
-id: Unable to open %s for writing
-msg: Impossible d'ouvrir %s en écriture
-
-id: Unable to write to %s
-msg: Impossible d'écrire sur %s
+id: Unable to install font: %s
+msg: Impossible d'installer la police: %s
 
 id: Use font %s for
 msg: utiliser la police %s pour
@@ -1136,19 +1203,31 @@ id: User interface
 msg: Interface utilisateur
 
 #
+# ./src/ui/glw/glw_ps3.c
+#
+id: Seek using L2 and R2 button
+msg: Rechercher avec les boutons L2 et R2
+
+id: Yes with Select button
+msg: Valider avec le bouton Select
+
+#
 # ./src/ui/glw/glw_settings.c
 #
+id: Font and icon size
+msg: Taille de police et d'icône
+
 id: Horizontal underscan
 msg: Underscan horizontal
 
 id: Screensaver delay
 msg: Délai avant l'économiseur d'écran
 
-id: Userinterface size
-msg: Taille de l'interface utilisateur
-
 id: Vertical underscan
-msg: Underscan vertical
+msg: Underscan Vertical
+
+id: Wrap when reaching beginning/end of lists
+msg: Bouclez quand le début/fin de la liste est atteint
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1231,29 +1310,8 @@ msg: Imposible d'avoir le codec Cell. Error 0x%x
 #
 # ./src/video/video_settings.c
 #
-id: 1080
-msg: 1080
-
-id: 576
-msg: 576
-
-id: 720
-msg: 720
-
-id: Always try to select a subtitle
-msg: Toujours essayer de sélectionner un sous-titre
-
-id: Auto
-msg: Auto
-
 id: Automatically play next video in list
 msg: Jouer la vidéo suivante automatiquement
-
-id: Center
-msg: Centrer
-
-id: Color
-msg: Couleur
 
 id: Count video as played when reaching
 msg: Compter la vidéo comme jouée quand la lecture atteint
@@ -1264,59 +1322,17 @@ msg: Activer VDA
 id: Enable VDPAU
 msg: Activer VDPAU
 
-id: Force subtitles to reside on video frame
-msg: Forcer les sous-titres à rester sur l'image vidéo
-
-id: Generic settings for video subtitles
-msg: Paramètres génériques pour les sous-titres
-
-id: Ignore embedded styling
-msg: Ignorer les styles embarqués
-
-id: Include all subtitle files from movie directory
-msg: Inclure tous les fichiers de sous-titre du répertoire du film
-
-id: Left
-msg: Gauche
-
 id: Maximum resolution for deinterlacer
 msg: Résolution maximale pour désentrelacer
 
 id: No limit
 msg: Pas de limite
 
-id: Outline color
-msg: Couleur du contour
-
-id: Outline size
-msg: Taille du contour
-
 id: Preferred VDPAU deinterlacer method
 msg: Préférer la méthode VDPAU pour le désentrelacement
 
 id: Resume video playback
 msg: Reprendre la lecture vidéo
-
-id: Right
-msg: Droite
-
-id: Shadow color
-msg: Couleur de l'ombre
-
-id: Shadow offset
-msg: Décalage de l'ombre
-
-id: Subtitle position
-msg: Position des sous-titres
-
-id: Subtitle size
-msg: Taille des sous-titres
-
-id: Subtitle size and positioning
-msg: Taille et position des sous-titres
-
-id: Subtitle styling
-msg: Style des sous-titres
 
 id: Temporal
 msg: Temporel
@@ -1329,3 +1345,4 @@ msg: Accélération vidéo et comportement de l'affichage
 
 id: Video playback
 msg: Lecture vidéo
+

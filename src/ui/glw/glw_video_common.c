@@ -29,9 +29,6 @@
 #include "glw_renderer.h"
 #include "glw_texture.h"
 
-//static glw_video_engine_t glw_video_blank;
-
-
 static void glw_video_input(const frame_info_t *info, void *opaque);
 
 
@@ -450,6 +447,8 @@ glw_video_dtor(glw_t *w)
 
   prop_ref_dec(gv->gv_model);
   prop_unsubscribe(gv->gv_vo_scaling_sub);
+  prop_unsubscribe(gv->gv_vo_displace_x_sub);
+  prop_unsubscribe(gv->gv_vo_displace_y_sub);
   prop_unsubscribe(gv->gv_vzoom_sub);
   prop_unsubscribe(gv->gv_hstretch_sub);
   prop_unsubscribe(gv->gv_fstretch_sub);
@@ -462,13 +461,14 @@ glw_video_dtor(glw_t *w)
   glw_video_overlay_deinit(gv);
   
   LIST_REMOVE(gv, gv_global_link);
-  video_decoder_destroy(vd);
 
   hts_mutex_lock(&gv->gv_surface_mutex);  /* Not strictly necessary
 					     but keep asserts happy 
 					  */
   glw_video_surfaces_cleanup(gv);
   hts_mutex_unlock(&gv->gv_surface_mutex);
+
+  video_decoder_destroy(vd);
 
   hts_cond_destroy(&gv->gv_avail_queue_cond);
   hts_cond_destroy(&gv->gv_init_cond);
@@ -524,6 +524,7 @@ glw_video_widget_callback(glw_t *w, void *opaque, glw_signal_t signal,
 
   switch(signal) {
   case GLW_SIGNAL_LAYOUT:
+    w->glw_root->gr_can_externalize = 0;
 
     rc = extra;
     rc0 = *rc;
@@ -590,45 +591,62 @@ glw_video_ctor(glw_t *w)
   gv->gv_vd = video_decoder_create(gv->gv_mp);
   video_playback_create(gv->gv_mp);
 
+  prop_t *c = gv->gv_mp->mp_prop_ctrl;
+
   gv->gv_vo_scaling_sub =
     prop_subscribe(0,
 		   PROP_TAG_SET_FLOAT, &gv->gv_vo_scaling,
 		   PROP_TAG_COURIER, w->glw_root->gr_courier,
-		   PROP_TAG_ROOT,
-		   settings_get_value(gv->gv_mp->mp_setting_sub_scale),
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "subscale"),
+		   NULL);
+
+  gv->gv_vo_displace_y_sub =
+    prop_subscribe(0,
+		   PROP_TAG_SET_INT, &gv->gv_vo_displace_y,
+		   PROP_TAG_COURIER, w->glw_root->gr_courier,
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "subvdisplace"),
+		   NULL);
+
+  gv->gv_vo_displace_x_sub =
+    prop_subscribe(0,
+		   PROP_TAG_SET_INT, &gv->gv_vo_displace_x,
+		   PROP_TAG_COURIER, w->glw_root->gr_courier,
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "subhdisplace"),
 		   NULL);
 
   gv->gv_vzoom_sub =
     prop_subscribe(0,
 		   PROP_TAG_SET_INT, &gv->gv_vzoom,
 		   PROP_TAG_COURIER, w->glw_root->gr_courier,
-		   PROP_TAG_ROOT,
-		   settings_get_value(gv->gv_mp->mp_setting_vzoom),
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "vzoom"),
 		   NULL);
 
   gv->gv_hstretch_sub =
     prop_subscribe(0,
 		   PROP_TAG_SET_INT, &gv->gv_hstretch,
 		   PROP_TAG_COURIER, w->glw_root->gr_courier,
-		   PROP_TAG_ROOT,
-		   settings_get_value(gv->gv_mp->mp_setting_hstretch),
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "hstretch"),
 		   NULL);
-
 
   gv->gv_fstretch_sub =
     prop_subscribe(0,
 		   PROP_TAG_SET_INT, &gv->gv_fstretch,
 		   PROP_TAG_COURIER, w->glw_root->gr_courier,
-		   PROP_TAG_ROOT,
-		   settings_get_value(gv->gv_mp->mp_setting_fstretch),
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "fstretch"),
 		   NULL);
 
   gv->gv_vo_on_video_sub =
     prop_subscribe(0,
 		   PROP_TAG_SET_INT, &gv->gv_vo_on_video,
 		   PROP_TAG_COURIER, w->glw_root->gr_courier,
-		   PROP_TAG_ROOT,
-		   settings_get_value(gv->gv_mp->mp_setting_sub_on_video),
+		   PROP_TAG_ROOT, c,
+                   PROP_TAG_NAME("ctrl", "subalign"),
 		   NULL);
 }
 
@@ -758,7 +776,7 @@ glw_video_render(glw_t *w, const glw_rctx_t *rc)
   glw_video_t *gv = (glw_video_t *)w;
   glw_rctx_t rc0 = *rc;
 
-  w->glw_root->gr_screensaver_counter = 0;
+  glw_reset_screensaver(w->glw_root);
 
   glw_video_rctx_adjust(&rc0, gv);
 

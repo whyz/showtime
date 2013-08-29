@@ -380,7 +380,7 @@ play_video(const char *url, struct media_pipe *mp,
         const char *source = htsmsg_get_str(sub, "source");
 
         mp_add_track(mp->mp_prop_subtitle_tracks, title, url, 
-                     NULL, NULL, lang, source, NULL, 0);
+                     NULL, NULL, lang, source, NULL, 90000, 1);
       }
     }
 
@@ -621,7 +621,8 @@ vq_entries_callback(void *opaque, prop_event_t event, ...)
   case PROP_DESTROYED:
     break;
 
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
     break;
 
   default:
@@ -740,6 +741,7 @@ video_player_idle(void *aux)
       e = play_video(rstr_get(play_url), mp, 
 		     play_flags, play_priority, 
 		     errbuf, sizeof(errbuf), vq);
+      mp_bump_epoch(mp);
       if(e == NULL)
 	prop_set_string(errprop, errbuf);
     }
@@ -749,6 +751,14 @@ video_player_idle(void *aux)
       rstr_set(&play_url, NULL);
       e = mp_dequeue_event(mp);
     }
+
+    if(event_is_type(e, EVENT_EOF) && mp->mp_auto_standby) {
+      showtime_shutdown(SHOWTIME_EXIT_STANDBY);
+      event_release(e);
+      e = NULL;
+      break;
+    }
+
     if(event_is_type(e, EVENT_PLAY_URL)) {
       force_continuous = 0;
       prop_set_void(errprop);

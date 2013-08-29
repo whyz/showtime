@@ -16,6 +16,14 @@ msg: Remover Pagina actual de Marcadores
 #
 # ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
+id: Activate sleep timer
+# Missing translation
+msg: 
+
+id: Disable sleep timer
+# Missing translation
+msg: 
+
 id: Exit Showtime
 msg: Salir de Showtime
 
@@ -42,6 +50,14 @@ msg: Suspender
 
 id: System
 msg: Sistema
+
+id: Time until sleep
+# Missing translation
+msg: 
+
+id: min
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/cmdmenu/cmdmenu_dir.view
@@ -131,60 +147,6 @@ id: System log
 msg: Registro de Sistema
 
 #
-# ./glwskins/default/pages/about.view
-#
-id: Allocated by application: %d kB
-msg: Asignado por la aplicación: %d kB
-
-id: Allocated by malloc: %d kB
-msg: Asignado por malloc: %d kB
-
-id: Avail system RAM: %d kB
-msg: RAM disponible en sistema: %d kB
-
-id: Detected CPUs: %d
-msg: CPUs Detectados: %d
-
-id: Display info
-msg: Pantalla de información
-
-id: Framerate: %.2f Hz
-msg: Cuadros por segundo %.2f Hz
-
-id: Free chunks: %d
-msg: Bloques libres: %d
-
-id: GPU: %s
-msg: GPU: %s
-
-id: Height: %d px
-msg: Altura: %d px
-
-id: Memory status
-msg: Estatus de memoria
-
-id: Renderer: %s
-msg: Renderizado: %s
-
-id: System info
-msg: Información de sistema
-
-id: Total system RAM: %d kB
-msg: RAM total del sistema: %d kB
-
-id: Unused memory: %d kB
-msg: Memoria disponible: %d kB
-
-id: Version: %s
-msg: Versión: %s
-
-id: Width: %d px
-msg: Ancho: %d px
-
-id: Windowmanager: %s
-msg: Administrador de ventanas: %s
-
-#
 # ./glwskins/default/pages/directory.view
 #
 id: Album
@@ -226,14 +188,12 @@ msg: Mozaico
 #
 # ./glwskins/default/pages/home_clist.view
 #
-id: About Showtime
-msg: Acerca de Showtime
+id: Apps
+# Missing translation
+msg: 
 
 id: Dismiss
 msg: Descartar
-
-id: Plugins
-msg: Plugins
 
 id: Search / Open URL
 msg: Buscar / Abrir URL
@@ -282,6 +242,10 @@ msg: Calificación:
 
 id: Year:
 msg: Año:
+
+id: Seen %d times
+msg[0]: 
+msg[1]: 
 
 #
 # ./glwskins/default/pages/listitems/add.view
@@ -355,6 +319,10 @@ msg: Registro de cambios para %s Versiones
 id: Check for updates now
 msg: Buscar actualizaciones ahora
 
+id: Checking current installed version
+# Missing translation
+msg: 
+
 id: Checking for updates...
 msg: Buscando actualizaciones...
 
@@ -375,6 +343,10 @@ msg: Nueva Versión %s disponible para descargar
 
 id: No upgrade available
 msg: Ninguna actualización disponible
+
+id: Patching binary
+# Missing translation
+msg: 
 
 id: Restarting Showtime in %d seconds...
 msg: Reiniciando Showtime en %d segundos...
@@ -407,7 +379,8 @@ msg: Estatus de reproducción
 # ./glwskins/default/pages/wideinfo/video.view
 #
 id: Seen:
-msg: Visto:
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/playdecks/dvd.view
@@ -479,39 +452,6 @@ id: System is low on memory (%d kB RAM available)
 msg: Sistema con baja memoria (%d kB RAM disponible)
 
 #
-# ./src/audio/audio.c
-#
-id: Audio output
-msg: Salida de audio
-
-id: Audio/Video sync delay
-msg: Sincronización de Audio/Video
-
-id: Current output device
-msg: Dispositivo de salida actual
-
-id: Force stereo downmix
-msg: Forzar salida de mezcla estéreo
-
-id: Phantom LFE
-msg: Phantom-LFE
-
-id: Phantom center
-msg: Phantom-center
-
-id: Select audio output device and related configurations
-msg: Selección y configuración dispositivo de salida de audio
-
-id: Small front speakers
-msg: Parlantes frontales pequeños
-
-id: Swap LFE+center with surround
-msg: Cambiar a LFE+centro con surround
-
-id: Switching audio output to %s
-msg: Cambiando salida de audio a %s
-
-#
 # ./src/backend/dvd/cdda.c
 #
 id: Invalid CD URL
@@ -562,9 +502,6 @@ msg: Colaborativo
 id: Compilations
 msg: Compilaciones
 
-id: Enable Spotify
-msg: Habilitar Spotify
-
 id: Forget me
 msg: Olvidarme
 
@@ -606,9 +543,6 @@ msg: Amigos de Spotify
 
 id: Spotify music service
 msg: Servicio de música Spotify
-
-id: Spotify offers you legal and free access to a huge library of music. To use Spotify in Showtime you need a Spotify Preemium account.\nFor more information about Spotify, visit http://www.spotify.com/\n\nYou will be prompted for your Spotify username and password when first accessing any of the Spotify features in Showtime.
-msg: Spotify ofrece acceso libre y legal a una enorme librería de música. Para usar Spotify en Showtime se necesita una cuenta Premium de Spotify.\nPara más información acerca de Spotify, visita http://www.spotify.com/\n\nLa primera vez que acceda a cualquier característica de Spotify en Showtime deberá ingresar su nombre de usuario y contraseña.
 
 id: Spotify playlists
 msg: Lista de reproducción de Spotyfy
@@ -670,6 +604,10 @@ msg: Fecha (recientes primero)
 id: Date (oldest first)
 msg: Fecha (antiguos primero
 
+id: Deleted %s
+# Missing translation
+msg: 
+
 id: Filename
 msg: Nombre de Archivo
 
@@ -688,6 +626,10 @@ msg: Ordenar primero carpetas
 id: Sort on
 msg: Orden activo
 
+id: Unable to delete %s\n%s
+# Missing translation
+msg: 
+
 #
 # ./src/fileaccess/fa_spotlight.c
 #
@@ -695,8 +637,39 @@ id: Search using spotlight
 msg: Buscar usando spotlight
 
 #
+# ./src/fileaccess/fileaccess.c
+#
+id: Are you sure you want to delete:
+# Missing translation
+msg: 
+
+id: Enable file deletion from item menu
+# Missing translation
+msg: 
+
+id: File access
+# Missing translation
+msg: 
+
+id: %d archive parts
+msg[0]: 
+msg[1]: 
+
+id: %d directories
+msg[0]: 
+msg[1]: 
+
+id: %d files
+msg[0]: 
+msg[1]: 
+
+#
 # ./src/i18n.c
 #
+id: Ignore 'The' at beginning of words when sorting
+# Missing translation
+msg: 
+
 id: Language
 msg: Idioma
 
@@ -731,18 +704,6 @@ id: Tertiary subtitle language code
 msg: Código de idioma del subtítulo terciario
 
 #
-# ./src/ipc/serdev/lgtv.c
-#
-id: Automatic TV power on/off
-msg: Apagado automático de TV on/off
-
-id: Input source
-msg: Fuente de entrada
-
-id: LG Television set
-msg: LG TV
-
-#
 # ./src/keymapper.c
 #
 id: Configure mapping of keyboard and remote controller keys
@@ -769,6 +730,14 @@ msg: Alinear subtítulos en cuadro de video
 id: Audio delay
 msg: Retraso de audio
 
+id: Audio volume
+# Missing translation
+msg: 
+
+id: Go to standby after video ends
+# Missing translation
+msg: 
+
 id: Stretch video to fullscreen
 msg: Estirar video a pantalla completa
 
@@ -778,8 +747,16 @@ msg: Estirar video para panorámica
 id: Subtitle delay
 msg: Retraso de subtítulos
 
+id: Subtitle horizontal displacement
+# Missing translation
+msg: 
+
 id: Subtitle scaling
 msg: Escala de subtítulos
+
+id: Subtitle vertical displacement
+# Missing translation
+msg: 
 
 id: Video zoom
 msg: Zoom de Video
@@ -791,11 +768,30 @@ id: Indexing
 msg: Indexacion
 
 #
-# ./src/metadata/metadata.c
+# ./src/metadata/decoration.c
 #
 id: Automatic
 msg: Automático
 
+id: Manual
+# Missing translation
+msg: 
+
+id: Mark all as seen
+# Missing translation
+msg: 
+
+id: Mark all as unseen
+# Missing translation
+msg: 
+
+id: Metadata mode
+# Missing translation
+msg: 
+
+#
+# ./src/metadata/metadata.c
+#
 id: Custom search query
 msg: buscar consulta personalizada
 
@@ -904,6 +900,10 @@ msg: Otros
 id: Photos
 msg: Fotos
 
+id: Published in Virtual File System
+# Missing translation
+msg: 
+
 id: Removed bookmark: %s
 msg: Marcador removido: %s
 
@@ -920,6 +920,21 @@ id: URL
 msg: URL
 
 #
+# ./src/networking/ftp_server.c
+#
+id: Enable FTP server
+# Missing translation
+msg: 
+
+id: FTP server
+# Missing translation
+msg: 
+
+id: Server TCP port
+# Missing translation
+msg: 
+
+#
 # ./src/plugins.c
 #
 id: Alternate plugin Repository URL
@@ -928,8 +943,9 @@ msg: URL alternativa de repositorio de Plugins
 id: Automatically upgrade plugins
 msg: Actualizar automáticamente plugins
 
-id: Available plugins
-msg: Plugins disponibles
+id: Available apps
+# Missing translation
+msg: 
 
 id: Background
 msg: Fondo
@@ -937,8 +953,9 @@ msg: Fondo
 id: Beta testing passwords
 msg: Contraseñas de testeo Beta
 
-id: Browse available plugins
-msg: explorar plugins disponibles
+id: Browse available apps
+# Missing translation
+msg: 
 
 id: Browsing
 msg: Explorando
@@ -964,8 +981,9 @@ msg: Error al abrir archivo
 id: Home page
 msg: Pagina Principal
 
-id: Installed plugins
-msg: Plugins instalados
+id: Installed apps
+# Missing translation
+msg: 
 
 id: Installed version higher than available
 msg: Version instalada superior a la disponible
@@ -996,6 +1014,13 @@ msg: No actualizable
 
 id: Online TV
 msg: Tv en linea
+
+id: Plugin %s %s has been uninstalled because it may cause problems.\nYou may try reinstalling a different version manually.
+# Missing translation
+msg: 
+
+id: Plugins
+msg: Plugins
 
 id: Preferred views from plugins
 msg: Vistas preferidas de plugins
@@ -1084,6 +1109,14 @@ msg: Ajustes Globales
 id: Look and feel
 msg: Aspecto y comportamiento
 
+id: Network services, etc
+# Missing translation
+msg: 
+
+id: Network settings
+# Missing translation
+msg: 
+
 id: Settings useful for developers
 msg: Ajustes útiles para desarrolladores
 
@@ -1091,10 +1124,91 @@ id: System related settings
 msg: Ajustes relacionados al sistema
 
 #
-# ./src/subtitles/sub_scanner.c
+# ./src/subtitles/subtitles.c
 #
+id: Any subtitle in central folder
+# Missing translation
+msg: 
+
+id: Any subtitle in same folder as video
+# Missing translation
+msg: 
+
+id: Auto
+msg: Automático
+
+id: Automatically select from this source
+# Missing translation
+msg: 
+
+id: Center
+msg: Centrado
+
+id: Central subtitle folder
+# Missing translation
+msg: 
+
+id: Color
+msg: Color
+
 id: External file
 msg: Archivo externo
+
+id: Force subtitles to reside on video frame
+msg: Forzar subtítulo sobre cuadro de video
+
+id: Generic settings for video subtitles
+msg: Ajustes genéricos para subtítulos
+
+id: Ignore embedded styling
+msg: Ignorar estilo integrado
+
+id: Left
+msg: Izquierda
+
+id: Outline color
+msg: Color del Contorno
+
+id: Outline size
+msg: Tamaño del Contorno
+
+id: Path to central folder
+# Missing translation
+msg: 
+
+id: Providers for Subtitles
+# Missing translation
+msg: 
+
+id: Right
+msg: Derecha
+
+id: Shadow color
+msg: Color de sombra
+
+id: Shadow offset
+msg: Offset de sombra
+
+id: Subtitle position
+msg: Posición de subtítulos
+
+id: Subtitle size
+msg: Tamaño de subtítulos
+
+id: Subtitle size and positioning
+msg: Posición y tamaño de subtítulos
+
+id: Subtitles embedded in video file
+# Missing translation
+msg: 
+
+id: Subtitles with matching filename in central folder
+# Missing translation
+msg: 
+
+id: Subtitles with matching filename in same folder as video
+# Missing translation
+msg: 
 
 #
 # ./src/text/fontstash.c
@@ -1120,14 +1234,9 @@ msg: Restaurar fuente estrecha a por defecto
 id: Reset subtitle font to default
 msg: Restaurar fuente de subtitulo a por defecto
 
-id: Unable to load %s -- %s
-msg: Incapaz de cargar %s -- %s
-
-id: Unable to open %s for writing
-msg: Incapaz de abrir %s para escribir
-
-id: Unable to write to %s
-msg: Incapaz de escribir a %s
+id: Unable to install font: %s
+# Missing translation
+msg: 
 
 id: Use font %s for
 msg: Usar fuente %s para
@@ -1136,19 +1245,36 @@ id: User interface
 msg: Interfaz de usuario
 
 #
+# ./src/ui/glw/glw_ps3.c
+#
+id: Seek using L2 and R2 button
+# Missing translation
+msg: 
+
+id: Yes with Select button
+# Missing translation
+msg: 
+
+#
 # ./src/ui/glw/glw_settings.c
 #
+id: Font and icon size
+# Missing translation
+msg: 
+
 id: Horizontal underscan
 msg: Underscan Horizontal
 
 id: Screensaver delay
 msg: Espera del protector de pantalla
 
-id: Userinterface size
-msg: Tamaño de interfaz de usuario
-
 id: Vertical underscan
-msg: Underscan Vertical
+# Missing translation
+msg: 
+
+id: Wrap when reaching beginning/end of lists
+# Missing translation
+msg: 
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1231,29 +1357,8 @@ msg: No se puede consultar Cell codec. Error 0x%x
 #
 # ./src/video/video_settings.c
 #
-id: 1080
-msg: 1080
-
-id: 576
-msg: 576
-
-id: 720
-msg: 720
-
-id: Always try to select a subtitle
-msg: Siempre tratar de seleccionar subtítulo
-
-id: Auto
-msg: Automático
-
 id: Automatically play next video in list
 msg: Reproducir siguiente video en la lista
-
-id: Center
-msg: Centrado
-
-id: Color
-msg: Color
 
 id: Count video as played when reaching
 msg: Contar video como reproducido cuando alcance
@@ -1264,59 +1369,17 @@ msg: Activar VDA
 id: Enable VDPAU
 msg: Activar VDPAU
 
-id: Force subtitles to reside on video frame
-msg: Forzar subtítulo sobre cuadro de video
-
-id: Generic settings for video subtitles
-msg: Ajustes genéricos para subtítulos
-
-id: Ignore embedded styling
-msg: Ignorar estilo integrado
-
-id: Include all subtitle files from movie directory
-msg: Incluir todos los subtítulos en el directorio
-
-id: Left
-msg: Izquierda
-
 id: Maximum resolution for deinterlacer
 msg: Resolución máxima del deinterlacer
 
 id: No limit
 msg: Sin límite
 
-id: Outline color
-msg: Color del Contorno
-
-id: Outline size
-msg: Tamaño del Contorno
-
 id: Preferred VDPAU deinterlacer method
 msg: Método preferido para VDPAU deinterlacer
 
 id: Resume video playback
 msg: Continuar reproducción de video
-
-id: Right
-msg: Derecha
-
-id: Shadow color
-msg: Color de sombra
-
-id: Shadow offset
-msg: Offset de sombra
-
-id: Subtitle position
-msg: Posición de subtítulos
-
-id: Subtitle size
-msg: Tamaño de subtítulos
-
-id: Subtitle size and positioning
-msg: Posición y tamaño de subtítulos
-
-id: Subtitle styling
-msg: Estilo de subtítulos
 
 id: Temporal
 msg: Temporal

@@ -21,12 +21,15 @@
 
 #include <stdlib.h>
 
+#include "config.h"
 #include "event.h"
 #include "arch/threads.h"
 #include "misc/queue.h"
 #include "misc/rstr.h"
 
-// #define PROP_DEBUG
+#if ENABLE_BUGHUNT
+#define PROP_DEBUG
+#endif
 
 typedef struct prop_courier prop_courier_t;
 typedef struct prop prop_t;
@@ -58,6 +61,7 @@ typedef enum {
   PROP_SET_FLOAT,
   PROP_SET_DIR,
   PROP_SET_RLINK,
+  PROP_ADOPT_RSTRING,
 
   PROP_ADD_CHILD,
   PROP_ADD_CHILD_BEFORE,
@@ -72,7 +76,8 @@ typedef enum {
   PROP_DESTROYED,
   PROP_EXT_EVENT,
   PROP_SUBSCRIPTION_MONITOR_ACTIVE,
-  PROP_HAVE_MORE_CHILDS,
+  PROP_HAVE_MORE_CHILDS_YES,
+  PROP_HAVE_MORE_CHILDS_NO,
   PROP_WANT_MORE_CHILDS,
   PROP_SUGGEST_FOCUS,
   PROP_REQ_MOVE_CHILD,
@@ -180,6 +185,9 @@ prop_t *prop_create_root_ex(const char *name, int noalloc)
 
 #define prop_create_root(name) \
   prop_create_root_ex(name, __builtin_constant_p(name))
+
+prop_t *prop_create_after(prop_t *parent, const char *name, prop_t *after,
+			  prop_sub_t *skipme);
 
 void prop_destroy(prop_t *p);
 
@@ -332,9 +340,15 @@ void prop_unselect_ex(prop_t *parent, prop_sub_t *skipme);
 
 #define prop_unselect(parent) prop_unselect_ex(parent, NULL)
 
+void prop_select_by_value_ex(prop_t *p, const char *name, prop_sub_t *skipme);
+
+#define prop_select_by_value(p, name) prop_select_by_value_ex(p, name, NULL)
+
 void prop_suggest_focus(prop_t *p);
 
 void prop_destroy_childs(prop_t *parent);
+
+void prop_void_childs(prop_t *parent);
 
 prop_t *prop_get_by_name(const char **name, int follow_symlinks, ...)
      __attribute__((__sentinel__(0)));
@@ -363,6 +377,8 @@ prop_courier_t *prop_courier_create_lockmgr(const char *name,
 int prop_courier_wait(prop_courier_t *pc, struct prop_notify_queue *q,
 		      int timeout);
 
+void prop_courier_wakeup(prop_courier_t *pc);
+
 void prop_courier_wait_and_dispatch(prop_courier_t *pc);
 
 void prop_courier_poll(prop_courier_t *pc);
@@ -380,6 +396,8 @@ void prop_notify_dispatch(struct prop_notify_queue *q);
 void prop_courier_stop(prop_courier_t *pc);
 
 prop_t *prop_find(prop_t *parent, ...)  __attribute__((__sentinel__(0)));
+
+prop_t *prop_first_child(prop_t *p);
 
 void prop_send_ext_event(prop_t *p, event_t *e);
 
@@ -410,7 +428,7 @@ rstr_t *prop_get_name(prop_t *p);
 
 void prop_want_more_childs(prop_sub_t *s);
 
-void prop_have_more_childs(prop_t *p);
+void prop_have_more_childs(prop_t *p, int yes);
 
 void prop_mark_childs(prop_t *p);
 

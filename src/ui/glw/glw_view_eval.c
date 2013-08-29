@@ -108,6 +108,7 @@ typedef struct sub_cloner {
   int sc_highest_active;
 
   char sc_have_more;
+  char sc_pending_more;
 
   struct clone_list sc_clones;
 
@@ -656,9 +657,9 @@ eval_eq(glw_view_eval_context_t *ec, struct token *self, int neq)
   if((b = token_resolve(ec, b)) == NULL)
     return -1;
 
-    if((aa = token_as_string(a)) != NULL &&
-       (bb = token_as_string(b)) != NULL) {
-      rr = !strcmp(aa, bb);
+  if((aa = token_as_string(a)) != NULL &&
+     (bb = token_as_string(b)) != NULL) {
+    rr = !strcmp(aa, bb);
   } else if(a->type != b->type) {
     rr = 0;
   } else {
@@ -669,6 +670,9 @@ eval_eq(glw_view_eval_context_t *ec, struct token *self, int neq)
       break;
     case TOKEN_FLOAT:
       rr = a->t_float == b->t_float;
+      break;
+    case TOKEN_VOID:
+      rr = 1;
       break;
     default:
       rr = 0;
@@ -768,9 +772,6 @@ resolve_property_name(glw_view_eval_context_t *ec, token_t *a)
 		       PROP_TAG_ROOT, ec->w->glw_root->gr_prop_ui,
 		       PROP_TAG_ROOT, ec->w->glw_root->gr_prop_nav,
 		       NULL);
-
-  if(p == NULL)
-    return glw_view_seterr(ec->ei, a, "Unable to resolve property");
 
   /* Transform TOKEN_PROPERTY_NAME -> TOKEN_PROPERTY */
 
@@ -1116,12 +1117,12 @@ clone_eval(glw_clone_t *c)
 static void
 cloner_pagination_check(sub_cloner_t *sc)
 {
-  if(!sc->sc_have_more)
+  if(sc->sc_pending_more || !sc->sc_have_more)
     return;
 
   if(sc->sc_highest_active >= sc->sc_entries * 0.95 ||
      sc->sc_highest_active == sc->sc_entries - 1) {
-    sc->sc_have_more = 0;
+    sc->sc_pending_more = 1;
     if(sc->sc_sub.gps_sub != NULL)
       prop_want_more_childs(sc->sc_sub.gps_sub);
   }
@@ -1212,6 +1213,9 @@ clone_sig_handler(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
     c->c_w = NULL;
     clone_free(gr, c);
     break;
+
+  case GLW_SIGNAL_WRAP_CHECK:
+    return sc->sc_have_more == 1;
 
   default:
     break;
@@ -1570,9 +1574,15 @@ prop_callback_cloner(void *opaque, prop_event_t event, ...)
     rpn = gps->gps_rpn;
     break;
 
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
     sc->sc_have_more = 1;
+    sc->sc_pending_more = 0;
     cloner_pagination_check(sc);
+    break;
+
+  case PROP_HAVE_MORE_CHILDS_NO:
+    sc->sc_have_more = 0;
+    sc->sc_pending_more = 0;
     break;
 
 
@@ -1584,6 +1594,7 @@ prop_callback_cloner(void *opaque, prop_event_t event, ...)
   case PROP_WANT_MORE_CHILDS:
   case PROP_SET_STRING:
   case PROP_REQ_MOVE_CHILD:
+  case PROP_ADOPT_RSTRING:
     break;
 
   }
@@ -1682,11 +1693,13 @@ prop_callback_value(void *opaque, prop_event_t event, ...)
   case PROP_DESTROYED:
   case PROP_EXT_EVENT:
   case PROP_SUBSCRIPTION_MONITOR_ACTIVE:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
   case PROP_WANT_MORE_CHILDS:
   case PROP_SUGGEST_FOCUS:
   case PROP_SET_STRING:
   case PROP_REQ_MOVE_CHILD:
+  case PROP_ADOPT_RSTRING:
     break;
   }
 
@@ -1754,11 +1767,13 @@ prop_callback_counter(void *opaque, prop_event_t event, ...)
   case PROP_DESTROYED:
   case PROP_EXT_EVENT:
   case PROP_SUBSCRIPTION_MONITOR_ACTIVE:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
   case PROP_WANT_MORE_CHILDS:
   case PROP_SUGGEST_FOCUS:
   case PROP_SET_STRING:
   case PROP_REQ_MOVE_CHILD:
+  case PROP_ADOPT_RSTRING:
     break;
   }
 
@@ -1848,11 +1863,13 @@ ve_cb(void *opaque, prop_event_t event, ...)
   case PROP_DESTROYED:
   case PROP_EXT_EVENT:
   case PROP_SUBSCRIPTION_MONITOR_ACTIVE:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
   case PROP_WANT_MORE_CHILDS:
   case PROP_SUGGEST_FOCUS:
   case PROP_SET_STRING:
   case PROP_REQ_MOVE_CHILD:
+  case PROP_ADOPT_RSTRING:
     break;
   }
 
@@ -2158,7 +2175,8 @@ prop_callback_vectorizer(void *opaque, prop_event_t event, ...)
     break;
 
   case PROP_SUGGEST_FOCUS:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
   case PROP_REQ_NEW_CHILD:
   case PROP_REQ_DELETE_VECTOR:
   case PROP_DESTROYED:
@@ -2167,6 +2185,7 @@ prop_callback_vectorizer(void *opaque, prop_event_t event, ...)
   case PROP_WANT_MORE_CHILDS:
   case PROP_SET_STRING:
   case PROP_REQ_MOVE_CHILD:
+  case PROP_ADOPT_RSTRING:
     break;
 
   }
@@ -2232,7 +2251,7 @@ subscribe_prop(glw_view_eval_context_t *ec, struct token *self, int type)
       sub_cloner_t *sc = calloc(1, sizeof(sub_cloner_t));
       gps = &sc->sc_sub;
 
-      sc->sc_have_more = 1;
+      sc->sc_have_more = 2;
 
       sc->sc_originating_prop = prop_ref_inc(ec->prop);
       sc->sc_view_prop        = prop_ref_inc(ec->prop_viewx);
@@ -3044,6 +3063,35 @@ glwf_navOpen(glw_view_eval_context_t *ec, struct token *self,
 /**
  *
  */
+static int
+glwf_deliverRef(glw_view_eval_context_t *ec, struct token *self,
+	     token_t **argv, unsigned int argc)
+{
+  token_t *a, *b, *r;
+
+  if((a = resolve_property_name2(ec, argv[0])) == NULL)
+    return -1;
+  if((b = resolve_property_name2(ec, argv[1])) == NULL)
+    return -1;
+
+  if(a->type != TOKEN_PROPERTY_REF)
+    return glw_view_seterr(ec->ei, a, "deliverRef(): "
+                           "First argument is not a property");
+
+  if(b->type != TOKEN_PROPERTY_REF)
+    return glw_view_seterr(ec->ei, a, "deliverRef(): "
+                           "Second argument is not a property");
+
+  r = eval_alloc(self, ec, TOKEN_EVENT);
+  r->t_gem = glw_event_map_propref_create(b->t_prop, a->t_prop);
+  eval_push(ec, r);
+  return 0;
+}
+
+
+/**
+ *
+ */
 static int 
 glwf_deliverEvent(glw_view_eval_context_t *ec, struct token *self,
 		  token_t **argv, unsigned int argc)
@@ -3059,7 +3107,7 @@ glwf_deliverEvent(glw_view_eval_context_t *ec, struct token *self,
     return -1;
 
   if(a->type != TOKEN_PROPERTY_REF)
-    return glw_view_seterr(ec->ei, a, "navOpen(): "
+    return glw_view_seterr(ec->ei, a, "deliverEvent(): "
 			    "First argument is not a property");
 
   if(argc == 2) {
@@ -3272,7 +3320,7 @@ glwf_event(glw_view_eval_context_t *ec, struct token *self,
 
 typedef struct glwf_changed_extra {
 
-  int threshold;
+  int64_t deadline;
   token_type_t type;
 
   union {
@@ -3296,6 +3344,7 @@ glwf_changed(glw_view_eval_context_t *ec, struct token *self,
 	     token_t **argv, unsigned int argc)
 
 {
+  const glw_root_t *gr = ec->w->glw_root;
   token_t *a, *b, *c, *r;
   glwf_changed_extra_t *e = self->t_extra;
   int change = 0;
@@ -3413,15 +3462,12 @@ glwf_changed(glw_view_eval_context_t *ec, struct token *self,
 
   if(change == 1) {
     if(e->transition > 0 || supp_first == 0)
-      e->threshold = b->t_float * (1000000 / ec->gr->gr_frameduration);
+      e->deadline = (int64_t)(b->t_float * 1000000.0) + gr->gr_frame_start;
     e->transition = 1;
   }
 
-  if(e->threshold > 0)
-    e->threshold--;
-
   r = eval_alloc(self, ec, TOKEN_FLOAT);
-  if(e->threshold > 0) {
+  if(e->deadline > gr->gr_frame_start) {
     r->t_float = 1;
     ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
   }
@@ -3520,10 +3566,11 @@ glwf_iir(glw_view_eval_context_t *ec, struct token *self,
 
 
 typedef struct glw_scurve_extra {
-  float x;
-  float xd;
+  int64_t deadline;
+  int64_t starttime;
+  int total;
 
-  float start;
+  float startval;
   float current;
   float target;
   float time_up;
@@ -3539,6 +3586,7 @@ static int
 glwf_scurve(glw_view_eval_context_t *ec, struct token *self,
 	    token_t **argv, unsigned int argc)
 {
+  const glw_root_t *gr = ec->w->glw_root;
   token_t *a, *b, *c;
   token_t *r;
   float f, v, tup, tdown;
@@ -3564,20 +3612,26 @@ glwf_scurve(glw_view_eval_context_t *ec, struct token *self,
   tdown = token2float(c?:b);
 
   if(s->target != f || s->time_up != tup || s->time_down != tdown) {
-    s->start = s->target;
+    s->startval = s->target;
     s->target = f;
     s->time_up = tup;
     s->time_down = tdown;
-    s->x = 0;
-    float t = s->target < s->start ? tdown : tup;
-    s->xd = 1.0 / (1000000 * t / ec->w->glw_root->gr_frameduration);
+    float t = s->target < s->startval ? tdown : tup;
+    s->starttime = gr->gr_frame_start;
+    s->total = 1000000.0f * t;
+    if(s->total == 0)
+      s->total = 1;
+    s->deadline = gr->gr_frame_start + s->total;
   }
 
-  s->x += s->xd;
+  if(gr->gr_frame_start <  s->deadline) {
 
-  if(s->x < 1.0) {
-    v = GLW_S(s->x);
-    s->current = GLW_LERP(v, s->start, s->target);
+    int cur   = gr->gr_frame_start - s->starttime;
+
+    float x = (float)cur / s->total;
+
+    v = GLW_S(x);
+    s->current = GLW_LERP(v, s->startval, s->target);
     ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
   } else {
     s->current = s->target;
@@ -4442,6 +4496,64 @@ glwf_delta_dtor(glw_root_t *Gr, struct token *self)
 
 
 /**
+ *
+ */
+static int
+glwf_set(glw_view_eval_context_t *ec, struct token *self,
+         token_t **argv, unsigned int argc)
+{
+  token_t *a = argv[0], *b = argv[1];
+  prop_t *p;
+
+  if((a = resolve_property_name2(ec, a)) == NULL)
+    return -1;
+
+  if((b = token_resolve(ec, b)) == NULL)
+    return -1;
+
+  prop_ref_dec(self->t_extra);
+  self->t_extra = p = prop_ref_inc(a->t_prop);
+
+  switch(b->type) {
+  case TOKEN_FLOAT:
+    prop_set_float(p, b->t_float);
+    break;
+  case TOKEN_INT:
+    prop_set_int(p, b->t_int);
+    break;
+  case TOKEN_CSTRING:
+    prop_set_cstring(p, b->t_cstring);
+    break;
+  case TOKEN_RSTRING:
+    prop_set_rstring(p, b->t_rstring);
+    break;
+  case TOKEN_LINK:
+    prop_set_link(p, rstr_get(b->t_link_rtitle), rstr_get(b->t_link_rurl));
+    break;
+  default:
+    prop_set_void(p);
+    break;
+  }
+
+  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  return 0;
+}
+
+
+/**
+ *
+ */
+static void
+glwf_set_dtor(glw_root_t *Gr, struct token *self)
+{
+  prop_t *p = self->t_extra;
+
+  prop_set_void(p);
+  prop_ref_dec(p);
+}
+
+
+/**
  * Return 1 if the current widget is visible (rendered)
  */
 static int 
@@ -4730,6 +4842,7 @@ static int
 glwf_sinewave(glw_view_eval_context_t *ec, struct token *self,
 	      token_t **argv, unsigned int argc)
 {
+  const glw_root_t *gr = ec->w->glw_root;
   token_t *a = argv[0];
   token_t *r;
 
@@ -4737,13 +4850,12 @@ glwf_sinewave(glw_view_eval_context_t *ec, struct token *self,
     return -1;
 
   float p = token2float(a);
-  self->t_extra_float += 2 * M_PI / (ec->w->glw_root->gr_framerate * p);
+  int64_t v64 = (double)gr->gr_time_sec / p * 4096.0;
 
-  if(self->t_extra_float > 2 * M_PI)
-    self->t_extra_float -= 2 * M_PI;
+  int v = v64 & 0xfff;
 
   r = eval_alloc(self, ec, TOKEN_FLOAT);
-  r->t_float = sin(self->t_extra_float);
+  r->t_float = sin(v * 0.00153398f);
   eval_push(ec, r);
   ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
   return 0;
@@ -4758,11 +4870,10 @@ glwf_monotime(glw_view_eval_context_t *ec, struct token *self,
 	      token_t **argv, unsigned int argc)
 {
   token_t *r;
-  glw_root_t *gr = ec->w->glw_root;
-  double d = gr->gr_frames * (double)gr->gr_frameduration / 1000000.0;
+  const glw_root_t *gr = ec->w->glw_root;
 
   r = eval_alloc(self, ec, TOKEN_FLOAT);
-  r->t_float = d;
+  r->t_float = gr->gr_time_sec;
   eval_push(ec, r);
   ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
   return 0;
@@ -4796,7 +4907,7 @@ typedef struct glwf_delay_extra {
 
   float oldval;
   float curval;
-  int counter;
+  int64_t deadline;
 
 } glwf_delay_extra_t;
 
@@ -4809,6 +4920,7 @@ glwf_delay(glw_view_eval_context_t *ec, struct token *self,
 	   token_t **argv, unsigned int argc)
 
 {
+  glw_root_t *gr = ec->w->glw_root;
   token_t *a, *b, *c, *r;
   float f;
   glwf_delay_extra_t *e = self->t_extra;
@@ -4824,14 +4936,13 @@ glwf_delay(glw_view_eval_context_t *ec, struct token *self,
   if(f != e->curval) {
     // trig
     e->oldval = e->curval;
-    e->counter = token2float(f >= e->curval ? b : c) * 1000000.0 / 
-      ec->w->glw_root->gr_frameduration;
+    e->deadline = (int64_t)(token2float(f >= e->curval ? b : c) * 1000000.0) +
+      gr->gr_frame_start;
     e->curval = f;
   }
   
-  if(e->counter > 0) {
+  if(e->deadline > gr->gr_frame_start) {
     f = e->oldval;
-    e->counter--;
     ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
   } else {
     eval_push(ec, a);
@@ -5925,6 +6036,7 @@ static const token_func_t funcvec[] = {
   {"count", 1, glwf_count},
   {"vectorize", 1, glwf_vectorize},
   {"deliverEvent", -1, glwf_deliverEvent},
+  {"deliverRef", 2, glwf_deliverRef},
   {"propGrouper", 2, glwf_propGrouper, glwf_null_ctor, glwf_propGrouper_dtor},
   {"propSorter", -1, glwf_propSorter, glwf_null_ctor, glwf_propSorter_dtor},
   {"getLayer", 0, glwf_getLayer},
@@ -5944,6 +6056,7 @@ static const token_func_t funcvec[] = {
   {"setDefaultFont", 1, glwf_setDefaultFont},
   {"rand", 0, glwf_rand},
   {"selectedElement", 1, glwf_selectedElement},
+  {"set", 2, glwf_set, glwf_null_ctor, glwf_set_dtor},
 
 };
 

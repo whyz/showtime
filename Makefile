@@ -32,11 +32,12 @@ ALLDEPS += ${STAMPS}
 OPTFLAGS ?= -O2
 
 PROG=${BUILDDIR}/showtime
+LIB=${BUILDDIR}/libshowtime
 
 include ${BUILDDIR}/config.mak
 
 CFLAGS_std = -Wall -Werror -Wwrite-strings -Wno-deprecated-declarations \
-		-Wmissing-prototypes -Wno-multichar  -Iext/dvd
+		-Wmissing-prototypes -Wno-multichar  -Iext/dvd -std=gnu99
 
 CFLAGS = ${CFLAGS_std} ${OPTFLAGS}
 
@@ -102,6 +103,7 @@ SRCS +=	src/misc/ptrvec.c \
 	src/misc/jpeg.c \
 	src/misc/gz.c \
 	src/misc/str.c \
+	src/misc/time.c \
 	src/misc/codepages.c \
 	src/misc/fs.c \
 	src/misc/extents.c \
@@ -111,8 +113,11 @@ SRCS +=	src/misc/ptrvec.c \
 	src/misc/unicode_composition.c \
 	src/misc/pool.c \
 	src/misc/buf.c \
+	src/misc/charset_detector.c \
 
 SRCS-${CONFIG_TREX} += ext/trex/trex.c
+
+SRCS-${CONFIG_BSPATCH} += ext/bspatch/bspatch.c
 
 ##############################################################
 # Sqlite3
@@ -155,6 +160,7 @@ SRCS +=	src/htsmsg/htsbuf.c \
 # Virtual FS system
 ##############################################################
 SRCS += src/fileaccess/fileaccess.c \
+	src/fileaccess/fa_vfs.c \
 	src/fileaccess/fa_fs.c \
 	src/fileaccess/fa_rar.c \
 	src/fileaccess/fa_http.c \
@@ -165,8 +171,14 @@ SRCS += src/fileaccess/fileaccess.c \
 	src/fileaccess/fa_nativesmb.c \
 	src/fileaccess/fa_buffer.c \
 	src/fileaccess/fa_slice.c \
+	src/fileaccess/fa_bwlimit.c \
+	src/fileaccess/fa_cmp.c \
+	src/fileaccess/fa_aes.c \
 	src/fileaccess/fa_imageloader.c \
 	src/fileaccess/fa_indexer.c \
+
+SRCS += src/fileaccess/fa_ftp.c \
+	src/fileaccess/ftpparse.c \
 
 SRCS-$(CONFIG_LIBAV) += \
 	src/fileaccess/fa_probe.c \
@@ -216,6 +228,7 @@ SRCS-$(CONFIG_AIRPLAY) += src/api/airplay.c
 ##############################################################
 SRCS += src/networking/net_common.c \
 	src/networking/http.c \
+	src/networking/ftp_server.c \
 
 SRCS-$(CONFIG_HTTPSERVER) += src/networking/http_server.c
 SRCS-$(CONFIG_HTTPSERVER) += src/networking/ssdp.c
@@ -227,6 +240,9 @@ SRCS-$(CONFIG_HTTPSERVER) += \
 			src/upnp/upnp_avtransport.c \
 			src/upnp/upnp_renderingcontrol.c \
 			src/upnp/upnp_connectionmanager.c \
+
+SRCS-$(CONFIG_CONNMAN) += src/networking/connman.c
+SRCS-$(CONFIG_CONNMAN) += src/prop/prop_gvariant.c
 
 ##############################################################
 # Video support
@@ -242,7 +258,8 @@ SRCS-$(CONFIG_VDA)      += src/video/vda.c
 ##############################################################
 # Subtitles
 ##############################################################
-SRCS += src/subtitles/sub_ass.c \
+SRCS += src/subtitles/subtitles.c \
+	src/subtitles/sub_ass.c \
 	src/subtitles/ext_subtitles.c \
 	src/subtitles/dvdspu.c \
 	src/subtitles/vobsub.c \
@@ -419,10 +436,6 @@ ${BUILDDIR}/src/ui/gu/%.o : CFLAGS = $(CFLAGS_GTK) ${OPTFLAGS} ${CFLAGS_std}
 SRCS-$(CONFIG_LIRC) +=  src/ipc/lirc.c
 SRCS-$(CONFIG_STDIN)+=  src/ipc/stdin.c
 
-SRCS-$(CONFIG_SERDEV) +=	src/ipc/serdev/serdev.c \
-				src/ipc/serdev/lgtv.c \
-
-
 ##############################################################
 # Apple remote and keyspan front row remote
 ##############################################################
@@ -538,6 +551,9 @@ SRCS-$(CONFIG_SPIDERMONKEY) += ext/spidermonkey/jsapi.c	\
                         src/js/js_json.c                \
                         src/js/js_event.c               \
                         src/js/js_metaprovider.c        \
+                        src/js/js_hook.c                \
+                        src/js/js_db.c                  \
+                        src/js/js_faprovider.c          \
 
 ${BUILDDIR}/ext/spidermonkey/%.o : CFLAGS = \
 	-Iext/spidermonkey -Isrc/arch/nspr
@@ -650,6 +666,9 @@ ${PROG}.datadir: $(OBJS) $(ALLDEPS)  support/dataroot/datadir.c
 
 ${PROG}.osxapp: $(OBJS) $(ALLDEPS) support/dataroot/osxapp.c
 	$(CC) -o $@ $(OBJS) support/dataroot/osxapp.c $(LDFLAGS) ${LDFLAGS_cfg}
+
+${LIB}.so: $(OBJS) $(BUNDLE_OBJS) $(ALLDEPS)  support/dataroot/bundle.c
+	$(CC) -shared -o $@ $(OBJS) support/dataroot/bundle.c $(BUNDLE_OBJS) ${LDFLAGS_cfg}
 
 .PHONY: ${BUILDDIR}/zipbundles/bundle.zip
 

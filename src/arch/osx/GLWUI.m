@@ -199,6 +199,8 @@ update_sys_activity(CFRunLoopTimerRef timer, void *info)
   UpdateSystemActivity(OverallAct);
 }
 
+static prop_t *stored_nav;
+
 
 /**
  *
@@ -211,8 +213,15 @@ update_sys_activity(CFRunLoopTimerRef timer, void *info)
     return self;
 
   gr = calloc(1, sizeof(glw_root_t));
+
   gr->gr_prop_ui = prop_create_root("ui");
-  gr->gr_prop_nav = nav_spawn();
+
+  if(stored_nav != NULL) {
+    gr->gr_prop_nav = stored_nav;
+    stored_nav = NULL;
+  } else {
+    gr->gr_prop_nav = nav_spawn();
+  }
 
   if(glw_init(gr)) {
     prop_destroy(gr->gr_prop_ui);
@@ -220,8 +229,6 @@ update_sys_activity(CFRunLoopTimerRef timer, void *info)
     [self release];
     return nil;
   }
-
-  glw_load_universe(gr);
 
   evsub = prop_subscribe(0,
 			 PROP_TAG_CALLBACK, eventsink, self,
@@ -241,6 +248,11 @@ update_sys_activity(CFRunLoopTimerRef timer, void *info)
 			 NULL);
 
   [self openWin:NO];
+
+  glw_lock(gr);
+  glw_load_universe(gr);
+  glw_unlock(gr);
+
   return self;
 }
 
@@ -263,7 +275,10 @@ update_sys_activity(CFRunLoopTimerRef timer, void *info)
 
   glw_fini(gr);
   prop_destroy(gr->gr_prop_ui);
-  prop_destroy(gr->gr_prop_nav);
+  if(stored_nav != NULL)
+    prop_destroy(stored_nav);
+  stored_nav = gr->gr_prop_nav;
+
   free(gr);
 
   [window close];

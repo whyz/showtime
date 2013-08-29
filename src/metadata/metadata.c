@@ -41,6 +41,7 @@
 #include "video/video_settings.h"
 
 #include "settings.h"
+#include "subtitles/subtitles.h"
 
 static hts_mutex_t metadata_mutex;
 static prop_courier_t *metadata_courier;
@@ -207,10 +208,10 @@ type2content(const char *str)
  *
  */
 static void
-metadata_stream_make_prop(const metadata_stream_t *ms, prop_t *parent)
+metadata_stream_make_prop(const metadata_stream_t *ms, prop_t *parent,
+                          int score, int autosel)
 {
   char url[16];
-  int score = 0;
   rstr_t *title;
 
   snprintf(url, sizeof(url), "libav:%d", ms->ms_streamindex);
@@ -219,6 +220,7 @@ metadata_stream_make_prop(const metadata_stream_t *ms, prop_t *parent)
     score += 10;
   else
     score += 5;
+
 
   if(ms->ms_title != NULL) {
     title = rstr_dup(ms->ms_title);
@@ -239,7 +241,8 @@ metadata_stream_make_prop(const metadata_stream_t *ms, prop_t *parent)
 		ms->ms_isolang,
 		NULL,
 		_p("Embedded in file"),
-		score);
+		score,
+                autosel);
   
   rstr_release(title);
 }
@@ -276,7 +279,8 @@ metadata_to_proptree(const metadata_t *md, prop_t *proproot,
   TAILQ_FOREACH(ms, &md->md_streams, ms_link) {
 
     prop_t *p;
-
+    int score = 0;
+    int autosel = 1;
     switch(ms->ms_type) {
     case MEDIA_TYPE_AUDIO:
       p = prop_create(proproot, "audiostreams");
@@ -287,6 +291,8 @@ metadata_to_proptree(const metadata_t *md, prop_t *proproot,
       pc = &vc;
       break;
     case MEDIA_TYPE_SUBTITLE:
+      score   = subtitles_embedded_score();
+      autosel = subtitles_embedded_autosel();
       p = prop_create(proproot, "subtitlestreams");
       pc = &sc;
       break;
@@ -297,7 +303,9 @@ metadata_to_proptree(const metadata_t *md, prop_t *proproot,
       prop_destroy_childs(p);
       *pc = 1;
     }
-    metadata_stream_make_prop(ms, p);
+    if(score == -1)
+      continue;
+    metadata_stream_make_prop(ms, p, score, autosel);
   }
 
   if(md->md_format != NULL)
@@ -332,7 +340,7 @@ struct metadata_lazy_prop;
  *
  */
 typedef struct metadata_lazy_class {
-  void (*mlc_load)(struct metadata_lazy_prop *mlp);
+  void (*mlc_load)(void *db, struct metadata_lazy_prop *mlp);
   void (*mlc_kill)(struct metadata_lazy_prop *mlp);
   void (*mlc_dtor)(struct metadata_lazy_prop *mlp);
   size_t mlc_alloc_size;
@@ -483,24 +491,16 @@ typedef struct metadata_lazy_artist {
  *
  */
 static void
-mlp_artist_load(metadata_lazy_prop_t *mlp)
+mlp_artist_load(void *db, metadata_lazy_prop_t *mlp)
 {
   metadata_lazy_artist_t *mla = (metadata_lazy_artist_t *)mlp;
-
-  void *db = metadb_get();
   int r;
 
-  if(!db_begin(db)) {
-    r = metadb_get_artist_pics(db, rstr_get(mla->mla_artist),
+  r = metadb_get_artist_pics(db, rstr_get(mla->mla_artist),
 			       mlp_add_artist_to_prop, mla->mla_prop);
-    
-    if(r)
-      lastfm_load_artistinfo(db, rstr_get(mla->mla_artist),
+  if(r)
+    lastfm_load_artistinfo(db, rstr_get(mla->mla_artist),
 			     mlp_add_artist_to_prop, mla->mla_prop);
-    
-    db_commit(db);
-  }
-  metadb_close(db);
 }
 
 
@@ -564,32 +564,23 @@ typedef struct metadata_lazy_album {
  *
  */
 static void
-mlp_album_load(metadata_lazy_prop_t *mlp)
+mlp_album_load(void *db, metadata_lazy_prop_t *mlp)
 {
   metadata_lazy_album_t *mla = (metadata_lazy_album_t *)mlp;
-
-  void *db = metadb_get();
   rstr_t *r;
 
-  if(!db_begin(db)) {
-    r = metadb_get_album_art(db,rstr_get(mla->mla_album),
-			     rstr_get(mla->mla_artist));
-  
-    if(r == NULL) {
+  r = metadb_get_album_art(db,rstr_get(mla->mla_album),
+                           rstr_get(mla->mla_artist));
+
+  if(r == NULL) {
       // No album art available in our db, try to get some
-      
-      lastfm_load_albuminfo(db, rstr_get(mla->mla_album),
-			    rstr_get(mla->mla_artist));
-      
-      r = metadb_get_album_art(db,rstr_get(mla->mla_album),
-			       rstr_get(mla->mla_artist));
-    }
-    
-    prop_set_rstring(mla->mla_prop, r);
-    rstr_release(r);
-    db_commit(db);
+    lastfm_load_albuminfo(db, rstr_get(mla->mla_album),
+                          rstr_get(mla->mla_artist));
+    r = metadb_get_album_art(db,rstr_get(mla->mla_album),
+                             rstr_get(mla->mla_artist));
   }
-  metadb_close(db);
+  prop_set_rstring(mla->mla_prop, r);
+  rstr_release(r);
 }
 
 
@@ -651,11 +642,13 @@ struct metadata_lazy_video {
   rstr_t *mlv_folder;
   rstr_t *mlv_imdb_id;
 
+  prop_t *mlv_root;
   prop_t *mlv_m;
 
   prop_t *mlv_title_opt;
-  prop_t *mlv_info;
-  prop_t *mlv_info_text;
+  prop_t *mlv_info_opt;
+  prop_t *mlv_info_text_prop;
+  rstr_t *mlv_info_text_rstr;
 
   prop_t *mlv_source_opt;
   prop_sub_t *mlv_source_opt_sub;
@@ -663,18 +656,19 @@ struct metadata_lazy_video {
   prop_t *mlv_alt_opt;
   prop_sub_t *mlv_alt_opt_sub;
 
-  prop_t *mlv_sq;
-  prop_sub_t *mlv_sq_sub;
-
-  prop_t *mlv_refresh;
+  prop_t *mlv_refresh_opt;
   prop_sub_t *mlv_refresh_sub;
 
   rstr_t *mlv_custom_query;
+  prop_t *mlv_custom_query_opt;
   prop_sub_t *mlv_custom_query_sub;
 
   rstr_t *mlv_custom_title;
+  prop_t *mlv_custom_title_opt;
   prop_sub_t *mlv_custom_title_sub;
  
+  prop_sub_t *mlv_options_monitor_sub;
+
   // Triggers
   prop_sub_t *mlv_trig_title;
   prop_sub_t *mlv_trig_desc;
@@ -684,7 +678,8 @@ struct metadata_lazy_video {
   unsigned char mlv_type;
   unsigned char mlv_lonely : 1;
   unsigned char mlv_passive : 1;
-  unsigned char mlv_qtype : 6;
+  unsigned char mlv_manual : 1;
+  unsigned char mlv_qtype : 5;
   union {
     int16_t mlv_season;
     int16_t mlv_year;
@@ -694,14 +689,38 @@ struct metadata_lazy_video {
 };
 
 
+/**
+ *
+ */
+static void
+mlv_cleanup(metadata_lazy_video_t *mlv)
+{
+  prop_set(mlv->mlv_m, "source",       PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "icon",         PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "tagline",      PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "description",  PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "backdrop",     PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "genre",        PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "year",         PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "rating",       PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "rating_count", PROP_SET_VOID);
+  prop_set(mlv->mlv_m, "vtype",        PROP_SET_VOID);
+}
+
+
+
 
 /**
  *
  */
 void
-mlv_unbind(metadata_lazy_video_t *mlv)
+mlv_unbind(metadata_lazy_video_t *mlv, int cleanup)
 {
   hts_mutex_lock(&metadata_mutex);
+  if(cleanup) {
+    mlv_cleanup(mlv);
+    prop_set(mlv->mlv_m, "title", PROP_SET_RSTRING, mlv->mlv_filename);
+  }
   mlp_destroy(&mlv->mlv_mlp);
   hts_mutex_unlock(&metadata_mutex);
 }
@@ -777,8 +796,10 @@ build_info_text(metadata_lazy_video_t *mlv, const metadata_t *md)
     rstr_release(qtype);
   }
 
-  prop_set_rstring(mlv->mlv_info_text, txt);
-  rstr_release(txt);
+  prop_set_rstring(mlv->mlv_info_text_prop, txt);
+  rstr_release(mlv->mlv_info_text_rstr);
+
+  mlv->mlv_info_text_rstr = txt;
 }
 
 
@@ -804,7 +825,7 @@ is_qtype_compat(int qa, int qb)
  *
  */
 static int64_t
-query_by_filename_or_dirname(void *db, metadata_lazy_video_t *mlv,
+query_by_filename_or_dirname(void *db, const metadata_lazy_video_t *mlv,
 			     const metadata_source_funcs_t *msf, int *qtype)
 {
   int year;
@@ -947,7 +968,6 @@ set_cast_n_crew(prop_t *p, metadata_t *md)
 }
 
 
-
 /**
  * Must be in a transaction
  */
@@ -973,7 +993,8 @@ mlv_get_video_info0(void *db, metadata_lazy_video_t *mlv, int refresh)
   if(custom_title && !*rstr_get(custom_title))
     custom_title = NULL;
 
-  if(mlv->mlv_duration && mlv->mlv_duration < 300) {
+  // If duration is low skip this unless user have specified a custom query
+  if(mlv->mlv_duration && mlv->mlv_duration < 300 && sq == NULL) {
     goto bad;
   }
 
@@ -987,7 +1008,8 @@ mlv_get_video_info0(void *db, metadata_lazy_video_t *mlv, int refresh)
   }
 
   if(!refresh) {
-    r = metadb_get_videoinfo(db, rstr_get(mlv->mlv_url), msl, &fixed_ds, &md);
+    r = metadb_get_videoinfo(db, rstr_get(mlv->mlv_url), msl, &fixed_ds, &md,
+                             mlv->mlv_manual);
     if(r) {
       return r;
     }
@@ -998,7 +1020,8 @@ mlv_get_video_info0(void *db, metadata_lazy_video_t *mlv, int refresh)
 
   prop_set(mlv->mlv_m, "loading", PROP_SET_INT, 1);
 
-  if(md == NULL || !md->md_preferred) {
+
+  if(!mlv->mlv_manual && (md == NULL || !md->md_preferred)) {
 
     TAILQ_FOREACH(ms, &metadata_sources[mlv->mlv_type], ms_link) {
 
@@ -1189,7 +1212,8 @@ mlv_get_video_info0(void *db, metadata_lazy_video_t *mlv, int refresh)
       TRACE(TRACE_DEBUG, "METADATA", "Permanent error for %s",
 	    rstr_get(mlv->mlv_url));
 
-    r = metadb_get_videoinfo(db, rstr_get(mlv->mlv_url), msl, &fixed_ds, &md);
+    r = metadb_get_videoinfo(db, rstr_get(mlv->mlv_url), msl, &fixed_ds, &md,
+                             0);
     if(r) {
       prop_set(mlv->mlv_m, "loading", PROP_SET_INT, 0);
       return r;
@@ -1285,21 +1309,10 @@ mlv_get_video_info0(void *db, metadata_lazy_video_t *mlv, int refresh)
 
       if(mlv->mlv_m != NULL) {
 
-        prop_set(mlv->mlv_m, "source",      PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "icon",        PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "tagline",     PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "description", PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "backdrop",    PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "genre",       PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "year",        PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "rating",      PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "rating_count",PROP_SET_VOID);
-        prop_set(mlv->mlv_m, "vtype",       PROP_SET_VOID);
+        mlv_cleanup(mlv);
 
         title = title ?: rstr_dup(custom_title ?: mlv->mlv_filename);
-
         mlv->mlv_dsid = 0;
-
         build_info_text(mlv, NULL);
       }
     }
@@ -1320,29 +1333,9 @@ mlv_get_video_info0(void *db, metadata_lazy_video_t *mlv, int refresh)
  *
  */
 static void
-mlv_load(metadata_lazy_prop_t *mlp)
+mlv_load(void *db, metadata_lazy_prop_t *mlp)
 {
-  if(mlp->mlp_zombie)
-    return;
-
-  metadata_lazy_video_t *mlv = (metadata_lazy_video_t *)mlp;
-
-  void *db = metadb_get();
-
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  int r = mlv_get_video_info0(db, mlv, 0);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  db_commit(db);
-  metadb_close(db);
+  mlv_get_video_info0(db, (metadata_lazy_video_t *)mlp, 0);
 }
 
 
@@ -1368,25 +1361,8 @@ static void
 mlv_set_preferred(metadata_lazy_video_t *mlv, int64_t vid)
 {
   void *db = metadb_get();
-  int r;
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-  r = metadb_videoitem_set_preferred(db, rstr_get(mlv->mlv_url), vid);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  r = mlv_get_video_info0(db, mlv, 0);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  db_commit(db);
+  metadb_videoitem_set_preferred(db, rstr_get(mlv->mlv_url), vid);
+  mlv_get_video_info0(db, mlv, 0);
   metadb_close(db);
 }
 
@@ -1439,9 +1415,11 @@ load_sources(metadata_lazy_video_t *mlv)
   prop_t *c, *p = prop_create_r(mlv->mlv_source_opt, "options");
   int cur = metadb_item_get_preferred_ds(rstr_get(mlv->mlv_url));
 
-  c = prop_create_root(NULL);
-  prop_link(_p("Automatic"), prop_create(c, "title"));
-  pv = prop_vec_append(pv, c);
+  if(!mlv->mlv_manual) {
+    c = prop_create_root(NULL);
+    prop_link(_p("Automatic"), prop_create(c, "title"));
+    pv = prop_vec_append(pv, c);
+  }
 
   TAILQ_FOREACH(ms, &metadata_sources[mlv->mlv_type], ms_link) {
     if(!ms->ms_enabled)
@@ -1456,7 +1434,7 @@ load_sources(metadata_lazy_video_t *mlv)
   c = prop_create_root("1");
   prop_link(_p("None"), prop_create(c, "title"));
   pv = prop_vec_append(pv, c);
-  if(cur == 1)
+  if(cur == 1 || (mlv->mlv_manual && cur == 0))
     active = prop_ref_inc(c);
 
   prop_destroy_childs(p);
@@ -1494,29 +1472,11 @@ mlv_set_source(metadata_lazy_video_t *mlv, const char *name)
 	}
       }
     }
-  } 
+  }
 
   void *db = metadb_get();
-  int r;
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  r = metadb_item_set_preferred_ds(db, rstr_get(mlv->mlv_url), id);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  r = mlv_get_video_info0(db, mlv, 0);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  db_commit(db);
+  metadb_item_set_preferred_ds(db, rstr_get(mlv->mlv_url), id);
+  mlv_get_video_info0(db, mlv, 0);
   metadb_close(db);
   load_alternatives(mlv);
 }
@@ -1563,35 +1523,11 @@ static void
 mlv_refresh_video_info(metadata_lazy_video_t *mlv)
 {
   void *db = metadb_get();
-  int r;
-
   assert(mlv != NULL);
 
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  r = metadb_item_set_preferred_ds(db, rstr_get(mlv->mlv_url), 0);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  r = metadb_videoitem_set_preferred(db, rstr_get(mlv->mlv_url), 0);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  r = mlv_get_video_info0(db, mlv, 1);
-  if(r == METADATA_DEADLOCK) {
-    db_rollback_deadlock(db);
-    goto again;
-  }
-
-  db_commit(db);
+  metadb_item_set_preferred_ds(db, rstr_get(mlv->mlv_url), 0);
+  metadb_videoitem_set_preferred(db, rstr_get(mlv->mlv_url), 0);
+  mlv_get_video_info0(db, mlv, 1);
   metadb_close(db);
   load_alternatives(mlv);
 }
@@ -1648,7 +1584,7 @@ mlv_sub_actions(void *opaque, prop_event_t event, ...)
  *
  */
 static void
-mlv_sub_query(void *opaque, prop_event_t event, ...)
+mlv_custom_query_cb(void *opaque, prop_event_t event, ...)
 {
   metadata_lazy_video_t *mlv = opaque;
   va_list ap;
@@ -1677,7 +1613,7 @@ mlv_sub_query(void *opaque, prop_event_t event, ...)
  *
  */
 static void
-mlv_sub_custom_title(void *opaque, prop_event_t event, ...)
+mlv_custom_title_cb(void *opaque, prop_event_t event, ...)
 {
   metadata_lazy_video_t *mlv = opaque;
   va_list ap;
@@ -1724,11 +1660,12 @@ mlv_kill(metadata_lazy_prop_t *mlp)
 {
   metadata_lazy_video_t *mlv = (metadata_lazy_video_t *)mlp;
   prop_destroy(mlv->mlv_title_opt);
-  prop_destroy(mlv->mlv_info);
+  prop_destroy(mlv->mlv_info_opt);
   prop_destroy(mlv->mlv_source_opt);
   prop_destroy(mlv->mlv_alt_opt);
-  prop_destroy(mlv->mlv_sq);
-  prop_destroy(mlv->mlv_refresh);
+  prop_destroy(mlv->mlv_custom_query_opt);
+  prop_destroy(mlv->mlv_custom_title_opt);
+  prop_destroy(mlv->mlv_refresh_opt);
 }
 
 /**
@@ -1743,28 +1680,34 @@ mlv_dtor(metadata_lazy_prop_t *mlp)
   prop_unsubscribe(mlv->mlv_trig_desc);
   prop_unsubscribe(mlv->mlv_trig_rating);
 
-  
+  prop_unsubscribe(mlv->mlv_options_monitor_sub);
+
   prop_unsubscribe(mlv->mlv_source_opt_sub);
   prop_unsubscribe(mlv->mlv_alt_opt_sub);
-  prop_unsubscribe(mlv->mlv_sq_sub);
   prop_unsubscribe(mlv->mlv_refresh_sub);
   prop_unsubscribe(mlv->mlv_custom_title_sub);
   prop_unsubscribe(mlv->mlv_custom_query_sub);
 
   prop_ref_dec(mlv->mlv_title_opt);
-  prop_ref_dec(mlv->mlv_info);
-  prop_ref_dec(mlv->mlv_info_text);
+  prop_ref_dec(mlv->mlv_info_opt);
+  prop_ref_dec(mlv->mlv_info_text_prop);
+  rstr_release(mlv->mlv_info_text_rstr);
   prop_ref_dec(mlv->mlv_source_opt);
   prop_ref_dec(mlv->mlv_alt_opt);
-  prop_ref_dec(mlv->mlv_refresh);
+  prop_ref_dec(mlv->mlv_refresh_opt);
+
+  prop_ref_dec(mlv->mlv_custom_query_opt);
+  prop_ref_dec(mlv->mlv_custom_title_opt);
 
   rstr_release(mlv->mlv_filename);
   rstr_release(mlv->mlv_imdb_id);
-  prop_ref_dec(mlv->mlv_sq);
   rstr_release(mlv->mlv_custom_query);
   rstr_release(mlv->mlv_custom_title);
   rstr_release(mlv->mlv_url);
   rstr_release(mlv->mlv_folder);
+
+  prop_ref_dec(mlv->mlv_m);
+  prop_ref_dec(mlv->mlv_root);
 }
 
 
@@ -1805,12 +1748,202 @@ mlv_sub(metadata_lazy_video_t *mlv, prop_t *m,
 /**
  *
  */
+static void
+mlv_add_options(metadata_lazy_video_t *mlv)
+{
+  prop_t *p;
+  prop_vec_t *pv = prop_vec_create(10);
+
+  // -------------------------------------------------------------------
+  // Separator
+
+  p = mlv->mlv_title_opt = prop_ref_inc(prop_create_root(NULL));
+  prop_set(p, "type",    PROP_SET_STRING, "separator");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+
+  prop_link(_p("Metadata search"),
+	    prop_create(prop_create(mlv->mlv_title_opt, "metadata"), "title"));
+
+  pv = prop_vec_append(pv, p);
+
+  // -------------------------------------------------------------------
+  // Info
+
+  p = mlv->mlv_info_opt = prop_ref_inc(prop_create_root(NULL));
+  prop_set(p, "type",    PROP_SET_STRING, "info");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+  mlv->mlv_info_text_prop = prop_create_r(prop_create(p, "metadata"), "title");
+  prop_set_rstring(mlv->mlv_info_text_prop, mlv->mlv_info_text_rstr);
+
+  pv = prop_vec_append(pv, p);
+
+
+  // -------------------------------------------------------------------
+  // Metadata source selection
+
+  p = mlv->mlv_source_opt = prop_ref_inc(prop_create_root(NULL));
+
+  prop_set(p, "type",    PROP_SET_STRING, "multiopt");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+
+  prop_link(_p("Metadata source"),
+	    prop_create(prop_create(p, "metadata"), "title"));
+
+  mlv->mlv_source_opt_sub = 
+    prop_subscribe(PROP_SUB_SUBSCRIPTION_MONITOR | PROP_SUB_TRACK_DESTROY,
+		   PROP_TAG_CALLBACK, mlv_sub_source, mlv,
+		   PROP_TAG_COURIER, metadata_courier,
+		   PROP_TAG_ROOT, prop_create(p, "options"),
+		   NULL);
+  mlv->mlv_mlp.mlp_refcount++;
+
+  pv = prop_vec_append(pv, p);
+
+  // -------------------------------------------------------------------
+  // Metadata alternative selection
+
+  p = mlv->mlv_alt_opt = prop_ref_inc(prop_create_root(NULL));
+
+  prop_set(p, "type",    PROP_SET_STRING, "multiopt");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+
+  prop_link(_p("Movie"),
+	    prop_create(prop_create(p, "metadata"), "title"));
+
+  mlv->mlv_alt_opt_sub = 
+    prop_subscribe(PROP_SUB_SUBSCRIPTION_MONITOR | PROP_SUB_TRACK_DESTROY,
+		   PROP_TAG_CALLBACK, mlv_sub_alternative, mlv,
+		   PROP_TAG_COURIER, metadata_courier,
+		   PROP_TAG_ROOT, prop_create(p, "options"),
+		   NULL);
+  mlv->mlv_mlp.mlp_refcount++;
+
+  pv = prop_vec_append(pv, p);
+
+
+
+  // -------------------------------------------------------------------
+  // Metadata search query
+
+  p = mlv->mlv_custom_query_opt = prop_ref_inc(prop_create_root(NULL));
+
+  prop_set(p, "type",    PROP_SET_STRING, "string");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+  prop_set(p, "action",  PROP_SET_STRING, "refreshMetadata");
+  prop_set(p, "value",   PROP_SET_RSTRING, mlv->mlv_custom_query);
+
+  prop_link(_p("Custom search query"),
+	    prop_create(prop_create(p, "metadata"), "title"));
+
+ 
+  mlv->mlv_custom_query_sub = 
+    prop_subscribe(PROP_SUB_TRACK_DESTROY | PROP_SUB_NO_INITIAL_UPDATE,
+		   PROP_TAG_NAME("option", "value"),
+		   PROP_TAG_CALLBACK, mlv_custom_query_cb, mlv,
+		   PROP_TAG_COURIER, metadata_courier,
+		   PROP_TAG_NAMED_ROOT, p, "option",
+		   NULL);
+  mlv->mlv_mlp.mlp_refcount++;
+
+  pv = prop_vec_append(pv, p);
+    
+  // -------------------------------------------------------------------
+  // Metadata refresh
+
+  p = mlv->mlv_refresh_opt = prop_ref_inc(prop_create_root(NULL));
+
+  prop_set(p, "type",    PROP_SET_STRING, "action");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+  prop_set(p, "action",  PROP_SET_STRING, "refreshMetadata");
+
+  prop_link(_p("Refresh metadata"),
+	    prop_create(prop_create(p, "metadata"), "title"));
+
+  mlv->mlv_refresh_sub = 
+    prop_subscribe(PROP_SUB_TRACK_DESTROY,
+		   PROP_TAG_CALLBACK, mlv_sub_actions, mlv,
+		   PROP_TAG_COURIER, metadata_courier,
+		   PROP_TAG_ROOT, mlv->mlv_root,
+		   NULL);
+  mlv->mlv_mlp.mlp_refcount++;
+
+  pv = prop_vec_append(pv, p);
+
+  // -------------------------------------------------------------------
+  // Custom movie title
+
+  p = mlv->mlv_custom_title_opt = prop_ref_inc(prop_create_root(NULL));
+
+  prop_set(p, "type",    PROP_SET_STRING, "string");
+  prop_set(p, "enabled", PROP_SET_INT, 1);
+  prop_set(p, "action",  PROP_SET_STRING, "refreshMetadata");
+  prop_set(p, "value",   PROP_SET_RSTRING, mlv->mlv_custom_title);
+
+  prop_link(_p("Custom title"),
+	    prop_create(prop_create(p, "metadata"), "title"));
+
+  mlv->mlv_custom_title_sub = 
+    prop_subscribe(PROP_SUB_TRACK_DESTROY | PROP_SUB_NO_INITIAL_UPDATE,
+		   PROP_TAG_NAME("option", "value"),
+		   PROP_TAG_CALLBACK, mlv_custom_title_cb, mlv,
+		   PROP_TAG_COURIER, metadata_courier,
+		   PROP_TAG_NAMED_ROOT, p, "option",
+		   NULL);
+
+  mlv->mlv_mlp.mlp_refcount++;
+
+  pv = prop_vec_append(pv, p);
+
+  // Add all options
+
+  prop_t *options = prop_create_r(mlv->mlv_root, "options");
+
+  prop_set_parent_vector(pv, options, NULL, NULL);
+  prop_vec_release(pv);
+
+  prop_ref_dec(options);
+
+}
+
+
+/**
+ *
+ */
+static void
+mlv_options_cb(void *opaque, prop_event_t event, ...)
+{
+  metadata_lazy_video_t *mlv = opaque;
+  va_list ap;
+  va_start(ap, event);
+
+  switch(event) {
+  case PROP_DESTROYED:
+    mlp_destroy(&mlv->mlv_mlp);
+    break;
+
+  case PROP_SUBSCRIPTION_MONITOR_ACTIVE:
+    mlv_add_options(mlv);
+    mlv->mlv_mlp.mlp_refcount--;
+    prop_unsubscribe(mlv->mlv_options_monitor_sub);
+    mlv->mlv_options_monitor_sub = NULL;
+    break;
+
+  default:
+    break;
+  }
+  va_end(ap);
+}
+
+/**
+ *
+ */
 metadata_lazy_video_t *
 metadata_bind_video_info(rstr_t *url, rstr_t *filename,
 			 rstr_t *imdb_id, float duration,
 			 prop_t *root,
 			 rstr_t *folder, int lonely, int passive,
-			 int year, int season, int episode)
+			 int year, int season, int episode,
+                         int manual)
 {
   metadata_lazy_video_t *mlv = mlp_alloc(&mlc_video);
 
@@ -1822,6 +1955,8 @@ metadata_bind_video_info(rstr_t *url, rstr_t *filename,
   mlv->mlv_type = METADATA_TYPE_VIDEO;
   mlv->mlv_lonely = lonely;
   mlv->mlv_passive = passive;
+  mlv->mlv_manual = manual;
+  mlv->mlv_root = prop_ref_inc(root);
   mlv->mlv_m = prop_create_r(root, "metadata");
 
 
@@ -1834,163 +1969,29 @@ metadata_bind_video_info(rstr_t *url, rstr_t *filename,
     mlv->mlv_year = year;
   }
 
+  mlv->mlv_custom_title = metadb_item_get_user_title(rstr_get(mlv->mlv_url));
+  mlv->mlv_custom_query = kv_url_opt_get_rstr(rstr_get(mlv->mlv_url),
+					      KVSTORE_DOMAIN_SYS, 
+					      "metacustomquery");
+
+  hts_mutex_lock(&metadata_mutex);
+
   mlv->mlv_trig_title =
     mlv_sub(mlv, mlv->mlv_m, "title", METADATA_PROP_TITLE);
   mlv->mlv_trig_desc =
     mlv_sub(mlv, mlv->mlv_m, "description", METADATA_PROP_DESCRIPTION);
   mlv->mlv_trig_rating =
     mlv_sub(mlv, mlv->mlv_m, "rating", METADATA_PROP_RATING);
-  
 
-  prop_t *m;
-  prop_vec_t *pv = prop_vec_create(10);
+  mlv->mlv_mlp.mlp_refcount++;
 
-  // Separator
-
-  mlv->mlv_title_opt = prop_ref_inc(prop_create_root(NULL));
-  prop_set_string(prop_create(mlv->mlv_title_opt, "type"), "separator");
-  prop_set_int(prop_create(mlv->mlv_title_opt, "enabled"), 1);
-  m = prop_create(mlv->mlv_title_opt, "metadata");
-  prop_link(_p("Metadata search"), prop_create(m, "title"));
-
-  pv = prop_vec_append(pv, mlv->mlv_title_opt);
-
-  // Info
-
-  mlv->mlv_info = prop_ref_inc(prop_create_root(NULL));
-  prop_set_string(prop_create(mlv->mlv_info, "type"), "info");
-  prop_set_int(prop_create(mlv->mlv_info, "enabled"), 1);
-  mlv->mlv_info_text = prop_create_r(prop_create(mlv->mlv_info, "metadata"),
-				     "title");
-
-  pv = prop_vec_append(pv, mlv->mlv_info);
-
-  // We're gonna start binding stuff now which ties us in
-  // global data structures, so we need to lock
-
-  hts_mutex_lock(&metadata_mutex);
-
-  // Metadata source selection
-
-  mlv->mlv_source_opt = prop_ref_inc(prop_create_root(NULL));
-  prop_set_string(prop_create(mlv->mlv_source_opt, "type"), "multiopt");
-  prop_set_int(prop_create(mlv->mlv_source_opt, "enabled"), 1);
-  m = prop_create(mlv->mlv_source_opt, "metadata");
-  prop_link(_p("Metadata source"), prop_create(m, "title"));
-
-  mlv->mlv_source_opt_sub = 
+  mlv->mlv_options_monitor_sub = 
     prop_subscribe(PROP_SUB_SUBSCRIPTION_MONITOR | PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, mlv_sub_source, mlv,
+		   PROP_TAG_NAME("node", "options"),
+		   PROP_TAG_CALLBACK, mlv_options_cb, mlv,
 		   PROP_TAG_COURIER, metadata_courier,
-		   PROP_TAG_ROOT, prop_create(mlv->mlv_source_opt, "options"),
+		   PROP_TAG_NAMED_ROOT, root, "node",
 		   NULL);
-  mlv->mlv_mlp.mlp_refcount++;
-
-  pv = prop_vec_append(pv, mlv->mlv_source_opt);
-
-  // Metadata alternative selection
-
-  mlv->mlv_alt_opt = prop_ref_inc(prop_create_root(NULL));
-  prop_set_string(prop_create(mlv->mlv_alt_opt, "type"), "multiopt");
-  prop_set_int(prop_create(mlv->mlv_alt_opt, "enabled"), 1);
-  m = prop_create(mlv->mlv_alt_opt, "metadata");
-  prop_link(_p("Movie"), prop_create(m, "title"));
-
-  mlv->mlv_alt_opt_sub = 
-    prop_subscribe(PROP_SUB_SUBSCRIPTION_MONITOR | PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, mlv_sub_alternative, mlv,
-		   PROP_TAG_COURIER, metadata_courier,
-		   PROP_TAG_ROOT, prop_create(mlv->mlv_alt_opt, "options"),
-		   NULL);
-  mlv->mlv_mlp.mlp_refcount++;
-
-  pv = prop_vec_append(pv, mlv->mlv_alt_opt);
-
-
-
-  // Metadata search query
-
-  mlv->mlv_sq = prop_ref_inc(prop_create_root(NULL));
-  prop_set_string(prop_create(mlv->mlv_sq, "type"), "string");
-  prop_set_int(prop_create(mlv->mlv_sq, "enabled"), 1);
-  m = prop_create(mlv->mlv_sq, "metadata");
-  prop_set_string(prop_create(mlv->mlv_sq, "action"), "refreshMetadata");
-  prop_link(_p("Custom search query"), prop_create(m, "title"));
-  prop_t *v = prop_create(mlv->mlv_sq, "value");
-
-  rstr_t *cur = kv_url_opt_get_rstr(rstr_get(url), KVSTORE_DOMAIN_SYS, 
-				    "metacustomquery");
-
-  if(cur != NULL) {
-    prop_set_rstring(v, cur);
-    rstr_release(cur);
-  }
-
-  mlv->mlv_custom_query_sub = 
-    prop_subscribe(PROP_SUB_SUBSCRIPTION_MONITOR | PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, mlv_sub_query, mlv,
-		   PROP_TAG_COURIER, metadata_courier,
-		   PROP_TAG_ROOT, v,
-		   NULL);
-  mlv->mlv_mlp.mlp_refcount++;
-
-  pv = prop_vec_append(pv, mlv->mlv_sq);
-    
-
-  // Metadata refresh
-
-  mlv->mlv_refresh = prop_ref_inc(prop_create_root(NULL));
-  prop_set_string(prop_create(mlv->mlv_refresh, "type"), "action");
-  prop_set_string(prop_create(mlv->mlv_refresh, "action"), "refreshMetadata");
-  prop_set_int(prop_create(mlv->mlv_refresh, "enabled"), 1);
-  m = prop_create(mlv->mlv_refresh, "metadata");
-  prop_link(_p("Refresh metadata"), prop_create(m, "title"));
-
-  mlv->mlv_refresh_sub = 
-    prop_subscribe(PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, mlv_sub_actions, mlv,
-		   PROP_TAG_COURIER, metadata_courier,
-		   PROP_TAG_ROOT, root,
-		   NULL);
-  mlv->mlv_mlp.mlp_refcount++;
-
-  pv = prop_vec_append(pv, mlv->mlv_refresh);
-
-  // Custom movie title
-
-  prop_t *p = prop_create_root(NULL);
-  prop_set_string(prop_create(mlv->mlv_sq, "type"), "string");
-  prop_set_int(prop_create(mlv->mlv_sq, "enabled"), 1);
-  m = prop_create(mlv->mlv_sq, "metadata");
-  prop_set_string(prop_create(mlv->mlv_sq, "action"), "refreshMetadata");
-  prop_link(_p("Custom title"), prop_create(m, "title"));
-  v = prop_create(mlv->mlv_sq, "value");
-
-  cur = metadb_item_get_user_title(rstr_get(url));
-
-  if(cur != NULL) {
-    prop_set_rstring(v, cur);
-    rstr_release(cur);
-  }
-
-  mlv->mlv_custom_title_sub = 
-    prop_subscribe(PROP_SUB_SUBSCRIPTION_MONITOR | PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, mlv_sub_custom_title, mlv,
-		   PROP_TAG_COURIER, metadata_courier,
-		   PROP_TAG_ROOT, v,
-		   NULL);
-  mlv->mlv_mlp.mlp_refcount++;
-
-  pv = prop_vec_append(pv, p);
-
-  // Add all options
-
-  prop_t *options = prop_create_r(root, "options");
-
-  prop_set_parent_vector(pv, options, NULL, NULL);
-  prop_vec_release(pv);
-
-  prop_ref_dec(options);
 
   hts_mutex_unlock(&metadata_mutex);
 
@@ -2006,8 +2007,8 @@ mlv_set_imdb_id(metadata_lazy_video_t *mlv, rstr_t *imdb_id)
 {
   hts_mutex_lock(&metadata_mutex);
   rstr_set(&mlv->mlv_imdb_id, imdb_id);
-  mlp_dequeue(&mlv->mlv_mlp);
-  mlv_load(&mlv->mlv_mlp);
+  mlp_enqueue(&mlv->mlv_mlp);
+  prop_courier_wakeup(metadata_courier);
   hts_mutex_unlock(&metadata_mutex);
 }
 
@@ -2019,8 +2020,8 @@ mlv_set_duration(metadata_lazy_video_t *mlv, float duration)
 {
   hts_mutex_lock(&metadata_mutex);
   mlv->mlv_duration = duration;
-  mlp_dequeue(&mlv->mlv_mlp);
-  mlv_load(&mlv->mlv_mlp);
+  mlp_enqueue(&mlv->mlv_mlp);
+  prop_courier_wakeup(metadata_courier);
   hts_mutex_unlock(&metadata_mutex);
 }
 
@@ -2034,8 +2035,8 @@ mlv_set_lonely(metadata_lazy_video_t *mlv, int lonely)
   hts_mutex_lock(&metadata_mutex);
   if(mlv->mlv_lonely != lonely) {
     mlv->mlv_lonely = lonely;
-    mlp_dequeue(&mlv->mlv_mlp);
-    mlv_load(&mlv->mlv_mlp);
+    mlp_enqueue(&mlv->mlv_mlp);
+    prop_courier_wakeup(metadata_courier);
   }
   hts_mutex_unlock(&metadata_mutex);
 }
@@ -2080,7 +2081,7 @@ metadata_get_video_data(const char *url)
   void *db = metadb_get();
   metadata_t *md;
 
-  int r = metadb_get_videoinfo(db, url, NULL, NULL, &md);
+  int r = metadb_get_videoinfo(db, url, NULL, NULL, &md, 0);
   metadb_close(db);
   if(r)
     return NULL;
@@ -2354,6 +2355,7 @@ metadata_folder_to_season(const char *s,
 	}
 	return 0;
       }
+      hts_regfree(&re);
     }
   }
   return -1;
@@ -2548,9 +2550,13 @@ metadata_add_source(const char *name, const char *description,
 
   prop_tag_set(ms->ms_settings, metadata_courier, ms);
 
-  settings_create_bool(ms->ms_settings, "enabled", _p("Enabled"),
-		       ms->ms_enabled, NULL, ms_set_enable, ms,
-		       0, metadata_courier, NULL, NULL);
+
+  setting_create(SETTING_BOOL, ms->ms_settings, 0,
+                 SETTING_TITLE(_p("Enabled")),
+                 SETTING_COURIER(metadata_courier),
+                 SETTING_CALLBACK(ms_set_enable, ms),
+                 SETTING_VALUE(ms->ms_enabled),
+                 NULL);
 
   ms_set_enable(ms, enabled);
 
@@ -2661,7 +2667,7 @@ add_provider_class(prop_concat_t *pc,
 
   prop_t *n = prop_create(c, "nodes");
 
-  prop_concat_add_source(pc, prop_create(c, "nodes"), d);
+  prop_concat_add_source(pc, n, d);
 
   prop_subscribe(0,
                  PROP_TAG_CALLBACK, provider_class_node_sub, NULL,
@@ -2678,17 +2684,18 @@ static void
 mlp_dispatch(void)
 {
   metadata_lazy_prop_t *mlp;
+  void *db = metadb_get();
   while((mlp = TAILQ_FIRST(&mlpqueue)) != NULL) {
     TAILQ_REMOVE(&mlpqueue, mlp, mlp_link);
     mlp->mlp_queued = 0;
-    mlp->mlp_class->mlc_load(mlp);
+    if(!mlp->mlp_zombie)
+      mlp->mlp_class->mlc_load(db, mlp);
 
-    // This is so lame.
-    // mlc_load should be able to be called unlocked
     hts_mutex_unlock(&metadata_mutex);
     usleep(1);
     hts_mutex_lock(&metadata_mutex);
   }
+  metadb_close(db);
 }
 
 
@@ -2717,6 +2724,9 @@ metadata_thread(void *aux)
 }
 
 
+
+prop_concat_t *metadata_prop_concat;
+
 /**
  *
  */
@@ -2736,7 +2746,7 @@ metadata_init(void)
   
   s = settings_add_dir(NULL, _p("Metadata"), "settings", NULL,
 		       _p("Metadata configuration and provider settings"),
-		       NULL);
+		       "settings:metadata");
 
   pc = prop_concat_create(prop_create(s, "nodes"), 0);
 

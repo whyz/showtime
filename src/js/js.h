@@ -10,6 +10,7 @@
 
 extern prop_courier_t *js_global_pc;
 extern JSContext *js_global_cx;
+struct htsbuf_queue;
 
 LIST_HEAD(js_route_list, js_route);
 LIST_HEAD(js_searcher_list, js_searcher);
@@ -20,6 +21,9 @@ LIST_HEAD(js_setting_group_list, js_setting_group);
 LIST_HEAD(js_event_handler_list, js_event_handler);
 LIST_HEAD(js_subscription_list, js_subscription);
 LIST_HEAD(js_subprovider_list, js_subprovider);
+LIST_HEAD(js_hook_list, js_hook);
+LIST_HEAD(js_faprovider_list, js_faprovider);
+
 
 /**
  *
@@ -41,6 +45,8 @@ typedef struct js_plugin {
   struct js_event_handler_list jsp_event_handlers;
   struct js_subscription_list jsp_subscriptions;
   struct js_subprovider_list jsp_subproviders;
+  struct js_hook_list jsp_hooks;
+  struct js_faprovider_list jsp_faproviders;
 
   struct fa_handle *jsp_ref;
 
@@ -78,11 +84,20 @@ JSBool js_httpGet(JSContext *cx, JSObject *obj, uintN argc,
 JSBool js_httpPost(JSContext *cx, JSObject *obj, uintN argc,
 		   jsval *argv, jsval *rval);
 
+JSBool js_httpReq(JSContext *cx, JSObject *obj, uintN argc,
+		  jsval *argv, jsval *rval);
+
 JSBool js_readFile(JSContext *cx, JSObject *obj, uintN argc,
 		   jsval *argv, jsval *rval);
 
 JSBool js_probe(JSContext *cx, JSObject *obj, uintN argc,
 		jsval *argv, jsval *rval);
+
+JSBool js_basename(JSContext *cx, JSObject *obj, uintN argc,
+                   jsval *argv, jsval *rval);
+
+JSBool js_copyfile(JSContext *cx, JSObject *obj, uintN argc,
+                   jsval *argv, jsval *rval);
 
 JSBool js_addURI(JSContext *cx, JSObject *obj, uintN argc, 
 		 jsval *argv, jsval *rval);
@@ -136,6 +151,10 @@ void js_subscription_flush_from_list(JSContext *cx,
 
 void js_subprovider_flush_from_plugin(JSContext *cx, js_plugin_t *jsp);
 
+void js_faprovider_flush_from_plugin(JSContext *cx, js_plugin_t *jsp);
+
+void js_hook_flush_from_plugin(JSContext *cx, js_plugin_t *jsp);
+
 JSObject *js_object_from_prop(JSContext *cx, prop_t *p);
 
 JSBool js_wait_for_value(JSContext *cx, prop_t *root, const char *subname,
@@ -146,6 +165,9 @@ JSBool js_json_encode(JSContext *cx, JSObject *obj,
 
 JSBool  js_json_decode(JSContext *cx, JSObject *obj,
 		       uintN argc, jsval *argv, jsval *rval);
+
+int js_json_encode_from_object(JSContext *cx, JSObject *obj,
+                               struct htsbuf_queue *out);
 
 JSBool js_cache_put(JSContext *cx, JSObject *obj, uintN argc,
 		    jsval *argv, jsval *rval);
@@ -158,6 +180,9 @@ JSBool js_get_descriptor(JSContext *cx, JSObject *obj, uintN argc,
 
 JSBool js_subscribe_global(JSContext *cx, JSObject *obj, uintN argc,
 			   jsval *argv, jsval *rval);
+
+JSBool js_db_open(JSContext *cx, JSObject *obj, uintN argc,
+                  jsval *argv, jsval *rval);
 
 struct http_auth_req;
 int js_http_auth_try(const char *url, struct http_auth_req *har);
@@ -173,16 +198,25 @@ void js_event_handler_create(JSContext *cx, struct js_event_handler_list *list,
 
 void js_page_init(void);
 
-JSBool js_subscribe(JSContext *cx, uintN argc, 
+JSBool js_subscribe(JSContext *cx, uintN argc,
 		    jsval *argv, jsval *rval, prop_t *root, const char *pname,
 		    struct js_subscription_list *list, prop_courier_t *pc,
-		    int *subsptr);
+                    int (*dtor)(void *aux), void *aux);
 
 JSBool js_is_prop_true(JSContext *cx, JSObject *o, const char *prop);
 
 rstr_t *js_prop_rstr(JSContext *cx, JSObject *o, const char *prop);
 
+JSObject *js_prop_obj(JSContext *cx, JSObject *o, const char *prop);
+
+int js_prop_fn(JSContext *cx, JSObject *o, const char *prop, jsval *ret);
+
 int js_prop_int_or_default(JSContext *cx, JSObject *o, const char *prop, int d);
+
+int js_prop_bool(JSContext *cx, JSObject *o, const char *prop, int d);
+
+int64_t js_prop_int64_or_default(JSContext *cx, JSObject *o, const char *prop,
+                                 int64_t d);
 
 void js_set_prop_str(JSContext *cx, JSObject *o, const char *prop,
 		     const char *str);
@@ -197,12 +231,17 @@ void js_set_prop_dbl(JSContext *cx, JSObject *o, const char *prop, double v);
 void js_set_prop_jsval(JSContext *cx, JSObject *obj, const char *name,
 		       jsval item);
 
-void js_metaprovider_init(void);
+JSObject *js_nav_create(JSContext *cx, prop_t *p);
 
 JSBool js_addsubprovider(JSContext *cx, JSObject *obj, uintN argc, 
 			 jsval *argv, jsval *rval);
 
-struct sub_scanner;
-void js_sub_query(struct sub_scanner *ss);
+JSBool js_addfaprovider(JSContext *cx, JSObject *obj, uintN argc, 
+                        jsval *argv, jsval *rval);
 
-#endif // JS_H__ 
+void js_hook_init(void); // Replace with init helper
+
+JSBool js_addItemHook(JSContext *cx, JSObject *obj, uintN argc,
+                      jsval *argv, jsval *rval);
+
+#endif // JS_H__

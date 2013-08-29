@@ -35,6 +35,8 @@ int utf8_verify(const char *str);
 
 int utf8_put(char *out, int c);
 
+char *utf8_cleanup(const char *str);
+
 const char *mystrstr(const char *haystack, const char *needle);
 
 void strvec_addp(char ***str, const char *v);
@@ -60,8 +62,6 @@ char *url_resolve_relative_from_base(const char *base, const char *url);
 
 
 
-char *utf8_from_bytes(const char *str, int len, const uint16_t *table);
-
 int hexnibble(char c);
 
 void ucs2_to_utf8(uint8_t *dst, size_t dstlen,
@@ -74,10 +74,14 @@ size_t utf8_to_ascii(uint8_t *dst, const char *src);
 void utf16_to_utf8(char **bufp, size_t *lenp);
 
 
-typedef struct {
+typedef struct charset {
   const char *id, *title;
   const uint16_t *ptr;
+  const char **aliases;
 } charset_t;
+
+char *utf8_from_bytes(const char *str, int len, const charset_t *cs,
+		      char *msg, size_t msglen);
 
 const charset_t *charset_get(const char *id);
 
@@ -86,5 +90,9 @@ const charset_t *charset_get_idx(unsigned int i);
 const char *charset_get_name(const void *ptr);
 
 struct rstr *get_random_string(void);
+
+char *lp_get(char **lp);
+
+#define LINEPARSE(out, src) for(char *lp = src, *out; (out = lp_get(&lp)) != NULL; )
 
 #endif

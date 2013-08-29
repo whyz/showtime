@@ -32,17 +32,25 @@
 #include "fa_proto.h"
 #include "showtime.h"
 #include "htsmsg/htsmsg_xml.h"
+#include "htsmsg/htsmsg_store.h"
 #include "misc/str.h"
 #include "misc/sha.h"
+#include "misc/callout.h"
 
 #if ENABLE_SPIDERMONKEY
 #include "js/js.h"
 #endif
 
 #if ENABLE_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #include <openssl/hmac.h>
 #endif
 
+#if ENABLE_POLARSSL
+#include "polarssl/net.h"
+#include "polarssl/havege.h"
+#endif
 
 static uint8_t nonce[20];
 
@@ -157,6 +165,83 @@ typedef struct http_connection {
 /**
  *
  */
+typedef struct http_file {
+  fa_handle_t h;
+
+  http_connection_t *hf_connection;
+
+  char *hf_url;
+  char *hf_auth;
+  char *hf_location;
+  char *hf_auth_realm;
+
+
+  char hf_authurl[128];
+  char hf_path[URL_MAX];
+
+  int hf_chunk_size;
+
+  int64_t hf_rsize; /* Size of reply, if chunked: don't care about this */
+
+  int64_t hf_filesize; /* -1 if filesize can not be determined */
+  int64_t hf_pos;
+
+  int64_t hf_consecutive_read;
+
+  char *hf_content_type;
+
+  /* The negotiated connection mode (ie, what the server replied with) */
+  enum {
+    CONNECTION_MODE_PERSISTENT,
+    CONNECTION_MODE_CLOSE,
+  } hf_connection_mode;
+
+  time_t hf_mtime;
+
+  char hf_chunked_transfer;
+  char hf_isdir;
+
+  char hf_auth_failed;
+  
+
+  char hf_debug;
+
+  char hf_no_ranges; // Server does not accept range queries
+
+  char hf_want_close;
+
+  char hf_accept_ranges;
+
+  char hf_version;
+
+  char hf_streaming; /* Optimize for streaming from start to end
+		      * rather than random seeking 
+		      */
+
+  char hf_fast_fail;
+
+  char hf_req_compression;
+  
+  char hf_content_encoding;
+#define HTTP_CE_IDENTITY 0
+#define HTTP_CE_GZIP 1
+
+  int hf_max_age;
+
+  prop_t *hf_stats_speed;
+
+#define STAT_VEC_SIZE 20
+  int hf_stats[STAT_VEC_SIZE];
+  int hf_stats_ptr;
+  int hf_num_stats;
+  char hf_line[4096];
+
+} http_file_t;
+
+
+/**
+ *
+ */
 static void
 http_connection_destroy(http_connection_t *hc, int dbg, const char *reason)
 {
@@ -173,7 +258,7 @@ http_connection_destroy(http_connection_t *hc, int dbg, const char *reason)
  */
 static http_connection_t *
 http_connection_get(const char *hostname, int port, int ssl,
-		    char *errbuf, int errlen, int dbg)
+		    char *errbuf, int errlen, int dbg, int timeout)
 {
   http_connection_t *hc, *next;
   tcpcon_t *tc;
@@ -209,7 +294,7 @@ http_connection_get(const char *hostname, int port, int ssl,
   id = ++http_connection_tally;
   hts_mutex_unlock(&http_connections_mutex);
 
-  if((tc = tcp_connect(hostname, port, errbuf, errlen, 30000, ssl)) == NULL) {
+  if((tc = tcp_connect(hostname, port, errbuf, errlen, timeout, ssl)) == NULL) {
     HTTP_TRACE(dbg, "Connection to %s:%d failed", hostname, port);
     return NULL;
   }
@@ -351,7 +436,7 @@ validate_cookie(const char *req_host, const char *req_path,
    * URI.
    */
    if(strncmp(req_path, path, strlen(path)))
-    return 0;
+    return 1;
 
   /*
    * The value for the Domain attribute contains no embedded dots or
@@ -361,7 +446,7 @@ validate_cookie(const char *req_host, const char *req_path,
 
   if(strcmp(domain, req_host))
     if(*domain != '.' || strchr(domain + 1, '.') == NULL)
-      return 0;
+      return 2;
 
   /*
    * The value for the request-host does not domain-match the Domain
@@ -369,7 +454,7 @@ validate_cookie(const char *req_host, const char *req_path,
    */
   const char *s = strstr(req_host, domain);
   if(s == NULL || s[strlen(domain)] != 0)
-    return 0;
+    return 3;
 
   /*
    * The request-host is a FQDN (not IP address) and has the form HD,
@@ -379,17 +464,92 @@ validate_cookie(const char *req_host, const char *req_path,
 
   for(x = req_host; x != s; x++) {
     if(*x == '.')
-      return 0;
+      return 4;
   }
-  return 1;
+  return 0;
 }
+
 
 /**
  *
  */
 static void
-http_cookie_set(char *cookie, const char *req_host, const char *req_path)
+cookie_persist(struct callout *c, void *aux)
 {
+  http_cookie_t *hc;
+  time_t now;
+  time(&now);
+
+  htsmsg_t *m = htsmsg_create_list();
+
+  hts_mutex_lock(&http_cookies_mutex);
+  LIST_FOREACH(hc, &http_cookies, hc_link) {
+    if(hc->hc_expire == -1 || now > hc->hc_expire)
+      continue;
+
+    htsmsg_t *c = htsmsg_create_map();
+    htsmsg_add_str(c, "name", hc->hc_name);
+    htsmsg_add_str(c, "path", hc->hc_path);
+    htsmsg_add_str(c, "domain", hc->hc_domain);
+    htsmsg_add_str(c, "value", hc->hc_value);
+    htsmsg_add_s32(c, "expire", hc->hc_expire);
+    htsmsg_add_msg(m, NULL, c);
+  }
+  hts_mutex_unlock(&http_cookies_mutex);
+  htsmsg_store_save(m, "httpcookies", NULL);
+  htsmsg_destroy(m);
+}
+
+
+/**
+ *
+ */
+static void
+load_cookies(void)
+{
+  htsmsg_t *m = htsmsg_store_load("httpcookies");
+  if(m == NULL)
+    return;
+  htsmsg_field_t *f;
+  time_t now;
+  time(&now);
+  HTSMSG_FOREACH(f, m) {
+    htsmsg_t *o;
+    if((o = htsmsg_get_map_by_field(f)) == NULL)
+      continue;
+
+    const char *name   = htsmsg_get_str(o, "name");
+    const char *path   = htsmsg_get_str(o, "path");
+    const char *domain = htsmsg_get_str(o, "domain");
+    const char *value  = htsmsg_get_str(o, "value");
+    time_t expire      = htsmsg_get_s32_or_default(o, "expire", -1);
+
+    if(name == NULL || path == NULL || domain == NULL ||
+       value == NULL || expire < now)
+      continue;
+
+    http_cookie_t *hc = calloc(1, sizeof(http_cookie_t));
+    LIST_INSERT_HEAD(&http_cookies, hc, hc_link);
+    hc->hc_name   = strdup(name);
+    hc->hc_path   = strdup(path);
+    hc->hc_domain = strdup(domain);
+    hc->hc_value  = strdup(value);
+    hc->hc_expire = expire;
+  }
+  htsmsg_destroy(m);
+}
+
+
+/**
+ *
+ */
+static void
+http_cookie_set(char *cookie, http_file_t *hf)
+{
+  static callout_t cookie_persist_timer;
+
+  const char *req_host = hf->hf_connection->hc_hostname;
+  const char *req_path = hf->hf_path;
   char *argv[20];
   int argc, i;
   const char *domain = req_host;
@@ -400,13 +560,17 @@ http_cookie_set(char *cookie, const char *req_host, const char *req_path)
   http_cookie_t *hc;
 
   argc = http_tokenize(cookie, argv, 20, ';');
-  if(argc == 0)
+  if(argc == 0) {
+    HF_TRACE(hf, "Ignoring malformed cookie");
     return;
+  }
 
   name = argv[0];
   value = strchr(name, '=');
-  if(value == NULL)
+  if(value == NULL) {
+    HF_TRACE(hf, "Ignoring malformed cookie, no value");
     return;
+  }
   *value = 0;
   value++;
 
@@ -422,8 +586,16 @@ http_cookie_set(char *cookie, const char *req_host, const char *req_path)
     }
   }
 
-  if(!validate_cookie(req_host, req_path, domain, path))
+  int r;
+  if((r = validate_cookie(req_host, req_path, domain, path))) {
+    HF_TRACE(hf, "Rejected cookie name=%s path=%s domain=%s value=%s error=%d",
+             name, path, domain, value, r);
     return;
+  }
+
+  HF_TRACE(hf, "Updating cookie name=%s path=%s domain=%s value=%s expires in %d seconds",
+           name, path, domain, value,
+           expire > 0 ? ((int)expire - time(NULL)) : -1);
 
   hts_mutex_lock(&http_cookies_mutex);
 
@@ -441,7 +613,10 @@ http_cookie_set(char *cookie, const char *req_host, const char *req_path)
     hc->hc_path = strdup(path);
     hc->hc_domain = strdup(domain);
   }
-  
+
+  if(expire != -1)
+    callout_arm(&cookie_persist_timer, cookie_persist, NULL, 5);
+
   mystrset(&hc->hc_value, value);
   hc->hc_expire = expire;
 
@@ -459,12 +634,19 @@ http_cookie_append(const char *req_host, const char *req_path,
   http_cookie_t *hc;
   htsbuf_queue_t hq;
   const char *s = "";
+  time_t now;
+  time(&now);
+
   htsbuf_queue_init(&hq, 0);
 
   hts_mutex_lock(&http_cookies_mutex);
   LIST_FOREACH(hc, &http_cookies, hc_link) {
-    if(!validate_cookie(req_host, req_path, hc->hc_domain, hc->hc_path))
+    if(hc->hc_expire != -1 && now > hc->hc_expire)
       continue;
+
+    if(validate_cookie(req_host, req_path, hc->hc_domain, hc->hc_path))
+      continue;
+
     htsbuf_append(&hq, s, strlen(s));
     htsbuf_append(&hq, hc->hc_name, strlen(hc->hc_name));
     htsbuf_append(&hq, "=", 1);
@@ -481,80 +663,6 @@ http_cookie_append(const char *req_host, const char *req_path,
 }
 
 
-
-/**
- *
- */
-typedef struct http_file {
-  fa_handle_t h;
-
-  http_connection_t *hf_connection;
-
-  char *hf_url;
-  char *hf_auth;
-  char *hf_location;
-  char *hf_auth_realm;
-
-
-  char hf_authurl[128];
-  char hf_path[URL_MAX];
-
-  int hf_chunk_size;
-
-  int64_t hf_rsize; /* Size of reply, if chunked: don't care about this */
-
-  int64_t hf_filesize; /* -1 if filesize can not be determined */
-  int64_t hf_pos;
-
-  int64_t hf_consecutive_read;
-
-  char *hf_content_type;
-
-  /* The negotiated connection mode (ie, what the server replied with) */
-  enum {
-    CONNECTION_MODE_PERSISTENT,
-    CONNECTION_MODE_CLOSE,
-  } hf_connection_mode;
-
-  time_t hf_mtime;
-
-  char hf_chunked_transfer;
-  char hf_isdir;
-
-  char hf_auth_failed;
-  
-
-  char hf_debug;
-
-  char hf_no_ranges; // Server does not accept range queries
-
-  char hf_want_close;
-
-  char hf_accept_ranges;
-
-  char hf_version;
-
-  char hf_streaming; /* Optimize for streaming from start to end
-		      * rather than random seeking 
-		      */
-
-  char hf_req_compression;
-  
-  char hf_content_encoding;
-#define HTTP_CE_IDENTITY 0
-#define HTTP_CE_GZIP 1
-
-  int hf_max_age;
-
-  prop_t *hf_stats_speed;
-
-#define STAT_VEC_SIZE 20
-  int hf_stats[STAT_VEC_SIZE];
-  int hf_stats_ptr;
-  int hf_num_stats;
-  char hf_line[4096];
-
-} http_file_t;
 
 
 static void http_detach(http_file_t *hf, int reusable, const char *reason);
@@ -640,6 +748,9 @@ struct http_auth_req {
   const char **har_parameters;
   const http_file_t *har_hf;
   struct http_header_list *har_headers;
+  char *har_errbuf;
+  size_t har_errlen;
+  int har_force_fail;
 
 } http_auth_req_t;
 
@@ -825,6 +936,17 @@ http_client_set_header(struct http_auth_req *har, const char *key,
 /**
  *
  */
+void
+http_client_fail_req(struct http_auth_req *har, const char *reason)
+{
+  snprintf(har->har_errbuf, har->har_errlen, "%s", reason);
+  har->har_force_fail = 1;
+}
+
+
+/**
+ *
+ */
 static void
 http_send_verb(htsbuf_queue_t *q, http_file_t *hf, const char *method)
 {
@@ -855,7 +977,7 @@ http_headers_init(struct http_header_list *l, const http_file_t *hf)
 
   LIST_INIT(l);
 
-  if(hc->hc_port != 80 && 0) {
+  if(hc->hc_port != 80 && hc->hc_port != 443) {
     snprintf(str, sizeof(str), "%s:%d", hc->hc_hostname, hc->hc_port);
     http_header_add(l, "Host", str, 0);
   } else {
@@ -881,12 +1003,16 @@ http_headers_init(struct http_header_list *l, const http_file_t *hf)
  */
 static void
 http_headers_send(htsbuf_queue_t *q, struct http_header_list *def,
-		  const struct http_header_list *user)
+		  const struct http_header_list *user1,
+		  const struct http_header_list *user2)
 {
   http_header_t *hh;
 
-  if(user != NULL)
-    http_header_merge(def, user);
+  if(user1 != NULL)
+    http_header_merge(def, user1);
+
+  if(user2 != NULL)
+    http_header_merge(def, user2);
 
   LIST_FOREACH(hh, def, hh_link)
     htsbuf_qprintf(q, "%s: %s\r\n", hh->hh_key, hh->hh_value);
@@ -899,9 +1025,11 @@ http_headers_send(htsbuf_queue_t *q, struct http_header_list *def,
 /**
  *
  */
-static void
+static int
+  __attribute__ ((warn_unused_result))
 http_headers_auth(struct http_header_list *headers, http_file_t *hf,
-		  const char *method, const char **parameters)
+		  const char *method, const char **parameters,
+                  char *errbuf, size_t errlen)
 {
   http_auth_cache_t *hac;
   const char *hostname = hf->hf_connection->hc_hostname;
@@ -914,14 +1042,21 @@ http_headers_auth(struct http_header_list *headers, http_file_t *hf,
   har.har_parameters = parameters;
   har.har_headers = headers;
   har.har_hf = hf;
+  har.har_errbuf = errbuf;
+  har.har_errlen = errlen;
+  har.har_force_fail = 0;
 
-  if(!js_http_auth_try(hf->hf_url, &har))
-    return;
+  if(!js_http_auth_try(hf->hf_url, &har)) {
+    if(har.har_force_fail)
+      return 1;
+    return 0;
+  }
+
 #endif
 
   if(hf->hf_auth != NULL) {
     http_header_add(headers, "Authorization", hf->hf_auth, 0);
-    return;
+    return 0;
   }
 
   hts_mutex_lock(&http_auth_caches_mutex);
@@ -933,6 +1068,7 @@ http_headers_auth(struct http_header_list *headers, http_file_t *hf,
     }
   }
   hts_mutex_unlock(&http_auth_caches_mutex);
+  return 0;
 }
 
 
@@ -1190,11 +1326,8 @@ http_read_response(http_file_t *hf, struct http_header_list *headers)
     if(!strcasecmp(argv[0], "Content-Encoding")) {
       if(!strcasecmp(argv[1], "gzip"))
 	hf->hf_content_encoding = HTTP_CE_GZIP;
-      else if(!strcasecmp(argv[1], "identity") ||
-	      !strcasecmp(argv[1], "utf-8"))
-	hf->hf_content_encoding = HTTP_CE_IDENTITY;
       else
-	return -1;
+	hf->hf_content_encoding = HTTP_CE_IDENTITY;
     }
     if(!strcasecmp(argv[0], "Content-Length")) {
       i64 = strtoll(argv[1], NULL, 0);
@@ -1228,7 +1361,7 @@ http_read_response(http_file_t *hf, struct http_header_list *headers)
     }
 
     if(!strcasecmp(argv[0], "Set-Cookie"))
-      http_cookie_set(argv[1], hf->hf_connection->hc_hostname, hf->hf_path);
+      http_cookie_set(argv[1], hf);
   }
 
   if(code >= 200 && code < 400) {
@@ -1278,20 +1411,22 @@ redirect(http_file_t *hf, int *redircount, char *errbuf, size_t errlen,
     return -1;
   }
 
-  if(code == 301)
-    add_premanent_redirect(hf->hf_url, hf->hf_location);
-
   HF_TRACE(hf, "%s: Following redirect to %s%s", hf->hf_url, hf->hf_location,
 	   code == 301 ? ", (premanent)" : "");
 
-  free(hf->hf_url);
   
   const http_connection_t *hc = hf->hf_connection;
 
-  hf->hf_url = 
+  char *newurl =
     url_resolve_relative(hc->hc_ssl ? "https" : "http",
 			 hc->hc_hostname, hc->hc_port,
 			 hf->hf_path, hf->hf_location);
+
+  if(code == 301)
+    add_premanent_redirect(hf->hf_url, newurl);
+
+  free(hf->hf_url);
+  hf->hf_url = newurl;
 
   free(hf->hf_location);
   hf->hf_location = NULL;
@@ -1420,8 +1555,13 @@ http_connect(http_file_t *hf, char *errbuf, int errlen)
   if(!hf->hf_path[0])
     strcpy(hf->hf_path, "/");
 
+  int timeout = 30000;
+
+  if(hf->hf_fast_fail)
+    timeout = 2000;
+
   hf->hf_connection = http_connection_get(hostname, port, ssl, errbuf, errlen,
-					  hf->hf_debug);
+					  hf->hf_debug, timeout);
 
   return hf->hf_connection ? 0 : -1;
 }
@@ -1465,19 +1605,22 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
   if(hf->hf_streaming) {
     http_send_verb(&q, hf, "GET");
-    http_headers_auth(&headers, hf, "GET", NULL);
+    if(http_headers_auth(&headers, hf, "GET", NULL, errbuf, errlen))
+      return -1;
     tcp_huge_buffer(hf->hf_connection->hc_tc);
   } else if(nohead) {
     http_send_verb(&q, hf, "GET");
     htsbuf_qprintf(&q, "Range: bytes=0-1\r\n");
-    http_headers_auth(&headers, hf, "GET", NULL);
+    if(http_headers_auth(&headers, hf, "GET", NULL, errbuf, errlen))
+      return -1;
   } else {
     http_send_verb(&q, hf, "HEAD");
-    http_headers_auth(&headers, hf, "HEAD", NULL);
+    if(http_headers_auth(&headers, hf, "HEAD", NULL, errbuf, errlen))
+      return -1;
   }
 
   http_cookie_append(hf->hf_connection->hc_hostname, hf->hf_path, &headers);
-  http_headers_send(&q, &headers, NULL);
+  http_headers_send(&q, &headers, NULL, NULL);
 
 
   if(hf->hf_debug)
@@ -1721,9 +1864,10 @@ again:
   http_send_verb(&q, hf, "GET");
 
   http_headers_init(&headers, hf);
-  http_headers_auth(&headers, hf, "GET", NULL);
+  if(http_headers_auth(&headers, hf, "GET", NULL, errbuf, errlen))
+    return -1;
   http_cookie_append(hf->hf_connection->hc_hostname, hf->hf_path, &headers);
-  http_headers_send(&q, &headers, NULL);
+  http_headers_send(&q, &headers, NULL, NULL);
 
   tcp_write_queue(hf->hf_connection->hc_tc, &q);
   code = http_read_response(hf, NULL);
@@ -1771,7 +1915,8 @@ again:
  *
  */
 static int
-http_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
+http_scandir(fa_protocol_t *fap, fa_dir_t *fd, const char *url,
+             char *errbuf, size_t errlen)
 {
   int retval;
   http_file_t *hf = calloc(1, sizeof(http_file_t));
@@ -1795,7 +1940,7 @@ http_open_ex(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
   hf->hf_url = strdup(url);
   hf->hf_debug = !!(flags & FA_DEBUG) || gconf.enable_http_debug;
   hf->hf_streaming = !!(flags & FA_STREAMING);
-
+  hf->hf_fast_fail = !!(flags & FA_FAST_FAIL);
   if(stats != NULL) {
     hf->hf_stats_speed = prop_ref_inc(prop_create(stats, "bitrate"));
     prop_set_int(prop_create(stats, "bitrateValid"), 1);
@@ -1853,7 +1998,7 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
   size_t totsize = 0; // Total data read
   size_t read_size;   // Amount of bytes to read in one round
   struct http_header_list headers;
-
+  char errbuf[512];
   if(size == 0)
     return 0;
 
@@ -1890,7 +2035,10 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
       http_send_verb(&q, hf, "GET");
 
       http_headers_init(&headers, hf);
-      http_headers_auth(&headers, hf, "GET", NULL);
+      if(http_headers_auth(&headers, hf, "GET", NULL, errbuf, sizeof(errbuf))) {
+        http_detach(hf, 0, errbuf);
+        return -1;
+      }
 
       char range[100];
 
@@ -1918,7 +2066,7 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
 	htsbuf_qprintf(&q, "Range: %s\r\n", range);
 
       http_cookie_append(hc->hc_hostname, hf->hf_path, &headers);
-      http_headers_send(&q, &headers, NULL);
+      http_headers_send(&q, &headers, NULL, NULL);
       if(hf->hf_debug)
 	htsbuf_hexdump(&q, "HTTP");
 
@@ -2193,10 +2341,15 @@ http_load(struct fa_protocol *fap, const char *url,
     http_header_add(&headers_in, "If-None-Match", *etag, 0);
   }
 
-  err = http_request(url, NULL, &b, errbuf, errlen, NULL, NULL,
-		     flags,
-		     &headers_out, &headers_in, NULL,
-		     cb, opaque);
+  err = http_req(url,
+                 HTTP_RESULT_PTR(&b),
+                 HTTP_ERRBUF(errbuf, errlen),
+                 HTTP_FLAGS(flags),
+                 HTTP_RESPONSE_HEADERS(&headers_out),
+                 HTTP_REQUEST_HEADERS(&headers_in),
+                 HTTP_PROGRESS_CALLBACK(cb, opaque),
+                 NULL);
+
   if(err == -1) {
     b = NULL;
     goto done;
@@ -2206,6 +2359,10 @@ http_load(struct fa_protocol *fap, const char *url,
     b = NOT_MODIFIED;
     goto done;
   }
+
+  s = http_header_get(&headers_out, "content-type");
+  if(s != NULL && b != NULL)
+    b->b_content_type = rstr_alloc(s);
 
   if(mtime != NULL) {
     *mtime = 0;
@@ -2305,6 +2462,7 @@ http_init(void)
   hts_mutex_init(&http_cookies_mutex);
   hts_mutex_init(&http_server_quirk_mutex);
   hts_mutex_init(&http_auth_caches_mutex);
+  load_cookies();
 }
 
 /**
@@ -2333,7 +2491,6 @@ FAP_REGISTER(http);
  *
  */
 static fa_protocol_t fa_protocol_https = {
-  .fap_init  = http_init,
   .fap_flags = FAP_INCLUDE_PROTO_IN_URL | FAP_ALLOW_CACHE,
   .fap_name  = "https",
   .fap_scan  = http_scandir,
@@ -2554,9 +2711,11 @@ dav_propfind(http_file_t *hf, fa_dir_t *fd, char *errbuf, size_t errlen,
 		   hf->hf_version,
 		   fd != NULL ? 1 : 0);
 
-    http_headers_auth(&headers, hf, "PROPFIND", NULL);
+    if(http_headers_auth(&headers, hf, "PROPFIND", NULL, errbuf, errlen))
+      return -1;
+
     http_cookie_append(hf->hf_connection->hc_hostname, hf->hf_path, &headers);
-    http_headers_send(&q, &headers, NULL);
+    http_headers_send(&q, &headers, NULL, NULL);
 
     tcp_write_queue(hf->hf_connection->hc_tc, &q);
     code = http_read_response(hf, NULL);
@@ -2649,7 +2808,8 @@ dav_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
  *
  */
 static int
-dav_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
+dav_scandir(fa_protocol_t *fap, fa_dir_t *fd, const char *url,
+            char *errbuf, size_t errlen)
 {
   int retval;
   http_file_t *hf = calloc(1, sizeof(http_file_t));
@@ -2702,11 +2862,28 @@ static fa_protocol_t fa_protocol_webdavs = {
 FAP_REGISTER(webdavs);
 
 
+#define HTTP_TMP_SIZE 16384
 
 typedef struct http_read_aux {
   size_t total;
+  int64_t bytes_completed;
   fa_load_cb_t *cb;
   void *opaque;
+  char *tmpbuf;
+  char *errbuf;
+  size_t errlen;
+
+  int (*encoded_data)(http_file_t *hf, struct http_read_aux *hra,
+                      const void *data, int size);
+
+  int (*decoded_data)(http_file_t *hf, struct http_read_aux *hra,
+                      const void *data, int size);
+  z_stream zstream;
+
+  void *decoded_opaque;
+
+  void (*decoded_cleanup)(struct http_read_aux *hra);
+
 } http_read_aux_t;
 
 /**
@@ -2717,32 +2894,327 @@ http_request_partial(void *opaque, int amount)
 {
   http_read_aux_t *hra = opaque;
 
+  amount += hra->bytes_completed;
   if(hra->cb != NULL)
     return hra->cb(hra->opaque, amount, hra->total);
   return 0;
 }
 
+
+/**
+ *
+ */
+struct http_req_xarg {
+  TAILQ_ENTRY(http_req_xarg) link;
+  const char *hdr;
+  const char *val;
+};
+
+
+/**
+ *
+ */
+static int
+append_buf(http_file_t *hf, struct http_read_aux *hra,
+           const void *data, int size)
+{
+  buf_t *b = hra->decoded_opaque;
+  char *tmp = myrealloc(b->b_ptr, b->b_size + size + 1);
+  if(tmp == NULL) {
+    free(b->b_ptr);
+    snprintf(hra->errbuf, hra->errlen, "out of memory");
+    return -1;
+  }
+
+  b->b_ptr = tmp;
+  memcpy(b->b_ptr + b->b_size, data, size);
+  b->b_size += size;
+  tmp[b->b_size] = 0;
+  return 0;
+}
+
+
+/**
+ *
+ */
+static void
+cleanup_buf(struct http_read_aux *hra)
+{
+  buf_release(hra->decoded_opaque);
+}
+
+
+/**
+ *
+ */
+static int
+append_waste(http_file_t *hf, struct http_read_aux *hra,
+	     const void *data, int size)
+{
+  return 0;
+}
+
+
+/**
+ *
+ */
+static int
+append_gzip(http_file_t *hf, struct http_read_aux *hra,
+            const void *data, int size)
+{
+  z_stream *z = &hra->zstream;
+  char tmp[8192];
+  int zr;
+
+  if(size == 0) {
+    // EOF
+    assert(z->avail_in == 0);
+
+    while(1) {
+      z->next_out = (void *)tmp;
+      z->avail_out = sizeof(tmp);
+
+      zr = inflate(z, Z_FINISH);
+      if(zr < 0) {
+        snprintf(hra->errbuf, hra->errlen, "zlib error %d", zr);
+        return -1;
+      }
+      if(zr == Z_STREAM_END)
+        return hra->decoded_data(hf, hra, NULL, 0);
+
+      if(hra->decoded_data(hf, hra, tmp, sizeof(tmp) - z->avail_out))
+        return -1;
+    }
+  }
+
+  z->next_in = (void *)data;
+  z->avail_in = size;
+
+  while(z->avail_in) {
+    z->next_out = (void *)tmp;
+    z->avail_out = sizeof(tmp);
+
+    zr = inflate(z, Z_NO_FLUSH);
+    if(zr < 0) {
+      snprintf(hra->errbuf, hra->errlen, "zlib error %d", zr);
+      return -1;
+    }
+    if(hra->decoded_data(hf, hra, tmp, sizeof(tmp) - z->avail_out))
+      return -1;
+  }
+  return 0;
+}
+
+
+/**
+ *
+ */
+static int
+http_recv_chunked(http_file_t *hf, http_read_aux_t *hra)
+{
+  char chunkheader[100];
+  http_connection_t *hc = hf->hf_connection;
+
+  while(1) {
+    int remain;
+    if(tcp_read_line(hc->hc_tc, chunkheader, sizeof(chunkheader)) < 0)
+      return -2;
+
+    remain = strtol(chunkheader, NULL, 16);
+    if(remain == 0)
+      break;
+
+    while(remain > 0) {
+      int rsize = MIN(remain, HTTP_TMP_SIZE);
+      if(tcp_read_data(hc->hc_tc, hra->tmpbuf, rsize,
+                       http_request_partial, hra))
+        return -2;
+
+      if(hra->encoded_data(hf, hra, hra->tmpbuf, rsize))
+        return -1;
+
+      hra->bytes_completed += rsize;
+
+      remain -= rsize;
+    }
+
+    if(tcp_read_data(hc->hc_tc, chunkheader, 2, NULL, 0))
+      return -2;
+  }
+  hf->hf_rsize = 0;
+  return hra->encoded_data(hf, hra, NULL, 0);
+}
+
+
+/**
+ *
+ */
+static int
+http_recv_until_eof(http_file_t *hf, http_read_aux_t *hra)
+{
+  http_connection_t *hc = hf->hf_connection;
+
+  while(1) {
+    int r = tcp_read_data_nowait(hc->hc_tc, hra->tmpbuf, HTTP_TMP_SIZE);
+    if(r < 0)
+      break;
+
+    if(hra->encoded_data(hf, hra, hra->tmpbuf, r))
+      return -1;
+    hra->bytes_completed += r;
+  }
+  return hra->encoded_data(hf, hra, NULL, 0);
+}
+
+
+/**
+ *
+ */
+static int
+http_recv(http_file_t *hf, http_read_aux_t *hra)
+{
+  http_connection_t *hc = hf->hf_connection;
+  int64_t remain = hf->hf_rsize;
+
+  while(remain > 0) {
+    int rsize = MIN(remain, HTTP_TMP_SIZE);
+
+    if(tcp_read_data(hc->hc_tc, hra->tmpbuf, rsize,
+                     http_request_partial, hra))
+      return -2;
+
+    if(hra->encoded_data(hf, hra, hra->tmpbuf, rsize))
+      return -1;
+
+    hra->bytes_completed += rsize;
+
+    remain -= rsize;
+  }
+  hf->hf_rsize = 0;
+  return hra->encoded_data(hf, hra, hra->tmpbuf, 0);
+}
+
+
 /**
  *
  */
 int
-http_request(const char *url, const char **arguments, 
-             buf_t **result,
-	     char *errbuf, size_t errlen,
-	     htsbuf_queue_t *postdata, const char *postcontenttype,
-	     int flags, struct http_header_list *headers_out,
-	     const struct http_header_list *headers_in, const char *method,
-	     fa_load_cb_t *cb, void *opaque)
+http_req(const char *url, ...)
 {
   http_file_t *hf = calloc(1, sizeof(http_file_t));
   htsbuf_queue_t q;
-  int code, r;
+  int code, r = -1;
   int redircount = 0;
   struct http_header_list headers;
-  http_read_aux_t hra;
+  http_read_aux_t hra = {0};
+  int tag;
 
-  hra.cb = cb;
-  hra.opaque = opaque;
+  int flags = 0;
+  char *errbuf = NULL;
+  size_t errlen = 0;
+  const char *method = NULL;
+  htsbuf_queue_t *postdata = NULL;
+  const char *postcontenttype = NULL;
+  const char **arguments = NULL;
+  struct http_header_list *headers_out = NULL;
+  const struct http_header_list *headers_in = NULL;
+  struct http_header_list headers_in2;
+  const char *key, *value;
+  struct http_req_xarg *hrx;
+  char tmpbuf[32];
+
+  TAILQ_HEAD(, http_req_xarg) xargs;
+  TAILQ_INIT(&xargs);
+  LIST_INIT(&headers_in2);
+
+  va_list ap;
+  va_start(ap, url);
+
+  int want_result = 0;
+
+  hra.decoded_data = append_waste;
+
+  while((tag = va_arg(ap, int)) != 0) {
+    switch(tag) {
+    case HTTP_TAG_ARG:
+      hrx = alloca(sizeof(struct http_req_xarg));
+      hrx->hdr = va_arg(ap, const char *);
+      hrx->val = va_arg(ap, const char *);
+      if(hrx->hdr != NULL && hrx->val != NULL)
+        TAILQ_INSERT_TAIL(&xargs, hrx, link);
+      break;
+
+    case HTTP_TAG_ARGINT:
+      hrx = alloca(sizeof(struct http_req_xarg));
+      hrx->hdr = va_arg(ap, const char *);
+      snprintf(tmpbuf, sizeof(tmpbuf), "%d", va_arg(ap, int));
+      hrx->val = mystrdupa(tmpbuf);
+      TAILQ_INSERT_TAIL(&xargs, hrx, link);
+      break;
+
+    case HTTP_TAG_ARGLIST:
+      arguments = va_arg(ap, const char **);
+      break;
+
+    case HTTP_TAG_RESULT_PTR:
+      assert(hra.decoded_opaque == NULL);
+      assert(want_result == 0);
+      buf_t **ptr = va_arg(ap, buf_t **);
+      if(ptr == NULL)
+	break;
+
+      hra.decoded_opaque = calloc(1, sizeof(buf_t));
+      *ptr = hra.decoded_opaque;
+      hra.decoded_data = append_buf;
+      hra.decoded_cleanup = cleanup_buf;
+      buf_t *b = hra.decoded_opaque;
+      b->b_refcount = 1;
+      b->b_free = &free;
+      want_result = 1;
+      break;
+
+    case HTTP_TAG_ERRBUF:
+      errbuf = va_arg(ap, char *);
+      errlen = va_arg(ap, size_t);
+      break;
+
+    case HTTP_TAG_POSTDATA:
+      postdata = va_arg(ap, htsbuf_queue_t *);
+      postcontenttype = va_arg(ap, const char *);
+      break;
+
+    case HTTP_TAG_FLAGS:
+      flags = va_arg(ap, int);
+      break;
+
+    case HTTP_TAG_REQUEST_HEADER:
+      key = va_arg(ap, const char *);
+      value = va_arg(ap, const char *);
+      if(key != NULL && value != NULL)
+        http_header_add(&headers_in2, key, value, 1);
+      break;
+
+    case HTTP_TAG_REQUEST_HEADERS:
+      headers_in = va_arg(ap, const struct http_header_list *);
+      break;
+
+    case HTTP_TAG_RESPONSE_HEADERS:
+      headers_out = va_arg(ap, struct http_header_list *);
+      break;
+
+    case HTTP_TAG_METHOD:
+      method = va_arg(ap, const char *);
+      break;
+
+    case HTTP_TAG_PROGRESS_CALLBACK:
+      hra.cb = va_arg(ap, fa_load_cb_t *);
+      hra.opaque = va_arg(ap, void *);
+      break;
+
+    default:
+      abort();
+    }
+  }
 
   if(headers_out != NULL)
     LIST_INIT(headers_out);
@@ -2753,27 +3225,27 @@ http_request(const char *url, const char **arguments,
 
  retry:
 
-  http_connect(hf, errbuf, errlen);
+  hra.errbuf = errbuf;
+  hra.errlen = errlen;
 
-  if(hf->hf_connection == NULL) {
-    http_destroy(hf);
-    http_headers_free(headers_out);
-    return -1;
-  }
+  http_connect(hf, errbuf, errlen);
+  if(hf->hf_connection == NULL)
+    goto cleanup;
 
   http_connection_t *hc = hf->hf_connection;
 
   htsbuf_queue_init(&q, 0);
 
-  const char *m = method ?: postdata ? "POST": (result ? "GET" : "HEAD");
+  const char *m = method ?: postdata ? "POST": (want_result ? "GET" : "HEAD");
 
   htsbuf_append(&q, m, strlen(m));
   htsbuf_append(&q, " ", 1);
   htsbuf_append(&q, hf->hf_path, strlen(hf->hf_path));
 
+  char prefix = '?';
+
   if(arguments != NULL) {
     const char **args = arguments;
-    char prefix = '?';
 
     while(args[0] != NULL) {
       if(args[1] != NULL) {
@@ -2787,22 +3259,35 @@ http_request(const char *url, const char **arguments,
     }
   }
 
+  TAILQ_FOREACH(hrx, &xargs, link) {
+    htsbuf_append(&q, &prefix, 1);
+    htsbuf_append_and_escape_url(&q, hrx->hdr);
+    htsbuf_append(&q, "=", 1);
+    htsbuf_append_and_escape_url(&q, hrx->val);
+    prefix = '&';
+  }
+
 
   htsbuf_qprintf(&q, " HTTP/1.%d\r\n", hf->hf_version);
 
   http_headers_init(&headers, hf);
 
-  if(postdata != NULL) 
+  if(postdata != NULL)
     http_header_add_int(&headers, "Content-Length", postdata->hq_size);
 
-  if(postcontenttype != NULL) 
+  if(postcontenttype != NULL)
     http_header_add(&headers, "Content-Type", postcontenttype, 0);
 
-  if(!(flags & FA_DISABLE_AUTH))
-    http_headers_auth(&headers, hf, m, arguments);
+  if(!(flags & FA_DISABLE_AUTH)) {
+    if(http_headers_auth(&headers, hf, m, arguments, errbuf, errlen)) {
+      htsbuf_queue_flush(&q);
+      r = -1;
+      goto cleanup;
+    }
+  }
 
   http_cookie_append(hc->hc_hostname, hf->hf_path, &headers);
-  http_headers_send(&q, &headers, headers_in);
+  http_headers_send(&q, &headers, headers_in, &headers_in2);
 
   if(hf->hf_debug)
     htsbuf_hexdump(&q, "HTTP");
@@ -2811,7 +3296,7 @@ http_request(const char *url, const char **arguments,
 
   if(postdata != NULL) {
     if(hf->hf_debug)
-      htsbuf_hexdump(&q, "HTTP-POSTDATA");
+      htsbuf_hexdump(postdata, "HTTP-POSTDATA");
 
     tcp_write_queue_dontfree(hf->hf_connection->hc_tc, postdata);
   }
@@ -2822,13 +3307,15 @@ http_request(const char *url, const char **arguments,
     goto retry;
   }
 
-  int no_content = method == NULL && postdata == NULL && result == NULL;
+  int no_content = !strcmp(m, "HEAD");
 
   switch(code) {
   case 200 ... 205:
     if(no_content) {
       hf->hf_rsize = 0;
       http_destroy(hf);
+      if(hra.decoded_cleanup)
+        hra.decoded_cleanup(&hra);
       return 0;
     }
     break;
@@ -2837,236 +3324,81 @@ http_request(const char *url, const char **arguments,
     // Not modified
     http_drain_content(hf);
     http_destroy(hf);
+    if(hra.decoded_cleanup)
+      hra.decoded_cleanup(&hra);
     return 304;
 
   case 302:
   case 303:
     postdata = NULL;
     postcontenttype = NULL;
-    method = result ? "GET" : "HEAD";
+    method = want_result ? "GET" : "HEAD";
     // FALLTHRU
   case 301:
   case 307:
-    if(flags & FA_NOFOLLOW)
+    if(flags & FA_NOFOLLOW) {
+      HF_TRACE(hf, "Not following redirect as requested by caller");
       break;
-
-    if(redirect(hf, &redircount, errbuf, errlen, code, !no_content)) {
-      http_destroy(hf);
-      http_headers_free(headers_out);
-      return -1;
     }
+    if(redirect(hf, &redircount, errbuf, errlen, code, !no_content))
+      goto cleanup;
+
     goto retry;
 
   case 401:
-    if(authenticate(hf, errbuf, errlen, NULL, !no_content)) {
-      http_destroy(hf);
-      http_headers_free(headers_out);
-      return -1;
-    }
+    if(authenticate(hf, errbuf, errlen, NULL, !no_content))
+      goto cleanup;
     goto retry;
 
   default:
     snprintf(errbuf, errlen, "HTTP error: %d", code);
-
     http_drain_content(hf);
-
-    http_destroy(hf);
-    http_headers_free(headers_out);
-    return -1;
-  }
-  
-
-  z_stream z;
-  if(hf->hf_content_encoding == HTTP_CE_GZIP) {
-    memset(&z, 0, sizeof(z));
-    inflateInit2(&z, 16+MAX_WBITS);
+    goto cleanup;
   }
 
-  if(hf->hf_chunked_transfer == 0 && 
-     hf->hf_connection_mode == CONNECTION_MODE_CLOSE) {
-    int capacity = 16384;
-    int size = 0;
-    char *mem = malloc(capacity + 1);
-
-    while(1) {
-
-      if(size == capacity) {
-	capacity *= 2;
-	mem = myrealloc(mem, capacity + 1);
-	if(mem == NULL) {
-	  snprintf(errbuf, errlen, "Out of memory (%d)", capacity + 1);
-	  goto error;
-	}
-      }
-
-      if(hf->hf_content_encoding == HTTP_CE_GZIP) {
-        char zbuf[2048];
-	r = tcp_read_data_nowait(hc->hc_tc, zbuf, sizeof(zbuf));
-	
-	z.next_in = (void *)zbuf;
-	z.avail_in = r > 0 ? r : 0;
-	while(1) {
-	
-	  z.next_out = (void *)(mem + size);
-	  z.avail_out = capacity - size;
-
-	  int zr = inflate(&z, r < 0 ? Z_FINISH : Z_NO_FLUSH);
-	  if(zr < 0) {
-	    snprintf(errbuf, errlen, "zlib error %d (connection: close)", zr);
-	    free(mem);
-	    goto error;
-	  }
-	  size += (capacity - size) - z.avail_out;
-
-	  if(z.avail_in == 0)
-	    break;
-
-	  capacity *= 2;
-	  mem = myrealloc(mem, capacity + 1);
-	  if(mem == NULL) {
-	    snprintf(errbuf, errlen, "Out of memory (%d)", capacity + 1);
-	    goto error;
-	  }
-	}
-
-	if(r < 0)
-	  break;
-	
-      } else {
-
-	r = tcp_read_data_nowait(hc->hc_tc, mem + size, capacity - size);
-	if(r < 0)
-	  break;
-	size += r;
-      }
-
-    }
-
-    mem[size] = 0;
-
-    if(result != NULL) {
-      *result = buf_create_and_adopt(size, mem, &free);
-    } else {
-      free(mem);
-    }
-
-  } else {
-
-    char *buf = NULL;
-    size_t size = 0;
-
-    hra.total = hf->hf_filesize;
-
-    if(hf->hf_chunked_transfer) {
-      char chunkheader[100];
-
-      while(1) {
-	int csize;
-	if(tcp_read_line(hc->hc_tc, chunkheader, sizeof(chunkheader)) < 0)
-	  break;
- 
-
-	csize = strtol(chunkheader, NULL, 16);
-
-	if(csize > 0) {
-	  buf = myrealloc(buf, size + csize + 1);
-	  if(buf == NULL) {
-	    snprintf(errbuf, errlen, "Out of memory (%zd)", size + csize + 1);
-	    goto error;
-	  }
-	  if(tcp_read_data(hc->hc_tc, buf + size, csize,
-			   http_request_partial, &hra))
-	    break;
-
-	  size += csize;
-	}
-	if(tcp_read_data(hc->hc_tc, chunkheader, 2, NULL, 0))
-	  break;
-
-	if(csize == 0)
-	  goto done;
-      }
-      snprintf(errbuf, errlen, "Chunked transfer error");
-      free(buf);
-      goto error;
-
-    } else {
-
-      size = hf->hf_filesize;
-      buf = mymalloc(hf->hf_filesize + 1);
-      if(buf == NULL) {
-	snprintf(errbuf, errlen, "Out of memory (%"PRId64")", hf->hf_filesize + 1);
-	goto error;
-      }
-      r = tcp_read_data(hc->hc_tc, buf, hf->hf_filesize,
-			http_request_partial, &hra);
-      if(r == -1) {
-	snprintf(errbuf, errlen, "HTTP read error");
-	free(buf);
-	goto error;
-      }
-    }
-
-  done:
+  if(!no_content) {
 
     if(hf->hf_content_encoding == HTTP_CE_GZIP) {
-      z.next_in = (void *)buf;
-      z.avail_in = size;
-      
-      z.avail_out = 3 * size;
-      uint8_t *buf2 = z.next_out = malloc(z.avail_out + 1);
-
-      while(1) {
-	int zr = inflate(&z, 0);
-	if(zr < 0) {
-	  snprintf(errbuf, errlen, "zlib error %d (%d %d %"PRId64")", zr,
-		   z.avail_in, z.avail_out, hf->hf_filesize);
-	  free(buf);
-	  free(buf2);
-	  goto error;
-	}
-
-	if(z.avail_in == 0)
-	  break;
-
-	if(z.avail_out == 0) {
-	  buf2 = myrealloc(buf2, z.total_out * 2 + 1);
-	  if(buf2 == NULL) {
-	    snprintf(errbuf, errlen, "Out of memory (%"PRId64")",
-		     (int64_t)(z.total_out * 2 + 1));
-	    goto error;
-	  }
-	  z.next_out = buf2 + z.total_out;
-	  z.avail_out = z.total_out;
-	}
-      }
-	
-      free(buf);
-      buf = (void *)buf2;
-      size = z.total_out;
-    }
-
-    if(buf != NULL)
-      buf[size] = 0;
-    if(result != NULL) {
-      *result = buf_create_and_adopt(size, buf, &free);
+      inflateInit2(&hra.zstream, 16+MAX_WBITS);
+      hra.encoded_data = &append_gzip;
+      HF_TRACE(hf, "Inflating content using gzip");
     } else {
-      free(buf);
+      hra.encoded_data = hra.decoded_data;
     }
+
+    hra.tmpbuf = malloc(HTTP_TMP_SIZE);
+
+    if(hf->hf_chunked_transfer) {
+      HF_TRACE(hf, "Chunked transfer");
+      r = http_recv_chunked(hf, &hra);
+    } else if(hf->hf_rsize == -1) {
+      HF_TRACE(hf, "Reading data until EOF");
+      r = http_recv_until_eof(hf, &hra);
+    } else {
+      HF_TRACE(hf, "Reading %"PRId64" bytes", hf->hf_rsize);
+      hra.total = hf->hf_rsize;
+      r = http_recv(hf, &hra);
+    }
+
+    if(r == -2) {
+      snprintf(errbuf, errlen, "Network error");
+      r = -1;
+    }
+
+    if(hf->hf_content_encoding == HTTP_CE_GZIP)
+      inflateEnd(&hra.zstream);
+  } else {
+    HF_TRACE(hf, "No data transfered");
+    r = 0;
   }
+ cleanup:
+  free(hra.tmpbuf);
 
-  if(hf->hf_content_encoding == HTTP_CE_GZIP)
-    inflateEnd(&z);
-
-  hf->hf_rsize = 0;
+  if(r)
+    http_headers_free(headers_out);
+  http_headers_free(&headers_in2);
   http_destroy(hf);
-  return 0;
-  
- error:
-  if(hf->hf_content_encoding == HTTP_CE_GZIP)
-    inflateEnd(&z);
-  http_destroy(hf);
-  http_headers_free(headers_out);
-  return -1;
-
+  if(r && hra.decoded_cleanup)
+    hra.decoded_cleanup(&hra);
+  return r;
 }

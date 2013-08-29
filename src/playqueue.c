@@ -203,7 +203,6 @@ pqe_event_dtor(event_t *e)
   playqueue_event_t *pe = (playqueue_event_t *)e;
   if(pe->pe_pqe != NULL)
     pqe_unref(pe->pe_pqe);
-  free(e);
 }
 
 /**
@@ -603,8 +602,10 @@ siblings_populate(void *opaque, prop_event_t event, ...)
 
   case PROP_REQ_DELETE_VECTOR:
   case PROP_WANT_MORE_CHILDS:
-  case PROP_HAVE_MORE_CHILDS:
+  case PROP_HAVE_MORE_CHILDS_YES:
+  case PROP_HAVE_MORE_CHILDS_NO:
   case PROP_EXT_EVENT:
+  case PROP_REQ_MOVE_CHILD:
     break;
 
   default:

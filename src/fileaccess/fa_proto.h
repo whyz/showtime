@@ -37,8 +37,13 @@ typedef struct fa_protocol {
   int fap_flags;
 #define FAP_INCLUDE_PROTO_IN_URL 0x1
 #define FAP_ALLOW_CACHE          0x2
+#define FAP_NO_PARKING           0x4
+
+  int fap_refcount;
 
   void (*fap_init)(void);
+
+  void (*fap_fini)(struct fa_protocol *fap);
 
   LIST_ENTRY(fa_protocol) fap_link;
 
@@ -47,7 +52,7 @@ typedef struct fa_protocol {
   /**
    * Directory scan url for files. 
    */
-  int (*fap_scan)(fa_dir_t *fa, const char *url,
+  int (*fap_scan)(struct fa_protocol *fap, fa_dir_t *fa, const char *url,
 		  char *errbuf, size_t errsize);
 
   /**
@@ -66,6 +71,11 @@ typedef struct fa_protocol {
    * Read from file. Same semantics as POSIX read(2)
    */
   int (*fap_read)(fa_handle_t *fh, void *buf, size_t size);
+
+  /**
+   * Read from file. Same semantics as POSIX write(2)
+   */
+  int (*fap_write)(fa_handle_t *fh, const void *buf, size_t size);
 
   /**
    * Seek in file. Same semantics as POSIX lseek(2)
@@ -87,6 +97,18 @@ typedef struct fa_protocol {
 		  char *errbuf, size_t errsize, int non_interactive);
 
   /**
+   * unlink (ie, delete) file
+   */
+  int (*fap_unlink)(const struct fa_protocol *fap, const char *url,
+                    char *errbuf, size_t errsize);
+
+  /**
+   * delete directory
+   */
+  int (*fap_rmdir)(const struct fa_protocol *fap, const char *url,
+                   char *errbuf, size_t errsize);
+
+  /**
    * Add a reference to the url.
    *
    * Let underlying protocols know that we probably want to read more info
@@ -106,18 +128,16 @@ typedef struct fa_protocol {
    * Monitor the filesystem directory described by url for changes
    *
    * If a change occures, change() is invoked
-   *
-   * Breakcheck is called periodically and if the caller returns true
-   * the notify will stop and this function will return
    */
-  void (*fap_notify)(struct fa_protocol *fap, const char *url,
-		     void *opaque,
-		     void (*change)(void *opaque,
-				    fa_notify_op_t op, 
-				    const char *filename,
-				    const char *url,
-				    int type),
-		     int (*breakcheck)(void *opaque));
+  fa_handle_t *(*fap_notify_start)(struct fa_protocol *fap, const char *url,
+                                   void *opaque,
+                                   void (*change)(void *opaque,
+                                                  fa_notify_op_t op,
+                                                  const char *filename,
+                                                  const char *url,
+                                                  int type));
+
+  void (*fap_notify_stop)(fa_handle_t *fh);
 
   /**
    * Load the 'url' into memory
@@ -146,18 +166,37 @@ typedef struct fa_protocol {
    */
   int (*fap_seek_is_fast)(fa_handle_t *fh);
 
+  /**
+   * Return all parts that relates to the given URL
+   *
+   * For RAR archives this would be all part-files
+   * 
+   */
+  int (*fap_get_parts)(fa_dir_t *fa, const char *url,
+		       char *errbuf, size_t errsize);
+
+  /**
+   * Make directories
+   *
+   * Should do the equiv to POSIX mkdir -p
+   */
+
+  int (*fap_makedirs)(struct fa_protocol *fap, const char *url,
+                      char *errbuf, size_t errsize);
+
 } fa_protocol_t;
 
 
+
+void fileaccess_register_dynamic(fa_protocol_t *fap);
+
+void fileaccess_unregister_dynamic(fa_protocol_t *fap);
 
 void fileaccess_register_entry(fa_protocol_t *fap);
 
 #define FAP_REGISTER(name) \
   static void  __attribute__((constructor)) fap_register_ ## name(void) { \
-    static int cnt;							\
-    if(!cnt)								\
-      fileaccess_register_entry(&fa_protocol_ ## name);			\
-    cnt++;								\
+    fileaccess_register_entry(&fa_protocol_ ## name);			\
   }
 
 #endif /* FA_PROTO_H__ */

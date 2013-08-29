@@ -39,11 +39,12 @@
 #include "notifications.h"
 #include "htsmsg/htsmsg_xml.h"
 #include "backend/backend.h"
+#include "backend/hls/hls.h"
 #include "misc/isolang.h"
 #include "text/text.h"
 #include "video/video_settings.h"
 #include "video/video_playback.h"
-#include "subtitles/sub_scanner.h"
+#include "subtitles/subtitles.h"
 #include "misc/md5.h"
 #include "misc/str.h"
 #include "i18n.h"
@@ -71,8 +72,8 @@ typedef struct attachment {
 } attachment_t;
 
 static void attachment_load(struct attachment_list *alist,
-			    const uint8_t *ptr, size_t len,
-			    int context);
+			    const char *url, int64_t offset, 
+			    int size, int font_domain, const char *source);
 
 static void attachment_unload_all(struct attachment_list *alist);
 
@@ -124,7 +125,8 @@ video_seek(AVFormatContext *fctx, media_pipe_t *mp, media_buf_t **mbp,
 
   pos -= fctx->start_time;
 
-  prop_set_float(prop_create(mp->mp_prop_root, "seektime"), pos / 1000000.0);
+
+  prop_set(mp->mp_prop_root, "seektime", PROP_SET_FLOAT, pos / 1000000.0);
 }
 
 
@@ -169,14 +171,14 @@ select_subtitle_track(media_pipe_t *mp, AVFormatContext *fctx, const char *id)
     prop_set_string(mp->mp_prop_subtitle_track_current, id);
     mp->mp_video.mq_stream2 = -1;
 
-    mp_load_ext_sub(mp, NULL);
+    mp_load_ext_sub(mp, NULL, NULL);
 
   } else if(!strncmp(id, "libav:", strlen("libav:"))) {
     unsigned int idx = atoi(id + strlen("libav:"));
     if(idx < fctx->nb_streams) {
       AVCodecContext *ctx = fctx->streams[idx]->codec;
       if(ctx->codec_type == AVMEDIA_TYPE_SUBTITLE) {
-	mp_load_ext_sub(mp, NULL);
+	mp_load_ext_sub(mp, NULL, NULL);
 	mp->mp_video.mq_stream2 = idx;
 	prop_set_string(mp->mp_prop_subtitle_track_current, id);
       }
@@ -185,8 +187,8 @@ select_subtitle_track(media_pipe_t *mp, AVFormatContext *fctx, const char *id)
 
     mp->mp_video.mq_stream2 = -1;
     prop_set_string(mp->mp_prop_subtitle_track_current, id);
-
-    mp_load_ext_sub(mp, id);
+    mp_load_ext_sub(mp, id,
+                    &fctx->streams[mp->mp_video.mq_stream]->avg_frame_rate);
   }
 }
 
@@ -366,20 +368,24 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
     if(event_is_type(e, EVENT_CURRENT_TIME)) {
 
       ets = (event_ts_t *)e;
-      int sec = ets->ts / 1000000;
-      last_timestamp_presented = ets->ts;
 
-      // Update restartpos every 5 seconds
-      if(sec < restartpos_last || sec >= restartpos_last + 5) {
-	restartpos_last = sec;
-	metadb_set_video_restartpos(canonical_url, ets->ts / 1000);
-      }
+      if(ets->epoch == mp->mp_epoch) {
+	int sec = ets->ts / 1000000;
+	last_timestamp_presented = ets->ts;
+
+	// Update restartpos every 5 seconds
+	if(sec < restartpos_last || sec >= restartpos_last + 5) {
+	  restartpos_last = sec;
+	  metadb_set_video_restartpos(canonical_url, ets->ts / 1000);
+	}
       
-      if(sec != lastsec) {
-	lastsec = sec;
-	update_seek_index(sidx, sec);
-	update_seek_index(cidx, sec);
+	if(sec != lastsec) {
+	  lastsec = sec;
+	  update_seek_index(sidx, sec);
+	  update_seek_index(cidx, sec);
+	}
       }
+
 
     } else if(event_is_type(e, EVENT_SEEK)) {
 
@@ -420,11 +426,12 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 
   int spp = mp->mp_seek_base * 100 / fctx->duration;
 
-  if(spp >= video_settings.played_threshold) {
+  if(spp >= video_settings.played_threshold || event_is_type(e, EVENT_EOF)) {
     metadb_set_video_restartpos(canonical_url, -1);
     metadb_register_play(canonical_url, 1, CONTENT_VIDEO);
-    TRACE(TRACE_DEBUG, "Video", "Playback reached %d%%, counting as played",
-	  spp);
+    TRACE(TRACE_DEBUG, "Video",
+	  "Playback reached %d%%, counting as played (%s)",
+	  spp, canonical_url);
   } else if(last_timestamp_presented != PTS_UNSET) {
     metadb_set_video_restartpos(canonical_url, last_timestamp_presented / 1000);
   }
@@ -601,7 +608,7 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     if(utf8_verify(tmp)) {
       title = rstr_alloc(tmp);
     } else {
-      char *t = utf8_from_bytes(tmp, 0, i18n_get_srt_charset());
+      char *t = utf8_from_bytes(tmp, 0, NULL, NULL, 0);
       title = rstr_alloc(t);
       free(t);
     }
@@ -625,16 +632,18 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 #endif
     }
   }
-  
 
-  // See if this is an HLS multi-variant playlist
+
+  // See if this is an HLS playlist
 
   if(fa_seek(fh, 0, SEEK_SET) == 0) {
     char buf[1024];
     int l = fa_read(fh, buf, sizeof(buf) - 1);
     if(l > 10) {
       buf[l] = 0;
-      if(mystrbegins(buf, "#EXTM3U") && strstr(buf, "#EXT-X-STREAM-INF:")) {
+      if(mystrbegins(buf, "#EXTM3U") &&
+         (strstr(buf, "#EXT-X-STREAM-INF:") ||
+          strstr(buf, "#EXTINF"))) {
         htsbuf_queue_t hq;
         htsbuf_queue_init(&hq, 0);
         htsbuf_append(&hq, buf, l);
@@ -643,10 +652,13 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
           snprintf(errbuf, errlen, "Unable to read HLS playlist file");
         }
         fa_close(fh);
+
         char *hlslist = htsbuf_to_string(&hq);
-        vsource_add_hls(vsl, hlslist, url);
+	event_t *e = hls_play_extm3u(hlslist, url, mp, errbuf, errlen,
+				     vq, vsl, &va);
         free(hlslist);
-        return event_create_type(EVENT_REOPEN);
+	rstr_release(title);
+	return e;
       }
     }
   }
@@ -762,9 +774,10 @@ be_file_playvideo_fh(const char *url, media_pipe_t *mp,
   for(i = 0; i < fctx->nb_streams; i++) {
     char str[256];
     media_codec_params_t mcp = {0};
-
-    AVCodecContext *ctx = fctx->streams[i]->codec;
-
+    AVStream *st = fctx->streams[i];
+    AVCodecContext *ctx = st->codec;
+    AVDictionaryEntry *fn, *mt;
+    
     avcodec_string(str, sizeof(str), ctx, 0);
     TRACE(TRACE_DEBUG, "Video", " Stream #%d: %s", i, str);
 
@@ -784,8 +797,17 @@ be_file_playvideo_fh(const char *url, media_pipe_t *mp,
       break;
 
     case AVMEDIA_TYPE_ATTACHMENT:
-      attachment_load(&alist, ctx->extradata, ctx->extradata_size,
-		      freetype_context);
+      fn = av_dict_get(st->metadata, "filename", NULL, AV_DICT_IGNORE_SUFFIX);
+      mt = av_dict_get(st->metadata, "mimetype", NULL, AV_DICT_IGNORE_SUFFIX);
+
+      TRACE(TRACE_DEBUG, "Video", "         filename: %s mimetype: %s size: %d",
+	    fn ? fn->value : "<unknown>",
+	    mt ? mt->value : "<unknown>",
+	    st->attached_size);
+
+      if(st->attached_size)
+	attachment_load(&alist, url, st->attached_offset, st->attached_size,
+			freetype_context, fn ? fn->value : "<unknown>");
       break;
 
     default:
@@ -890,22 +912,24 @@ attachment_add_dtor(struct attachment_list *alist,
  *
  */
 static void
-attachment_load(struct attachment_list *alist, const uint8_t *ptr, size_t len,
-		int context)
+attachment_load(struct attachment_list *alist, const char *url, int64_t offset, 
+		int size, int font_domain, const char *source)
 {
-  if(len < 20)
+  char errbuf[256];
+  if(size < 20)
     return;
 
-#if ENABLE_LIBFREETYPE
-  if(!memcmp(ptr, (const uint8_t []){0,1,0,0,0}, 5) ||
-     !memcmp(ptr, "OTTO", 4)) {
-
-    void *h = freetype_load_font_from_memory(ptr, len, context);
-    if(h != NULL)
-      attachment_add_dtor(alist, freetype_unload_font, h);
+  fa_handle_t *fh = fa_open(url, errbuf, sizeof(errbuf));
+  if(fh == NULL) {
+    TRACE(TRACE_ERROR, "Video", "Unable to open attachement -- %s", errbuf);
     return;
   }
-#endif
+
+  fh = fa_slice_open(fh, offset, size);
+
+  void *h = freetype_load_font_from_fh(fh, font_domain, NULL, 0);
+  if(h != NULL)
+     attachment_add_dtor(alist, freetype_unload_font, h);
 }
 
 /**

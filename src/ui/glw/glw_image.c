@@ -62,6 +62,8 @@ typedef struct glw_image {
  
   int gi_bitmap_flags;
 
+  uint8_t gi_rescale_hold;
+
   uint8_t gi_mode;
 
 #define GI_MODE_NORMAL           0
@@ -78,6 +80,7 @@ typedef struct glw_image {
   uint8_t gi_need_reload : 1;
   uint8_t gi_loading_new_url : 1;
   uint8_t gi_recompile : 1;
+  uint8_t gi_externalized : 1;
 
   int16_t gi_fixed_size;
   int16_t gi_radius;
@@ -257,6 +260,10 @@ static void
 glw_image_render(glw_t *w, const glw_rctx_t *rc)
 {
   glw_image_t *gi = (void *)w;
+
+  if(gi->gi_externalized)
+    return;
+
   const glw_loadable_texture_t *glt = gi->gi_current;
   float alpha_self;
   float blur = 1 - (rc->rc_sharpness * w->glw_sharpness);
@@ -738,6 +745,23 @@ static uint16_t borderonlyobject[] = {
 /**
  *
  */
+static glw_loadable_texture_t *
+glw_image_tex_load(glw_image_t *gi, rstr_t *url, int width, int height)
+{
+  int flags = gi->gi_bitmap_flags & GLW_IMAGE_TEX_OVERLAP;
+
+  if(gi->w.glw_class == &glw_repeatedimage)
+    flags |= GLW_TEX_REPEAT;
+
+  return glw_tex_create(gi->w.glw_root, url, flags, width, height,
+                        gi->gi_radius, gi->gi_shadow);
+}
+
+
+
+/**
+ *
+ */
 static void 
 glw_image_layout(glw_t *w, glw_rctx_t *rc)
 {
@@ -758,11 +782,24 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
     }
   }
 
+  if(gr->gr_can_externalize &&
+     rc->rc_width == gr->gr_width && 
+     rc->rc_height == gr->gr_height && 
+     w->glw_class == &glw_backdrop) {
+
+
+    if(gr->gr_externalize_cnt < GLW_MAX_EXTERNALIZED) {
+      gr->gr_externalized[gr->gr_externalize_cnt++] = w;
+      gi->gi_externalized = 1;
+      return;
+    }
+  }
+  
+  gi->gi_externalized = 0;
 
   if(gi->gi_pending_url != NULL) {
     // Request to load
     int xs = -1, ys = -1;
-    int flags = gi->gi_bitmap_flags & 0xf; // corners
     gi->gi_loading_new_url = 1;
 
     if(gi->gi_pending != NULL) {
@@ -781,10 +818,7 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
       gi->gi_update = 1;
 
     } else {
-    
-      if(w->glw_class == &glw_repeatedimage)
-	flags |= GLW_TEX_REPEAT;
-	
+
       if(hq) {
 	if(w->glw_class == &glw_image || w->glw_class == &glw_icon) {
 	  if(rc->rc_width < rc->rc_height) {
@@ -805,11 +839,8 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
 		rstr_get(gi->gi_pending_url),
 		xs, ys);
 
-	gi->gi_pending = glw_tex_create(w->glw_root,
-					gi->gi_pending_url,
-					flags, xs, ys, gi->gi_radius,
-                                        gi->gi_shadow);
-	  
+	gi->gi_pending = glw_image_tex_load(gi, gi->gi_pending_url, xs, ys);
+
 	rstr_release(gi->gi_pending_url);
 	gi->gi_pending_url = NULL;
       }
@@ -846,6 +877,8 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
       glw_signal0(w, GLW_SIGNAL_READINESS, NULL);
     }
   } else if(glw_is_tex_inited(&glt->glt_texture)) {
+
+    gr->gr_can_externalize = 0;
 
     int r = !gi->gi_loading_new_url;
 
@@ -910,14 +943,11 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
       gi->gi_need_reload = hq;
     }
 
-
     if(gi->gi_need_reload && gi->gi_pending == NULL &&
        gi->gi_pending_url == NULL && rc->rc_width && rc->rc_height) {
 
-      gi->gi_need_reload = 0;
-	
       int xs = -1, ys = -1, rescale;
-	
+
       if(w->glw_class == &glw_image || w->glw_class == &glw_icon) {
 
 	if(rc->rc_width < rc->rc_height) {
@@ -933,7 +963,6 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
 	ys = rc->rc_height;
       }
 
-
       // Requesting aspect cause a lot of rounding errors
       // so to avoid ending up in infinite reload loops,
       // consider 1px off as nothing
@@ -941,13 +970,15 @@ glw_image_layout(glw_t *w, glw_rctx_t *rc)
 	rescale = 0;
 
       if(rescale) {
-	int flags = gi->gi_bitmap_flags & 0xf; // corners
-	if(w->glw_class == &glw_repeatedimage)
-	  flags |= GLW_TEX_REPEAT;
-	
-	gi->gi_pending = glw_tex_create(w->glw_root, glt->glt_url,
-					flags, xs, ys, gi->gi_radius,
-                                        gi->gi_shadow);
+        if(gi->gi_rescale_hold < 5) {
+          gi->gi_rescale_hold++;
+        } else {
+          gi->gi_rescale_hold = 0;
+          gi->gi_pending = glw_image_tex_load(gi, glt->glt_url, xs, ys);
+          gi->gi_need_reload = 0;
+        }
+      } else {
+        gi->gi_need_reload = 0;
       }
     }
   } else {
@@ -1415,6 +1446,10 @@ get_identity(glw_t *w)
   glw_loadable_texture_t *glt = gi->gi_current;
   if(glt)
     return rstr_get(glt->glt_url);
+
+  glt = gi->gi_pending;
+  if(glt)
+    return rstr_get(glt->glt_url);
   return rstr_get(gi->gi_pending_url);
 }
 
@@ -1432,6 +1467,25 @@ glw_icon_flush(glw_root_t *gr)
 			GLW_CONSTRAINT_X | GLW_CONSTRAINT_Y);
   }
 }
+
+/**
+ *
+ */
+int
+glw_image_get_details(glw_t *w, char *path, size_t pathlen, float *alpha)
+{
+  if(w->glw_class != &glw_backdrop)
+    return -1;
+
+  glw_image_t *gi = (glw_image_t *)w;
+  const char *p = get_identity(w);
+  if(p == NULL)
+    return -1;
+  snprintf(path, pathlen, "%s", p);
+  *alpha = w->glw_alpha * gi->gi_col_mul.g;
+  return 0;
+}
+
 
 /**
  *

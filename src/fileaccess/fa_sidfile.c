@@ -38,7 +38,8 @@
  *
  */
 static int
-sidfile_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
+sidfile_scandir(fa_protocol_t *fap, fa_dir_t *fd,
+                const char *url, char *errbuf, size_t errlen)
 {
   void *fh = NULL;
   char *p, *fpath = mystrdupa(url);
@@ -65,8 +66,8 @@ sidfile_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
     return -1;
   }
 
-  album = rstr_alloc(utf8_from_bytes((char *)buf + 0x16, 32, NULL));
-  artist = rstr_alloc(utf8_from_bytes((char *)buf + 0x36, 32, NULL));
+  album = rstr_alloc(utf8_from_bytes((char *)buf + 0x16, 32, NULL, NULL, 0));
+  artist = rstr_alloc(utf8_from_bytes((char *)buf + 0x36, 32, NULL, NULL, 0));
 
   tracks = buf[0xf];
   for(i = 0; i < tracks; i++) {
@@ -75,7 +76,7 @@ sidfile_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
     snprintf(turl, sizeof(turl), "sidplayer:%s/%d", fpath, i + 1);
     fde = fa_dir_add(fd, turl, name, CONTENT_AUDIO);
 
-    fde->fde_probestatus = FDE_PROBE_DEEP;
+    fde->fde_probestatus = FDE_PROBED_CONTENTS;
 
     fde->fde_metadata = prop_create_root("metadata");
     prop_set_string(prop_create(fde->fde_metadata, "title"), name);

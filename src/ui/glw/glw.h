@@ -162,17 +162,21 @@ typedef struct glw_rgb {
 #define GLW_IMAGE_CORNER_TOPRIGHT      0x2
 #define GLW_IMAGE_CORNER_BOTTOMLEFT    0x4
 #define GLW_IMAGE_CORNER_BOTTOMRIGHT   0x8
-#define GLW_IMAGE_FIXED_SIZE           0x10
-#define GLW_IMAGE_BEVEL_LEFT           0x20
-#define GLW_IMAGE_BEVEL_TOP            0x40
-#define GLW_IMAGE_BEVEL_RIGHT          0x80
-#define GLW_IMAGE_BEVEL_BOTTOM         0x100
-#define GLW_IMAGE_SET_ASPECT           0x200
-#define GLW_IMAGE_ADDITIVE             0x400
-#define GLW_IMAGE_BORDER_ONLY          0x800
-#define GLW_IMAGE_BORDER_LEFT          0x1000
-#define GLW_IMAGE_BORDER_RIGHT         0x2000
-#define GLW_IMAGE_ASPECT_FIXED_BORDERS 0x4000
+
+// Defines the overlapping flags between GLW_TEX_ and GLW_IMAGE_
+#define GLW_IMAGE_TEX_OVERLAP      0xff
+
+#define GLW_IMAGE_FIXED_SIZE           0x100
+#define GLW_IMAGE_BEVEL_LEFT           0x200
+#define GLW_IMAGE_BEVEL_TOP            0x400
+#define GLW_IMAGE_BEVEL_RIGHT          0x800
+#define GLW_IMAGE_BEVEL_BOTTOM         0x1000
+#define GLW_IMAGE_SET_ASPECT           0x2000
+#define GLW_IMAGE_ADDITIVE             0x4000
+#define GLW_IMAGE_BORDER_ONLY          0x8000
+#define GLW_IMAGE_BORDER_LEFT          0x10000
+#define GLW_IMAGE_BORDER_RIGHT         0x20000
+#define GLW_IMAGE_ASPECT_FIXED_BORDERS 0x40000
 
 /**
  * Video flags
@@ -289,6 +293,11 @@ typedef enum {
    * extra is 'glw_move_op_t'
    */
   GLW_SIGNAL_MOVE,
+
+  /**
+   *
+   */
+  GLW_SIGNAL_WRAP_CHECK,
 
 } glw_signal_t;
 
@@ -655,7 +664,6 @@ typedef struct glw_root {
   int gr_prop_maxtime;
 
   int gr_reduce_cpu;
-  int gr_stop;
   prop_sub_t *gr_evsub;
 
   pool_t *gr_token_pool;
@@ -701,13 +709,15 @@ typedef struct glw_root {
   int64_t gr_hz_sample;
   prop_t *gr_is_fullscreen;   // Set if our window is in fullscreen
 
-  float gr_time;
+  uint64_t gr_time_usec;
+  float gr_time_sec;
 
   /**
    * Screensaver
    */
 
-  int gr_screensaver_counter; // In frames
+  int64_t gr_screensaver_reset_at;
+
   int gr_screensaver_force_enable;
   prop_t *gr_screensaver_active;
 
@@ -747,6 +757,11 @@ typedef struct glw_root {
   struct glw_loadable_texture_list gr_tex_flush_list;
   struct glw_loadable_texture_queue gr_tex_rel_queue;
 
+  struct {
+    struct glw_loadable_texture_queue q;
+    int size;
+    int limit;
+  } gr_tex_stash[2];
 
   struct glw_loadable_texture_list gr_tex_list;
 
@@ -851,7 +866,16 @@ typedef struct glw_root {
   struct glw *gr_osk_widget;
   prop_sub_t *gr_osk_text_sub;
   prop_sub_t *gr_osk_ev_sub;
+  char *gr_osk_revert;
 
+  // Backdrop render helper
+
+  int gr_can_externalize;
+
+#define GLW_MAX_EXTERNALIZED 4
+
+  int gr_externalize_cnt;
+  struct glw *gr_externalized[GLW_MAX_EXTERNALIZED];
 
 } glw_root_t;
 
@@ -1068,6 +1092,8 @@ void *glw_get_opaque(glw_t *w, glw_callback_t *func);
 #define GLW_NO_FRAMERATE_UPDATE 0x2
 
 void glw_prepare_frame(glw_root_t *gr, int flags);
+
+void glw_idle(glw_root_t *gr);
 
 void glw_post_scene(glw_root_t *gr);
 
@@ -1394,5 +1420,9 @@ void glw_gtb_set_caption_raw(glw_t *w, uint32_t *uc, int len);
 extern const float glw_identitymtx[16];
 
 void glw_icon_flush(glw_root_t *gr);
+
+void glw_reset_screensaver(glw_root_t *gr);
+
+int glw_image_get_details(glw_t *w, char *path, size_t pathlen, float *alpha);
 
 #endif /* GLW_H */

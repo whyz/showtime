@@ -144,6 +144,7 @@ glw_init(glw_root_t *gr)
 {
   char skinbuf[PATH_MAX];
   const char *skin = gconf.skin;
+  prop_t *p;
 
   if(gr->gr_prop_dispatcher == NULL)
     gr->gr_prop_dispatcher = &prop_courier_poll_timed;
@@ -152,11 +153,18 @@ glw_init(glw_root_t *gr)
 
   assert(glw_settings.gs_settings != NULL);
 
-  if(prop_set_parent(gr->gr_prop_ui, prop_get_global()))
+  p = prop_create(prop_get_global(), "userinterfaces");
+
+  if(prop_set_parent(gr->gr_prop_ui, p))
     abort();
 
-  if(prop_set_parent(gr->gr_prop_nav, prop_get_global()))
+  p = prop_create(prop_get_global(), "navigators");
+
+  if(prop_set_parent(gr->gr_prop_nav, p))
     abort();
+
+  prop_link(gr->gr_prop_nav, prop_create(p, "current"));
+
 
   if(skin == NULL) {
     snprintf(skinbuf, sizeof(skinbuf),
@@ -204,7 +212,8 @@ glw_init(glw_root_t *gr)
   gr->gr_framerate = 60;
   gr->gr_frameduration = 1000000 / gr->gr_framerate;
   gr->gr_ui_start = showtime_get_ts();
-
+  gr->gr_frame_start = gr->gr_ui_start;
+  glw_reset_screensaver(gr);
   gr->gr_open_osk = glw_osk_open;
 
   return 0;
@@ -388,13 +397,20 @@ glw_signal_handler_clean(glw_t *w)
  *
  */
 static int
-glw_screensaver_is_active(glw_root_t *gr)
+glw_screensaver_is_active(const glw_root_t *gr)
 {
-  return gr->gr_screensaver_force_enable ||
-    (gr->gr_is_fullscreen && gr->gr_framerate &&
-     glw_settings.gs_screensaver_delay &&
-     (gr->gr_screensaver_counter > 
-      glw_settings.gs_screensaver_delay * gr->gr_framerate * 60));
+  if(gr->gr_screensaver_force_enable)
+    return 0;
+
+  if(!gr->gr_is_fullscreen)
+    return 0;
+
+  int64_t d = glw_settings.gs_screensaver_delay;
+
+  if(!d)
+    return 0;
+
+  return gr->gr_frame_start > gr->gr_screensaver_reset_at + d * 60000000LL;
 }
 
 
@@ -428,15 +444,26 @@ glw_reap(glw_root_t *gr)
  *
  */
 void
+glw_idle(glw_root_t *gr)
+{
+  gr->gr_prop_dispatcher(gr->gr_courier, gr->gr_prop_maxtime);
+  glw_reap(gr);
+}
+
+/**
+ *
+ */
+void
 glw_prepare_frame(glw_root_t *gr, int flags)
 {
   glw_t *w;
 
   glw_update_sizes(gr);
 
-  gr->gr_frame_start = showtime_get_ts();
+  gr->gr_frame_start        = showtime_get_ts();
   gr->gr_frame_start_avtime = showtime_get_avtime();
-  gr->gr_time = (gr->gr_frame_start - gr->gr_ui_start) / 1000000.0;
+  gr->gr_time_usec          = gr->gr_frame_start - gr->gr_ui_start;
+  gr->gr_time_sec           = gr->gr_time_usec / 1000000.0f;
 
   if(!(flags & GLW_NO_FRAMERATE_UPDATE)) {
 
@@ -454,8 +481,6 @@ glw_prepare_frame(glw_root_t *gr, int flags)
     }
   }
   gr->gr_frames++;
-
-  gr->gr_screensaver_counter++;
 
   if(gr->gr_be_prepare != NULL)
     gr->gr_be_prepare(gr);
@@ -1538,7 +1563,7 @@ glw_pointer_event(glw_root_t *gr, glw_pointer_event_t *gpe)
 
   if(gpe->type != GLW_POINTER_MOTION_REFRESH) {
     runcontrol_activity();
-    gr->gr_screensaver_counter = 0;
+    glw_reset_screensaver(gr);
     gr->gr_screensaver_force_enable = 0;
   }
 
@@ -1686,7 +1711,7 @@ int
 glw_kill_screensaver(glw_root_t *gr)
 {
   int r = glw_screensaver_is_active(gr);
-  gr->gr_screensaver_counter = 0;
+  glw_reset_screensaver(gr);
   gr->gr_screensaver_force_enable = 0;
   return r;
 }
@@ -1700,11 +1725,6 @@ glw_dispatch_event(glw_root_t *gr, event_t *e)
   int r;
 
   runcontrol_activity();
-
-  if(e->e_type_x == EVENT_STOP_UI) {
-    gr->gr_stop = 1;
-    return;
-  }
 
   if(e->e_type_x == EVENT_REPAINT_UI) {
     glw_text_flush(gr);
@@ -2355,13 +2375,18 @@ glw_osk_text(void *opaque, const char *str)
  *
  */
 static void
-glw_osk_ok(glw_root_t *gr)
+glw_osk_done(glw_root_t *gr, int submit)
 {
   glw_t *w = gr->gr_osk_widget;
   if(w != NULL) {
-    event_t *e = event_create_action(ACTION_SUBMIT);
-    glw_event_to_widget(w, e, 0);
-    event_release(e);
+    if(submit) {
+      event_t *e = event_create_action(ACTION_SUBMIT);
+      glw_event_to_widget(w, e, 0);
+      event_release(e);
+    } else {
+      glw_t *w = gr->gr_osk_widget;
+      w->glw_class->gc_update_text(w, gr->gr_osk_revert);
+    }
 
     glw_unref(gr->gr_osk_widget);
     prop_unsubscribe(gr->gr_osk_text_sub);
@@ -2374,11 +2399,7 @@ glw_osk_ok(glw_root_t *gr)
 
   prop_t *osk = prop_create(gr->gr_prop_ui, "osk");
   prop_set(osk, "show", PROP_SET_INT, 0);
-
-  
 }
-
-
 
 
 /**
@@ -2397,7 +2418,9 @@ glw_osk_event(void *opaque, prop_event_t event, ...)
   va_end(ap);
 
   if(event_is_action(e, ACTION_OK)) {
-    glw_osk_ok(opaque);
+    glw_osk_done(opaque, 1);
+  } else if(event_is_action(e, ACTION_CANCEL)) {
+    glw_osk_done(opaque, 0);
   }
 }
 
@@ -2410,6 +2433,7 @@ glw_osk_open(glw_root_t *gr, const char *title, const char *input,
 	     glw_t *w, int password)
 {
   prop_t *osk = prop_create(gr->gr_prop_ui, "osk");
+  mystrset(&gr->gr_osk_revert, input);
 
   if(gr->gr_osk_widget != NULL) {
     glw_unref(gr->gr_osk_widget);
@@ -2440,4 +2464,14 @@ glw_osk_open(glw_root_t *gr, const char *title, const char *input,
 		   PROP_TAG_ROOT, gr->gr_prop_ui,
 		   PROP_TAG_COURIER, gr->gr_courier,
 		   NULL);
+}
+
+
+/**
+ *
+ */
+void
+glw_reset_screensaver(glw_root_t *gr)
+{
+  gr->gr_screensaver_reset_at = gr->gr_frame_start;
 }

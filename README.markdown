@@ -16,11 +16,16 @@ For Ubuntu 12.04)
 	sudo apt-get install libfreetype6-dev libfontconfig1-dev libxext-dev libgl1-mesa-dev 
 	libasound2-dev libasound2-dev libgtk2.0-dev libxss-dev libxxf86vm-dev libxv-dev libcdio-cdda-dev 
 	libcddb2-dev libvdpau-dev yasm libpulse-dev libssl-dev curl
-
+	libwebkitgtk-dev libsqlite3-dev
 
 Then you need to configure:
 
 	./configure
+
+If your system lacks libwebkitgtk (Ubunut 12.04 before 12.04.1) 
+you can configure with
+
+        ./configure --disable-webkit
 
 If any dependencies are missing the configure script will complain.
 You then have the option to disable that particular module/subsystem.
@@ -166,3 +171,38 @@ You can use this program to get debug output when running the app
 on ps3. configure with `--logtarget=IP.OF.YOUR.HOST` to make it send
 log messages to that machine. Showtime will default to port 4000 when
 sending log messages.
+
+## How to build for Raspberry Pi
+
+Showtime for Raspberry Pi can only be built using cross compilation
+on a "normal" Linux host. In order word you will compile it on your
+normal Linux desktop system and then copy the binary to the Raspberry Pi.
+
+If you just want to create a build to test with you can cheat a bit
+and use the same technique as the auto build system will do.
+
+Note that this requires a host that is 64 bit (due to how the
+toolchains are compiled)
+
+Check out the source from github on your normal Linux desktop (ie.
+not the Raspberry Pi) and do
+
+	cd showtime
+	./Autobuild.sh -t rpi
+
+This will start off and download all necessary components to build Showtime
+and will eventually start building it as well. It will take some time.
+
+Once completed a binary will end up here: build.rpi/showtime
+
+Copy this file to the Raspberry Pi and run it.
+
+Note: It cannot run when X is running. You should boot raspbian
+into console mode and start it there
+
+Note2: If you want Spotify support you need to copy libspotify.so.12 from
+
+       build.rpi/libspotify-12.1.103-Linux-armv6-bcm2708hardfp-release/lib/libspotify.so.12
+
+into your users home directory on the Rpi (usually /home/rpi). (Installing
+the Application from the Apps section in Showtime is not enough)

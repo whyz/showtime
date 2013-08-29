@@ -126,6 +126,7 @@ typedef sys_ppu_thread_t hts_thread_t;
 #define THREAD_PRIO_VIDEO          100
 #define THREAD_PRIO_DEMUXER        200
 #define THREAD_PRIO_UI_WORKER_HIGH 400
+#define THREAD_PRIO_UI_WORKER_MED  450
 #define THREAD_PRIO_FILESYSTEM     500
 #define THREAD_PRIO_MODEL          1000
 #define THREAD_PRIO_METADATA       2000
@@ -161,3 +162,11 @@ typedef struct thread_info {
 
 extern struct thread_info_list threads;
 extern hts_mutex_t thread_info_mutex;
+
+#define HTS_MUTEX_DECL(name) \
+hts_mutex_t name; \
+ static void  __attribute__((constructor)) global_mtx_init_ ## name(void) { \
+   hts_mutex_init(&name); \
+ }
+
+

@@ -1,6 +1,6 @@
 language: Russian
 native: Русский 
-maintainer: pvc1 <pvc1@yandex.ru>
+maintainer: pvc1 <pvc1@yandex.ru>,thx to T915 <T915@inbox.ru> 
 #
 # ./glwskins/default/cmdmenu.view
 #
@@ -16,6 +16,12 @@ msg: Удалить текущую страницу из закладок
 #
 # ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
+id: Activate sleep timer
+msg: Включить таймер сна
+
+id: Disable sleep timer
+msg: Выключить таймер сна
+
 id: Exit Showtime
 msg: Выйти из Showtime
 
@@ -43,6 +49,12 @@ msg: Отключить систему
 id: System
 msg: Система
 
+id: Time until sleep
+msg: Время до сна
+
+id: min
+msg: мин
+
 #
 # ./glwskins/default/cmdmenu/cmdmenu_dir.view
 #
@@ -65,10 +77,10 @@ id: Delete
 msg: Удалить
 
 id: Mark as seen
-msg: Пометить как просмотренное
+msg: Пометить как воспроизведённое
 
 id: Mark as unseen
-msg: Пометить как непросмотренное
+msg: Пометить как невоспроизведённое
 
 id: Play from beginning
 msg: Воспроизведение с начала
@@ -131,60 +143,6 @@ id: System log
 msg: Системный лог
 
 #
-# ./glwskins/default/pages/about.view
-#
-id: Allocated by application: %d kB
-msg: Выделено приложению: %d Кб
-
-id: Allocated by malloc: %d kB
-msg: Выделено malloc: %d Кб
-
-id: Avail system RAM: %d kB
-msg: Доступная память RAM: %d Кб
-
-id: Detected CPUs: %d
-msg: Обнаружен CPU: %d
-
-id: Display info
-msg: Отображение информации
-
-id: Framerate: %.2f Hz
-msg: Частота кадров %.2f Hz
-
-id: Free chunks: %d
-msg: Свободные части: %d
-
-id: GPU: %s
-msg: GPU: %s
-
-id: Height: %d px
-msg: Высота: %d px
-
-id: Memory status
-msg: Состояние памяти
-
-id: Renderer: %s
-msg: Рендер: %s
-
-id: System info
-msg: Системная информация
-
-id: Total system RAM: %d kB
-msg: Общая память RAM: %d Кб
-
-id: Unused memory: %d kB
-msg: Неиспользованная память: %d Кб
-
-id: Version: %s
-msg: Версия: %s
-
-id: Width: %d px
-msg: Ширина: %d px
-
-id: Windowmanager: %s
-msg: Оконный менеджер: %s
-
-#
 # ./glwskins/default/pages/directory.view
 #
 id: Album
@@ -226,14 +184,11 @@ msg: Плитка
 #
 # ./glwskins/default/pages/home_clist.view
 #
-id: About Showtime
-msg: О программе
+id: Apps
+msg: Приложения
 
 id: Dismiss
 msg: Отклонить
-
-id: Plugins
-msg: Плагины
 
 id: Search / Open URL
 msg: Найти / Открыть URL
@@ -282,6 +237,10 @@ msg: Рейтинг:
 
 id: Year:
 msg: Год:
+
+id: Seen %d times
+msg[0]: Просмотрено %d раз(а)
+msg[1]: Просмотрено %d раз(а)
 
 #
 # ./glwskins/default/pages/listitems/add.view
@@ -355,6 +314,9 @@ msg: Лог изменений для релиза %s
 id: Check for updates now
 msg: Проверить обновления сейчас
 
+id: Checking current installed version
+msg: Проверка текущей установленной версии
+
 id: Checking for updates...
 msg: Проверка обновлений...
 
@@ -375,6 +337,9 @@ msg: Новая версия %s доступна для загрузки
 
 id: No upgrade available
 msg: Нет обновлений
+
+id: Patching binary
+msg: Обновление файлов
 
 id: Restarting Showtime in %d seconds...
 msg: Перезапуск Showtime через %d секунд...
@@ -407,7 +372,7 @@ msg: Статус воспроизведения
 # ./glwskins/default/pages/wideinfo/video.view
 #
 id: Seen:
-msg: Воспроизведено 
+msg: Воспроизведено:
 
 #
 # ./glwskins/default/playdecks/dvd.view
@@ -479,39 +444,6 @@ id: System is low on memory (%d kB RAM available)
 msg: Мало памяти (доступно %d Кб RAM)
 
 #
-# ./src/audio/audio.c
-#
-id: Audio output
-msg: Аудио выход
-
-id: Audio/Video sync delay
-msg: Задержка Audio/Video синхронизации
-
-id: Current output device
-msg: Текущее устройство вывода
-
-id: Force stereo downmix
-msg: Принудительный даунмикс в стерео
-
-id: Phantom LFE
-msg: Фантом-LFE
-
-id: Phantom center
-msg: Фантом-центр
-
-id: Select audio output device and related configurations
-msg: Выбор устройства вывода аудио и его конфигурации
-
-id: Small front speakers
-msg: Маленькие фронтальные динамики
-
-id: Swap LFE+center with surround
-msg: Замена LFE+центр на surround
-
-id: Switching audio output to %s
-msg: Переключение звука на %s 
-
-#
 # ./src/backend/dvd/cdda.c
 #
 id: Invalid CD URL
@@ -562,9 +494,6 @@ msg: Совместный
 id: Compilations
 msg: Сборник
 
-id: Enable Spotify
-msg: Включить Spotify
-
 id: Forget me
 msg: Забыть меня
 
@@ -606,9 +535,6 @@ msg: Друзья на Spotify
 
 id: Spotify music service
 msg: Музыкальный сервис Spotify
-
-id: Spotify offers you legal and free access to a huge library of music. To use Spotify in Showtime you need a Spotify Preemium account.\nFor more information about Spotify, visit http://www.spotify.com/\n\nYou will be prompted for your Spotify username and password when first accessing any of the Spotify features in Showtime.
-msg: Spotify предлагает вам легальный и свободный доступ к огромной библиотеке музыки. Для использования Spotify в Showtime вам нужен Spotify премиум аккаунт.\nДля получения информации посетите http://www.spotify.com/\n\nВы должны будете ввести логин и пароль Spotify при первом использовании функций Spotify в Showtime.
 
 id: Spotify playlists
 msg: Плейлисты Spotify
@@ -665,12 +591,13 @@ id: Artists
 msg: Артисты
 
 id: Date (newest first)
-# Missing translation
-msg: 
+msg: Дата (сперва новые)
 
 id: Date (oldest first)
-# Missing translation
-msg: 
+msg: Дата (сперва старые)
+
+id: Deleted %s
+msg: Удалено: %s
 
 id: Filename
 msg: Имя файла
@@ -690,6 +617,9 @@ msg: Сортировка сперва папок
 id: Sort on
 msg: Сортировать по
 
+id: Unable to delete %s\n%s
+msg: Не удалось удалить %s\n%s
+
 #
 # ./src/fileaccess/fa_spotlight.c
 #
@@ -697,8 +627,35 @@ id: Search using spotlight
 msg: Поиск с использованием spotlight
 
 #
+# ./src/fileaccess/fileaccess.c
+#
+id: Are you sure you want to delete:
+msg: Вы уверены, что хотите удалить:
+
+id: Enable file deletion from item menu
+msg: Включить удаление файла из пункта меню
+
+id: File access
+msg: Доступ к файлу
+
+id: %d archive parts
+msg[0]: частей архива: %d
+msg[1]: частей архива: %d
+
+id: %d directories
+msg[0]: папок: %d
+msg[1]: папок: %d
+
+id: %d files
+msg[0]: файлов: %d
+msg[1]: файлов: %d
+
+#
 # ./src/i18n.c
 #
+id: Ignore 'The' at beginning of words when sorting
+msg: Игнорировать 'The' в начале названия при сортировке
+
 id: Language
 msg: Язык
 
@@ -733,18 +690,6 @@ id: Tertiary subtitle language code
 msg: Код третьего языка субтитров
 
 #
-# ./src/ipc/serdev/lgtv.c
-#
-id: Automatic TV power on/off
-msg: Автоматическое вкл/выкл TV
-
-id: Input source
-msg: Источник на входе
-
-id: LG Television set
-msg: Телевизор LG
-
-#
 # ./src/keymapper.c
 #
 id: Configure mapping of keyboard and remote controller keys
@@ -771,6 +716,12 @@ msg: Выравнивание субтитров в кадре
 id: Audio delay
 msg: Задержка аудио
 
+id: Audio volume
+msg: Громкость
+
+id: Go to standby after video ends
+msg: Отключить систему по окончании видео
+
 id: Stretch video to fullscreen
 msg: Растянуть видео во весь экран
 
@@ -780,8 +731,14 @@ msg: Растянуть видео на широкий экран
 id: Subtitle delay
 msg: Задержка субтитров
 
+id: Subtitle horizontal displacement
+msg: Горизонтальное смещение субтитров
+
 id: Subtitle scaling
 msg: Масштаб субтитров
+
+id: Subtitle vertical displacement
+msg: Вертикальное смещение субтитров
 
 id: Video zoom
 msg: Масштаб видео
@@ -793,11 +750,26 @@ id: Indexing
 msg: Индексация
 
 #
-# ./src/metadata/metadata.c
+# ./src/metadata/decoration.c
 #
 id: Automatic
 msg: Автоматический
 
+id: Manual
+msg: Ручной
+
+id: Mark all as seen
+msg: Пометить всё как воспроизведённое
+
+id: Mark all as unseen
+msg: Пометить всё как невоспроизведённое
+
+id: Metadata mode
+msg: Режим получения метаданных
+
+#
+# ./src/metadata/metadata.c
+#
 id: Custom search query
 msg: Пользовательский поисковый запрос
 
@@ -906,6 +878,9 @@ msg: Прочее
 id: Photos
 msg: Фото
 
+id: Published in Virtual File System
+msg: Опубликовать в Виртуальной Файловой Системе
+
 id: Removed bookmark: %s
 msg: Удалить закладки: %s
 
@@ -922,6 +897,18 @@ id: URL
 msg: URL
 
 #
+# ./src/networking/ftp_server.c
+#
+id: Enable FTP server
+msg: Включить FTP сервер
+
+id: FTP server
+msg: FTP сервер
+
+id: Server TCP port
+msg: TCP порт сервера
+
+#
 # ./src/plugins.c
 #
 id: Alternate plugin Repository URL
@@ -930,8 +917,8 @@ msg: Альтернативный URL-репозитория плагинов
 id: Automatically upgrade plugins
 msg: Автоматическое обновление плагинов
 
-id: Available plugins
-msg: Доступные плагины
+id: Available apps
+msg: Доступные приложения
 
 id: Background
 msg: Фон
@@ -939,8 +926,8 @@ msg: Фон
 id: Beta testing passwords
 msg: Пароли бета-теста
 
-id: Browse available plugins
-msg: Просмотр доступных плагинов
+id: Browse available apps
+msg: Просмотр доступных приложений
 
 id: Browsing
 msg: Вид элементов при навигации
@@ -966,8 +953,8 @@ msg: Ошибка при открытии файла
 id: Home page
 msg: Главный экран
 
-id: Installed plugins
-msg: Установленные плагины
+id: Installed apps
+msg: Установленные приложения
 
 id: Installed version higher than available
 msg: Установленная версия новее, чем доступная
@@ -998,6 +985,12 @@ msg: Не обновляемый
 
 id: Online TV
 msg: Онлайн-ТВ
+
+id: Plugin %s %s has been uninstalled because it may cause problems.\nYou may try reinstalling a different version manually.
+msg: Плагин %s %s был удален, потому что он вызывает проблемы.\nПопробуйте переустановить вручную другую версию.
+
+id: Plugins
+msg: Плагины
 
 id: Preferred views from plugins
 msg: Предпочтительный вид при установленных плагинах
@@ -1086,6 +1079,12 @@ msg: Главные настройки
 id: Look and feel
 msg: Внешний вид интерфейса
 
+id: Network services, etc
+msg: Сетевые услуги и т.д.
+
+id: Network settings
+msg: Сетевые настройки
+
 id: Settings useful for developers
 msg: Настройки полезные для разработчиков
 
@@ -1093,10 +1092,82 @@ id: System related settings
 msg: Системные настройки
 
 #
-# ./src/subtitles/sub_scanner.c
+# ./src/subtitles/subtitles.c
 #
+id: Any subtitle in central folder
+msg: Любые субтитры в основной папке
+
+id: Any subtitle in same folder as video
+msg: Любые субтитры в одной папке с видео
+
+id: Auto
+msg: Авто
+
+id: Automatically select from this source
+msg: Автоматически выбирать из этого источника
+
+id: Center
+msg: Центр
+
+id: Central subtitle folder
+msg: Основная папка субтитров
+
+id: Color
+msg: Цвет
+
 id: External file
 msg: Внешний файл
+
+id: Force subtitles to reside on video frame
+msg: Принудительно прописывать субтитры в кадре
+
+id: Generic settings for video subtitles
+msg: Общие настройки для видео субтитров
+
+id: Ignore embedded styling
+msg: Игнорировать встроенный стиль
+
+id: Left
+msg: Слева
+
+id: Outline color
+msg: Цвет контура
+
+id: Outline size
+msg: Размер контура
+
+id: Path to central folder
+msg: Путь к основной папке 
+
+id: Providers for Subtitles
+msg: Поставщики для субтитров
+
+id: Right
+msg: Справа
+
+id: Shadow color
+msg: Цвет тени
+
+id: Shadow offset
+msg: Смещение тени
+
+id: Subtitle position
+msg: Позиция субтитров
+
+id: Subtitle size
+msg: Размер субтитров
+
+id: Subtitle size and positioning
+msg: Размер и позиция субтитров
+
+id: Subtitles embedded in video file
+msg: Субтитры, встроенные в видеофайл
+
+id: Subtitles with matching filename in central folder
+msg: Субтитры с соответствующим именем файла в основной папке
+
+id: Subtitles with matching filename in same folder as video
+msg: Субтитры с соответствующим именем файла в одной папке с видео
 
 #
 # ./src/text/fontstash.c
@@ -1122,14 +1193,8 @@ msg: Сброс узкого шрифта по умолчанию
 id: Reset subtitle font to default
 msg: Сброс шрифта субтитров по умолчанию
 
-id: Unable to load %s -- %s
-msg: Невозможно загрузить: %s -- %s
-
-id: Unable to open %s for writing
-msg: Невозможно открыть для записи: %s
-
-id: Unable to write to %s
-msg: Невозможно записать в: %s
+id: Unable to install font: %s
+msg: Невозможно установить шрифт: %s 
 
 id: Use font %s for
 msg: Использовать шрифт %s для
@@ -1138,19 +1203,31 @@ id: User interface
 msg: Пользовательский интерфейс
 
 #
+# ./src/ui/glw/glw_ps3.c
+#
+id: Seek using L2 and R2 button
+msg: Перемотка видео кнопками L2 и R2
+
+id: Yes with Select button
+msg: С нажатой кнопкой Select
+
+#
 # ./src/ui/glw/glw_settings.c
 #
+id: Font and icon size
+msg: Размер шрифта и значков
+
 id: Horizontal underscan
 msg: Горизонтальное сжатие
 
 id: Screensaver delay
 msg: Задержка скринсейвера
 
-id: Userinterface size
-msg: Размер интерфейса пользователя
-
 id: Vertical underscan
 msg: Вертикальное сжатие
+
+id: Wrap when reaching beginning/end of lists
+msg: Переход при достижении начала/конца списка
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1233,29 +1310,8 @@ msg: Невозможно запросить Cell-кодек. Ошибка 0x%x
 #
 # ./src/video/video_settings.c
 #
-id: 1080
-msg: 1080
-
-id: 576
-msg: 576
-
-id: 720
-msg: 720
-
-id: Always try to select a subtitle
-msg: Всегда пытаться выбрать субтитры
-
-id: Auto
-msg: Авто
-
 id: Automatically play next video in list
 msg: Автоматически проигрывать следующее видео в списке
-
-id: Center
-msg: Центр
-
-id: Color
-msg: Цвет
 
 id: Count video as played when reaching
 msg: Считать видео проигранным при достижении
@@ -1266,59 +1322,17 @@ msg: Включить VDA
 id: Enable VDPAU
 msg: Включить VDPAU
 
-id: Force subtitles to reside on video frame
-msg: Принудительно прописывать субтитры в кадре
-
-id: Generic settings for video subtitles
-msg: Общие настройки для видео субтитров
-
-id: Ignore embedded styling
-msg: Игнорировать встроенный стиль
-
-id: Include all subtitle files from movie directory
-msg: "Подхватывать" все файлы субтитров в папке
-
-id: Left
-msg: Слева
-
 id: Maximum resolution for deinterlacer
 msg: Максимальное разрешение для деинтерлейсинга
 
 id: No limit
 msg: Без ограничений
 
-id: Outline color
-msg: Цвет контура
-
-id: Outline size
-msg: Размер контура
-
 id: Preferred VDPAU deinterlacer method
 msg: Предпочтительный метод VPDAU деинтерлейсинга 
 
 id: Resume video playback
 msg: Boзoбнoвить вocпpoизвeдeниe видeo
-
-id: Right
-msg: Справа
-
-id: Shadow color
-msg: Цвет тени
-
-id: Shadow offset
-msg: Смещение тени
-
-id: Subtitle position
-msg: Позиция субтитров
-
-id: Subtitle size
-msg: Размер субтитров
-
-id: Subtitle size and positioning
-msg: Размер и позиция субтитров
-
-id: Subtitle styling
-msg: Стиль субтитров
 
 id: Temporal
 msg: Временный

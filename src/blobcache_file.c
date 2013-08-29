@@ -40,7 +40,8 @@
 #include "settings.h"
 #include "notifications.h"
 
-#define BC2_MAGIC 0x62630203
+#define BC2_MAGIC_current 0x62630206
+#define BC2_MAGIC_05      0x62630205
 
 typedef struct blobcache_item {
   struct blobcache_item *bi_link;
@@ -51,6 +52,7 @@ typedef struct blobcache_item {
   uint32_t bi_expiry;
   uint32_t bi_modtime;
   uint32_t bi_size;
+  uint8_t bi_content_type_len;
 } blobcache_item_t;
 
 typedef struct blobcache_diskitem {
@@ -61,6 +63,7 @@ typedef struct blobcache_diskitem {
   uint32_t di_modtime;
   uint32_t di_size;
   uint8_t di_etaglen;
+  uint8_t di_content_type_len;
   uint8_t di_etag[0];
 } __attribute__((packed)) blobcache_diskitem_t;
 
@@ -182,7 +185,7 @@ save_index(void)
     return;
   
   int items = 0;
-  siz = 8 + 20;
+  siz = 12 + 20;
 
   for(i = 0; i < ITEM_HASH_SIZE; i++) {
     for(p = hashvector[i]; p != NULL; p = p->bi_link) {
@@ -197,9 +200,11 @@ save_index(void)
     close(fd);
     return;
   }
-  *(uint32_t *)out = BC2_MAGIC;
+  *(uint32_t *)out = BC2_MAGIC_current;
   out += 4;
   *(uint32_t *)out = items;
+  out += 4;
+  *(uint32_t *)out = time(NULL);
   out += 4;
   for(i = 0; i < ITEM_HASH_SIZE; i++) {
     for(p = hashvector[i]; p != NULL; p = p->bi_link) {
@@ -212,7 +217,7 @@ save_index(void)
       di->di_modtime      = p->bi_modtime;
       di->di_size         = p->bi_size;
       di->di_etaglen      = etaglen;
-      
+      di->di_content_type_len = p->bi_content_type_len;
       out += sizeof(blobcache_diskitem_t);
       if(etaglen) {
 	memcpy(out, p->bi_etag, etaglen);
@@ -248,7 +253,8 @@ static void
 load_index(void)
 {
   char filename[PATH_MAX];
-  uint8_t *in, *base;
+  const uint8_t *in;
+  void *base;
   int i;
   blobcache_item_t *p;
   blobcache_diskitem_t *di;
@@ -261,29 +267,24 @@ load_index(void)
   if(fd == -1)
     return;
 
-  if(fstat(fd, &st) || st.st_size < 28) {
+  if(fstat(fd, &st) || st.st_size <= 20) {
     close(fd);
     return;
   }
 
-  base = in = mymalloc(st.st_size);
-  if(in == NULL) {
+  in = base = mymalloc(st.st_size);
+  if(base == NULL) {
     close(fd);
     return;
   }
 
-  size_t r = read(fd, in, st.st_size);
+  size_t r = read(fd, base, st.st_size);
   close(fd);
   if(r != st.st_size) {
-    free(in);
+    free(base);
     return;
   }
 
-
-  if(*(uint32_t *)in != BC2_MAGIC) {
-    free(in);
-    return;
-  }
 
   sha1_decl(shactx);
   sha1_init(shactx);
@@ -291,16 +292,38 @@ load_index(void)
   sha1_final(shactx, digest);
 
   if(memcmp(digest, in + st.st_size - 20, 20)) {
-    free(in);
+    free(base);
     TRACE(TRACE_INFO, "blobcache", "Index file corrupt, throwing away cache");
     return;
   }
 
+  uint32_t magic = *(uint32_t *)in;
   in += 4;
-
   int items = *(uint32_t *)in;
-
   in += 4;
+
+  switch(magic) {
+  case BC2_MAGIC_current: {
+    if(*(uint32_t *)in > time(NULL)) {
+      TRACE(TRACE_INFO, "blobcache",
+	    "Clock going backwards, throwing away cache");
+      free(base);
+      return;
+    }
+    in += 4;
+    break;
+  }
+
+  case BC2_MAGIC_05:
+    TRACE(TRACE_INFO, "blobcache", "Upgrading from older format 0x%08x", magic);
+    break;
+
+  default:
+    TRACE(TRACE_INFO, "blobcache", "Invalid magic 0x%08x", magic);
+    free(base);
+    return;
+  }
+
 
   for(i = 0; i < items; i++) {
     di = (blobcache_diskitem_t *)in;
@@ -312,6 +335,7 @@ load_index(void)
     p->bi_expiry       = di->di_expiry;
     p->bi_modtime      = di->di_modtime;
     p->bi_size         = di->di_size;
+    p->bi_content_type_len = di->di_content_type_len;
     int etaglen        = di->di_etaglen;
 
     in += sizeof(blobcache_diskitem_t);
@@ -379,6 +403,7 @@ blobcache_put(const char *key, const char *stash, buf_t *b,
     p = pool_get(item_pool);
     p->bi_key_hash = dk;
     p->bi_size = 0;
+    p->bi_content_type_len = 0;
     p->bi_link = hashvector[dk & ITEM_HASH_MASK];
     p->bi_etag = NULL;
     hashvector[dk & ITEM_HASH_MASK] = p;
@@ -394,7 +419,8 @@ blobcache_put(const char *key, const char *stash, buf_t *b,
   current_cache_size -= p->bi_size;
   p->bi_size = b->b_size;
   current_cache_size += p->bi_size;
-
+  p->bi_content_type_len = b->b_content_type ?
+    strlen(rstr_get(b->b_content_type)) : 0;
   hts_mutex_unlock(&cache_lock);
   return 0;
 }
@@ -460,7 +486,7 @@ blobcache_get(const char *key, const char *stash, int pad,
     if(fstat(fd, &st))
       goto bad;
 
-    if(st.st_size != p->bi_size) {
+    if(st.st_size != p->bi_size + p->bi_content_type_len) {
       unlink(filename);
       goto bad;
     }
@@ -482,18 +508,28 @@ blobcache_get(const char *key, const char *stash, int pad,
 
   if(b == NULL) {
 
-    b = buf_create(st.st_size + pad);
+    b = buf_create(p->bi_size + pad);
     if(b == NULL) {
       close(fd);
       return NULL;
     }
 
-    if(read(fd, b->b_ptr, st.st_size) != st.st_size) {
+    if(p->bi_content_type_len) {
+      b->b_content_type = rstr_allocl(NULL, p->bi_content_type_len);
+      if(read(fd, rstr_data(b->b_content_type), p->bi_content_type_len) !=
+	 p->bi_content_type_len) {
+	buf_release(b);
+	close(fd);
+	return NULL;
+      }
+    }
+
+    if(read(fd, b->b_ptr, p->bi_size) != p->bi_size) {
       buf_release(b);
       close(fd);
       return NULL;
     }
-    memset(b->b_ptr + st.st_size, 0, pad);
+    memset(b->b_ptr + p->bi_size, 0, pad);
     close(fd);
   }
   return b;
@@ -633,11 +669,15 @@ accesstimecmp(const void *A, const void *B)
 static void
 prune_to_size(void)
 {
-  int i, tot, j = 0;
+  int i, tot = 0, j = 0;
   blobcache_item_t *p, **sv;
 
   uint64_t maxsize = blobcache_compute_maxsize();
-  tot = pool_num(item_pool);
+
+
+  for(i = 0; i < ITEM_HASH_SIZE; i++)
+    for(p = hashvector[i]; p != NULL; p = p->bi_link)
+      tot++;
 
   sv = malloc(sizeof(blobcache_item_t *) * tot);
   current_cache_size = 0;
@@ -775,6 +815,13 @@ flushthread(void *aux)
 
     int fd = open(filename, O_CREAT | O_WRONLY | O_TRUNC, 0666);
     if(fd != -1) {
+
+      if(b->b_content_type != NULL) {
+	const char *str = rstr_get(b->b_content_type);
+	size_t len = strlen(str);
+	if(write(fd, str, len) != len)
+	  unlink(filename);
+      }
 
       if(write(fd, b->b_ptr, b->b_size) != b->b_size)
         unlink(filename);

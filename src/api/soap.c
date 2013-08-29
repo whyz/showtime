@@ -75,7 +75,6 @@ soap_exec(const char *uri, const char *service, int version, const char *method,
   htsmsg_t *out;
   htsbuf_queue_t post;
   buf_t *result;
-  struct http_header_list hdrs = {0};
   char tmp[100];
 
   htsbuf_queue_init(&post, 0);
@@ -91,13 +90,12 @@ soap_exec(const char *uri, const char *service, int version, const char *method,
   snprintf(tmp, sizeof(tmp),"\"urn:schemas-upnp-org:service:%s:%d#%s\"",
 	   service, version, method);
 
-  http_header_add(&hdrs, "SOAPACTION", tmp, 0);
-
-  r = http_request(uri, NULL, &result, errbuf, errlen,
-		   &post, "text/xml; charset=\"utf-8\"",
-		   0, NULL, &hdrs, NULL, NULL, NULL);
-
-  http_headers_free(&hdrs);
+  r = http_req(uri,
+               HTTP_RESULT_PTR(&result),
+               HTTP_ERRBUF(errbuf, errlen),
+               HTTP_POSTDATA(&post, "text/xml; charset=\"utf-8\""),
+               HTTP_REQUEST_HEADER("SOAPACTION", tmp),
+               NULL);
 
   htsbuf_queue_flush(&post);
 
@@ -124,7 +122,7 @@ soap_exec(const char *uri, const char *service, int version, const char *method,
 
   if(outargs != NULL) {
     htsmsg_field_t *f;
-    htsmsg_t *out = htsmsg_create_map();
+    htsmsg_t *out2 = htsmsg_create_map();
     // Convert args from XML style to more compact style
     HTSMSG_FOREACH(f, outargs) {
       htsmsg_t *a;
@@ -133,11 +131,12 @@ soap_exec(const char *uri, const char *service, int version, const char *method,
       if((a = htsmsg_get_map_by_field(f)) == NULL)
 	continue;
       if((s = htsmsg_get_str(a, "cdata")) != NULL)
-	htsmsg_add_str(out, f->hmf_name, s);
+	htsmsg_add_str(out2, f->hmf_name, s);
     }
-    *outp = out;
+    *outp = out2;
   } else {
     *outp = NULL;
   }
+  htsmsg_destroy(out);
   return 0;
 }

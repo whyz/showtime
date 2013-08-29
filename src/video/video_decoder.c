@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <math.h>
 
-//#include <libavutil/mem.h>
+#include <libavutil/mem.h>
 
 #include "showtime.h"
 #include "video_decoder.h"
@@ -70,8 +70,8 @@ vd_decode_video(video_decoder_t *vd, media_queue_t *mq, media_buf_t *mb)
   AVCodecContext *ctx = cw->ctx;
   AVFrame *frame = vd->vd_frame;
   int t;
-  
-  vd->vd_reorder[vd->vd_reorder_ptr] = *mb;
+
+  vd->vd_reorder[vd->vd_reorder_ptr] = mb->mb_meta;
   ctx->reordered_opaque = vd->vd_reorder_ptr;
   vd->vd_reorder_ptr = (vd->vd_reorder_ptr + 1) & VIDEO_DECODER_REORDER_MASK;
 
@@ -79,7 +79,6 @@ vd_decode_video(video_decoder_t *vd, media_queue_t *mq, media_buf_t *mb)
    * If we are seeking, drop any non-reference frames
    */
   ctx->skip_frame = mb->mb_skip == 1 ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
-
   avgtime_start(&vd->vd_decode_time);
 
   AVPacket avpkt;
@@ -95,12 +94,12 @@ vd_decode_video(video_decoder_t *vd, media_queue_t *mq, media_buf_t *mb)
   if(mp->mp_stats)
     mp_set_mq_meta(mq, cw->ctx->codec, cw->ctx);
 
-  mb = &vd->vd_reorder[frame->reordered_opaque];
+  const media_buf_meta_t *mbm = &vd->vd_reorder[frame->reordered_opaque];
 
-  if(got_pic == 0 || mb->mb_skip == 1) 
+  if(got_pic == 0 || mbm->mbm_skip == 1) 
     return;
 
-  video_deliver_frame_avctx(vd, mp, mq, ctx, frame, mb, t);
+  video_deliver_frame_avctx(vd, mp, mq, ctx, frame, mbm, t);
 }
 
 
@@ -130,7 +129,7 @@ void
 video_deliver_frame_avctx(video_decoder_t *vd,
 			  media_pipe_t *mp, media_queue_t *mq,
 			  AVCodecContext *ctx, AVFrame *frame,
-			  const media_buf_t *mb, int decode_time)
+			  const media_buf_meta_t *mbm, int decode_time)
 {
   frame_info_t fi;
 #if 0
@@ -138,7 +137,7 @@ video_deliver_frame_avctx(video_decoder_t *vd,
     mp_set_current_time(mp, mb->mb_time);
 #endif
   /* Compute aspect ratio */
-  switch(mb->mb_aspect_override) {
+  switch(mbm->mbm_aspect_override) {
   case 0:
 
     if(frame->pan_scan != NULL && frame->pan_scan->width != 0) {
@@ -165,15 +164,15 @@ video_deliver_frame_avctx(video_decoder_t *vd,
     break;
   }
 
-  int64_t pts = mb->mb_pts;
+  int64_t pts = mbm->mbm_pts;
 
   /* Compute duration and PTS of frame */
-  if(pts == AV_NOPTS_VALUE && mb->mb_dts != AV_NOPTS_VALUE &&
+  if(pts == AV_NOPTS_VALUE && mbm->mbm_dts != AV_NOPTS_VALUE &&
      (ctx->has_b_frames == 0 || frame->pict_type == AV_PICTURE_TYPE_B)) {
-    pts = mb->mb_dts;
+    pts = mbm->mbm_dts;
   }
 
-  int duration = mb->mb_duration;
+  int duration = mbm->mbm_duration;
 
   if(!vd_valid_duration(duration)) {
     /* duration is zero or very invalid, use duration from last output */
@@ -219,8 +218,8 @@ video_deliver_frame_avctx(video_decoder_t *vd,
 #if 0
   static int64_t lastpts = AV_NOPTS_VALUE;
   if(lastpts != AV_NOPTS_VALUE) {
-    printf("DEC: %20"PRId64" : %-20"PRId64" %d %"PRId64" %d\n", pts, pts - lastpts, mb->mb_drive_clock,
-           mb->mb_delta, duration);
+    printf("DEC: %20"PRId64" : %-20"PRId64" %d %"PRId64" %d\n", pts, pts - lastpts, mbm->mbm_drive_clock,
+           mbm->mbm_delta, duration);
     if(pts - lastpts > 1000000) {
       abort();
     }
@@ -229,15 +228,15 @@ video_deliver_frame_avctx(video_decoder_t *vd,
 #endif
 
   vd->vd_interlaced |=
-    frame->interlaced_frame && !mb->mb_disable_deinterlacer;
+    frame->interlaced_frame && !mbm->mbm_disable_deinterlacer;
 
   fi.fi_width = frame->width;
   fi.fi_height = frame->height;
   fi.fi_pts = pts;
-  fi.fi_epoch = mb->mb_epoch;
-  fi.fi_delta = mb->mb_delta;
+  fi.fi_epoch = mbm->mbm_epoch;
+  fi.fi_delta = mbm->mbm_delta;
   fi.fi_duration = duration;
-  fi.fi_drive_clock = mb->mb_drive_clock;
+  fi.fi_drive_clock = mbm->mbm_drive_clock;
 
   fi.fi_interlaced = !!vd->vd_interlaced;
   fi.fi_tff = !!frame->top_field_first;
@@ -264,7 +263,7 @@ video_deliver_frame_avctx(video_decoder_t *vd,
 /**
  *
  */
-void
+static void
 video_decoder_set_current_time(video_decoder_t *vd, int64_t ts,
 			       int epoch, int64_t delta)
 {
@@ -286,7 +285,6 @@ video_decoder_set_current_time(video_decoder_t *vd, int64_t ts,
 void
 video_deliver_frame(video_decoder_t *vd, const frame_info_t *info)
 {
-  vd->vd_skip = 0;
   vd->vd_mp->mp_video_frame_deliver(info, vd->vd_mp->mp_video_frame_opaque);
 
 
@@ -334,11 +332,27 @@ vd_thread(void *aux)
   int run = 1;
   int reqsize = -1;
   int size;
+  int reinit = 0;
+
+  const media_buf_meta_t *mbm = NULL;
+
   vd->vd_frame = avcodec_alloc_frame();
 
   hts_mutex_lock(&mp->mp_mutex);
 
   while(run) {
+
+    if(mbm != vd->vd_reorder_current) {
+      mbm = vd->vd_reorder_current;
+      hts_mutex_unlock(&mp->mp_mutex);
+
+      vd->vd_estimated_duration = mbm->mbm_duration;
+
+      video_decoder_set_current_time(vd, mbm->mbm_pts, mbm->mbm_epoch,
+				     mbm->mbm_delta);
+      hts_mutex_lock(&mp->mp_mutex);
+      continue;
+    }
 
     media_buf_t *ctrl = TAILQ_FIRST(&mq->mq_q_ctrl);
     media_buf_t *data = TAILQ_FIRST(&mq->mq_q_data);
@@ -412,6 +426,9 @@ vd_thread(void *aux)
 	  mc_current->flush(mc_current, vd);
 	else
 	  video_flush_avctx(mc_current, vd);
+
+	media_codec_deref(mc_current);
+	mc_current = NULL;
       }
 
       mp->mp_video_frame_deliver(NULL, mp->mp_video_frame_opaque);
@@ -427,8 +444,11 @@ vd_thread(void *aux)
 	mc_current = media_codec_ref(mc);
       }
 
-      if(mb->mb_skip == 2)
-	vd->vd_skip = 1;
+      if(reinit) {
+	if(mc->reinit != NULL)
+	  mc->reinit(mc);
+	reinit = 0;
+      }
 
       size = mb->mb_size;
 
@@ -446,9 +466,11 @@ vd_thread(void *aux)
       break;
 
     case MB_CTRL_REINITIALIZE:
-      if(mc_current != NULL && mc_current->reinit != NULL)
-	mc_current->reinit(mc_current);
+      reinit = 1;
+      break;
 
+    case MB_CTRL_RECONFIGURE:
+      mb->mb_cw->reconfigure(mc);
       break;
 
 #if ENABLE_DVD
@@ -525,6 +547,9 @@ vd_thread(void *aux)
   }
 
   hts_mutex_unlock(&mp->mp_mutex);
+
+  if(mc_current != NULL)
+    media_codec_deref(mc_current);
 
   if(vd->vd_ext_subtitles != NULL)
     subtitles_destroy(vd->vd_ext_subtitles);

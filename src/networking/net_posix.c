@@ -28,15 +28,12 @@
 #include <stdarg.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <net/if.h>
-#include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
-#include <ifaddrs.h>
 #include <pthread.h>
 
 #include "showtime.h"
-#include "net.h"
+#include "net_i.h"
 
 
 #if ENABLE_HTTPSERVER
@@ -233,6 +230,23 @@ getstreamsocket(int family, char *errbuf, size_t errbufsize)
 
   return fd;
 }
+
+
+/**
+ *
+ */
+tcpcon_t *
+tcp_from_fd(int fd)
+{
+  tcpcon_t *tc = calloc(1, sizeof(tcpcon_t));
+  tc->fd = fd;
+  htsbuf_queue_init(&tc->spill, 0);
+  tc->read = tcp_read;
+  tc->write = tcp_write;
+  return tc;
+}
+
+
 
 /**
  *
@@ -513,53 +527,11 @@ tcp_huge_buffer(tcpcon_t *tc)
     TRACE(TRACE_ERROR, "TCP", "Unable to increase RCVBUF");
 }
 
-/**
- *
- */
-netif_t *
-net_get_interfaces(void)
-{
-  struct ifaddrs *ifa_list, *ifa;
-  struct netif *ni, *n;
-  int num = 0;
-
-  if(getifaddrs(&ifa_list) != 0) {
-    TRACE(TRACE_ERROR, "net", "getifaddrs failed: %s", strerror(errno));
-    return NULL;
-  }
-  
-  for(ifa = ifa_list; ifa != NULL; ifa = ifa->ifa_next)
-    num++;
-
-  n = ni = calloc(1, sizeof(struct netif) * (num + 1));
-  
-  for(ifa = ifa_list; ifa != NULL; ifa = ifa->ifa_next) {
-    if((ifa->ifa_flags & (IFF_UP | IFF_LOOPBACK | IFF_RUNNING)) != 
-       (IFF_UP | IFF_RUNNING) ||
-       ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET)
-	 continue;
-
-    n->ipv4 = ntohl(((struct sockaddr_in *)ifa->ifa_addr)->sin_addr.s_addr);
-    if(n->ipv4 == 0)
-      continue;
-
-    snprintf(n->ifname, sizeof(n->ifname), "%s", ifa->ifa_name);
-    n++;
-  }
-  
-  freeifaddrs(ifa_list);
-
-  if(ni->ipv4 == 0) {
-    free(ni);
-    return NULL;
-  }
-
-  return ni;
-}
-
 
 /**
  * Called from code in arch/
+ *
+ * XXX: Should be initialized from showtime.c
  */
 void
 net_initialize(void)
@@ -578,4 +550,20 @@ net_initialize(void)
   CRYPTO_set_locking_callback(ssl_lock_fn);
   CRYPTO_set_id_callback(ssl_tid_fn);
 #endif
+}
+
+
+/**
+ *
+ */
+void
+net_change_nonblocking(int fd, int on)
+{
+  int flags = fcntl(fd, F_GETFL);
+  if(on) {
+    flags |= O_NONBLOCK;
+  } else {
+    flags &= ~O_NONBLOCK;
+  }
+  fcntl(fd, F_SETFL, flags);
 }

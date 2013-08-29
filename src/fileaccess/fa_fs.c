@@ -29,6 +29,7 @@
 #include <limits.h>
 #include "showtime.h"
 #include "fileaccess.h"
+#include "misc/fs.h"
 
 #include "fa_proto.h"
 
@@ -40,7 +41,7 @@ typedef struct part {
 typedef struct fs_handle {
   fa_handle_t h;
   int part_count;
-  off_t total_size;
+  off_t total_size; // Only valid if part_count != 1
   int64_t read_pos;
   part_t parts[0];
 } fs_handle_t;
@@ -107,7 +108,8 @@ get_split_piece_count(const char *fn)
 }
 
 static int
-fs_scandir(fa_dir_t *fd, const char *url, char *errbuf, size_t errlen)
+fs_scandir(fa_protocol_t *fap, fa_dir_t *fd, const char *url,
+           char *errbuf, size_t errlen)
 {
   char buf[URL_MAX];
   struct stat st;
@@ -181,7 +183,29 @@ fs_open(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
   fs_handle_t *fh=NULL;
   struct stat st;
   int i;
-  int fd = open(url, O_RDONLY, 0);
+  int fd;
+
+  if(flags & FA_WRITE) {
+
+    int open_flags = O_RDWR | O_CREAT;
+
+    if(!(flags & FA_APPEND))
+      open_flags |= O_TRUNC;
+
+    fd = open(url, open_flags, 0666);
+    if(fd == -1) {
+      snprintf(errbuf, errlen, "%s", strerror(errno));
+      return NULL;
+    }
+
+
+    if(flags & FA_APPEND)
+      lseek(fd, 0, SEEK_END);
+
+    goto open_ok;
+  }
+
+  fd = open(url, O_RDONLY, 0);
 
   if(fd == -1) {
     snprintf(errbuf, errlen, "%s", strerror(errno));
@@ -214,17 +238,11 @@ fs_open(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
       fh->total_size += st.st_size;
     }
   } else {
-
-    //normal file
+    // normal file
+  open_ok:
     fh = calloc(1, sizeof(fs_handle_t) + sizeof(part_t));
     fh->part_count = 1;
     fh->parts[0].fd = fd;
-    if(fstat(fd, &st)) {
-      snprintf(errbuf, errlen, "%s", strerror(errno));
-      fs_close(&fh->h);
-      return NULL;
-    }
-    fh->total_size = st.st_size;
   }
 
   fh->h.fh_proto = fap;
@@ -263,6 +281,19 @@ fs_read(fa_handle_t *fh0, void *buf, size_t size)
   }
   fh->read_pos += rsize;
   return rsize;
+}
+
+
+/**
+ * Write to file
+ */
+static int
+fs_write(fa_handle_t *fh0, const void *buf, size_t size)
+{
+  fs_handle_t *fh = (fs_handle_t *)fh0;
+  if(fh->part_count == 1)
+    return write(fh->parts[0].fd, buf, size);
+  return 0;
 }
 
 /**
@@ -360,10 +391,73 @@ fs_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
   return FAP_STAT_OK;
 }
 
+/**
+ * Rmdir (remove directory)
+ */
+static int
+fs_rmdir(const fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen)
+{
+  if(rmdir(url)) {
+    snprintf(errbuf, errlen, "%s", strerror(errno));
+    return -1;
+  }
+  return 0;
+}
+
+
+/**
+ * Unlink (remove file)
+ */
+static int
+fs_unlink(const fa_protocol_t *fap, const char *url,
+          char *errbuf, size_t errlen)
+{
+  if(unlink(url)) {
+    int piece_num,i;
+    snprintf(errbuf, errlen, "%s", strerror(errno));
+
+    piece_num = get_split_piece_count(url);
+    if(piece_num == 0)
+      return -1;
+
+    for(i = 0; i < piece_num; i++) {
+      char buf[PATH_MAX];
+      get_split_piece_name(buf, sizeof(buf), url,i);
+
+      if(unlink(buf)) {
+        snprintf(errbuf, errlen, "%s", strerror(errno));
+        return -1;
+      }
+    }
+    return 0;
+  }
+  return 0;
+}
+
+
+
+/**
+ *
+ */
+static int
+fs_makedirs(struct fa_protocol *fap, const char *url,
+            char *errbuf, size_t errsize)
+{
+
+  int r = makedirs(url);
+
+  if(r) {
+    snprintf(errbuf, errsize, "Unable to create directory: %s",
+             strerror(errno));
+    return -1;
+  }
+  return 0;
+}
 
 /**
  * FS change notification 
  */
+#if 0
 #if ENABLE_INOTIFY
 #include <sys/inotify.h>
 #include <poll.h>
@@ -486,22 +580,27 @@ fs_notify(struct fa_protocol *fap, const char *url,
 }
 
 #endif
+#endif
 
 #if ENABLE_FSEVENTS
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreServices/CoreServices.h>
 
 struct fs_notify_aux {
+  fa_handle_t h;
+
   void *opaque;
   void (*change)(void *opaque,
-		 fa_notify_op_t op, 
+		 fa_notify_op_t op,
 		 const char *filename,
 		 const char *url,
-		 int type);  
-}; 
+		 int type);
+
+  FSEventStreamRef fse;
+};
 
 
-static void 
+static void
 fs_notify_callback(ConstFSEventStreamRef streamRef,
 		   void *clientCallBackInfo,
 		   size_t numEvents,
@@ -513,51 +612,53 @@ fs_notify_callback(ConstFSEventStreamRef streamRef,
   fna->change(fna->opaque, FA_NOTIFY_DIR_CHANGE, NULL, NULL, 0);
 }
 
+
 /**
  *
  */
-static void
-fs_notify(struct fa_protocol *fap, const char *url,
-	  void *opaque,
-	  void (*change)(void *opaque,
-			 fa_notify_op_t op, 
-			 const char *filename,
-			 const char *url,
-			 int type),
-	  int (*breakcheck)(void *opaque))
+static fa_handle_t *
+fs_notify_start(struct fa_protocol *fap, const char *url,
+                void *opaque,
+                void (*change)(void *opaque,
+                               fa_notify_op_t op,
+                               const char *filename,
+                               const char *url,
+                               int type))
 {
-  FSEventStreamRef fse;
   FSEventStreamContext ctx = {0};
-  struct fs_notify_aux fna;
-  fna.opaque = opaque;
-  fna.change = change;
-  ctx.info = &fna;
+  struct fs_notify_aux *fna = calloc(1, sizeof(struct fs_notify_aux));
+  fna->opaque = opaque;
+  fna->change = change;
+  ctx.info = fna;
 
   CFStringRef p = CFStringCreateWithCString(NULL, url, kCFStringEncodingUTF8);
 
   CFArrayRef paths = CFArrayCreate(NULL, (const void **)&p, 1, NULL);
 
-  fse = FSEventStreamCreate(kCFAllocatorDefault, 
-			    fs_notify_callback, &ctx, paths,
-			    kFSEventStreamEventIdSinceNow,
-			    0.1, 0);
+  fna->fse = FSEventStreamCreate(kCFAllocatorDefault,
+                                 fs_notify_callback, &ctx, paths,
+                                 kFSEventStreamEventIdSinceNow,
+                                 0.1, 0);
   CFRelease(paths);
   CFRelease(p);
 
-  FSEventStreamScheduleWithRunLoop(fse, CFRunLoopGetCurrent(),
+  FSEventStreamScheduleWithRunLoop(fna->fse, CFRunLoopGetMain(),
 				   kCFRunLoopDefaultMode);
-  FSEventStreamStart(fse);				   
-  while(1) {
-    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 1, false);
-
-    if(breakcheck(opaque))
-      break;
-  }
-
-  FSEventStreamStop(fse);
-  FSEventStreamInvalidate(fse);
-  FSEventStreamRelease(fse);
+  FSEventStreamStart(fna->fse);
+  return &fna->h;
 }
+
+
+static void
+fs_notify_stop(fa_handle_t *fh)
+{
+  struct fs_notify_aux *fna = (struct fs_notify_aux *)fh;
+  FSEventStreamStop(fna->fse);
+  FSEventStreamInvalidate(fna->fse);
+  FSEventStreamRelease(fna->fse);
+  free(fna);
+}
+
 #endif
 
 
@@ -584,18 +685,23 @@ fa_protocol_t fa_protocol_fs = {
   .fap_open  = fs_open,
   .fap_close = fs_close,
   .fap_read  = fs_read,
+  .fap_write = fs_write,
   .fap_seek  = fs_seek,
   .fap_fsize = fs_fsize,
   .fap_stat  = fs_stat,
+  .fap_unlink= fs_unlink,
+  .fap_rmdir = fs_rmdir,
 #if ENABLE_INOTIFY
-  .fap_notify = fs_notify,
+  //  .fap_notify = fs_notify,
 #endif
 #if ENABLE_FSEVENTS
-  .fap_notify = fs_notify,
+  .fap_notify_start = fs_notify_start,
+  .fap_notify_stop  = fs_notify_stop,
 #endif
 #if ENABLE_REALPATH
   .fap_normalize = fs_normalize,
 #endif
+  .fap_makedirs = fs_makedirs,
 };
 
 FAP_REGISTER(fs);

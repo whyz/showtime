@@ -35,6 +35,7 @@
 #include "misc/str.h"
 #include "db/kvstore.h"
 #include "htsmsg/htsmsg_store.h"
+#include "fileaccess/fa_vfs.h"
 
 TAILQ_HEAD(nav_page_queue, nav_page);
 LIST_HEAD(bookmark_list, bookmark);
@@ -46,7 +47,7 @@ static prop_t *bookmark_nodes;
 
 static void bookmarks_init(void);
 static void bookmark_add(const char *title, const char *url, const char *type,
-			 const char *icon, const char *id);
+			 const char *icon, const char *id, int vfs);
 static void bookmarks_save(void);
 
 static struct bookmark_list bookmarks;
@@ -62,6 +63,7 @@ typedef struct bookmark {
   prop_sub_t *bm_url_sub;
   prop_sub_t *bm_type_sub;
   prop_sub_t *bm_icon_sub;
+  prop_sub_t *bm_vfs_sub;
 
   rstr_t *bm_id;
   rstr_t *bm_title;
@@ -69,9 +71,13 @@ typedef struct bookmark {
   rstr_t *bm_type;
   rstr_t *bm_icon;
 
+  int bm_vfs;
+  int bm_vfs_id;
+
   service_t *bm_service;
 
   setting_t *bm_type_setting;
+  setting_t *bm_vfs_setting;
   setting_t *bm_delete;
 
   prop_t *bm_info;
@@ -202,14 +208,14 @@ nav_create(prop_t *prop)
   nav->nav_prop_can_go_back = prop_create(nav->nav_prop_root, "canGoBack");
   nav->nav_prop_can_go_fwd  = prop_create(nav->nav_prop_root, "canGoForward");
   nav->nav_prop_can_go_home = prop_create(nav->nav_prop_root, "canGoHome");
+  prop_t *eventsink         = prop_create(nav->nav_prop_root, "eventsink");
   prop_set_int(nav->nav_prop_can_go_home, 1);
 
-  nav->nav_eventsink = 
+  nav->nav_eventsink =
     prop_subscribe(0,
-		   PROP_TAG_NAME("nav", "eventsink"),
 		   PROP_TAG_CALLBACK_EVENT, nav_eventsink, nav,
 		   PROP_TAG_COURIER, nav_courier,
-		   PROP_TAG_ROOT, nav->nav_prop_root,
+		   PROP_TAG_ROOT, eventsink,
 		   NULL);
 
   nav->nav_dtor_tracker =
@@ -229,8 +235,11 @@ nav_create(prop_t *prop)
     while(gconf.state_plugins_loaded == 0)
       hts_cond_wait(&gconf.state_cond, &gconf.state_mutex);
     hts_mutex_unlock(&gconf.state_mutex);
-    
-    nav_open0(nav, gconf.initial_url, gconf.initial_view, NULL, NULL, NULL);
+
+    event_t *e = event_create_openurl(gconf.initial_url, gconf.initial_view,
+                                      NULL, NULL, NULL);
+    prop_send_ext_event(eventsink, e);
+    event_release(e);
   }
 
   return nav;
@@ -443,7 +452,7 @@ nav_page_bookmarked_set(void *opaque, int v)
 
     notify_add(NULL, NOTIFY_INFO, NULL, 3, _("Added new bookmark: %s"), title);
 
-    bookmark_add(title, np->np_url, "other", rstr_get(np->np_icon), NULL);
+    bookmark_add(title, np->np_url, "other", rstr_get(np->np_icon), NULL, 0);
 
   } else {
     bookmark_t *bm;
@@ -548,7 +557,7 @@ nav_page_setup_prop(navigator_t *nav, nav_page_t *np, const char *view,
   prop_set_int(np->np_bookmarked, nav_page_is_bookmarked(np));
 
   np->np_bookmarked_sub = 
-    prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE,
+    prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE | PROP_SUB_IGNORE_VOID,
 		   PROP_TAG_ROOT, np->np_bookmarked,
 		   PROP_TAG_CALLBACK_INT, nav_page_bookmarked_set, np,
 		   PROP_TAG_COURIER, nav_courier,
@@ -811,6 +820,8 @@ bookmarks_save(void)
     htsmsg_add_str(b, "url", rstr_get(bm->bm_url));
     if(bm->bm_icon)
       htsmsg_add_str(b, "icon", rstr_get(bm->bm_icon));
+    if(bm->bm_vfs)
+      htsmsg_add_u32(b, "vfs", bm->bm_vfs);
     htsmsg_add_msg(m, NULL, b);
   }
 
@@ -840,6 +851,7 @@ bookmark_destroyed(void *opaque, prop_event_t event, ...)
   prop_unsubscribe(bm->bm_url_sub);
   prop_unsubscribe(bm->bm_type_sub);
   prop_unsubscribe(bm->bm_icon_sub);
+  prop_unsubscribe(bm->bm_vfs_sub);
 
   rstr_release(bm->bm_id);
   rstr_release(bm->bm_title);
@@ -862,6 +874,30 @@ bookmark_destroyed(void *opaque, prop_event_t event, ...)
   nav_update_bookmarked();
 }
 
+/**
+ *
+ */
+static void
+update_vfs_mapping(bookmark_t *bm)
+{
+  if(bm->bm_vfs && bm->bm_title && rstr_get(bm->bm_title)[0]) {
+    if(bm->bm_vfs_id)
+      return;
+
+    if(bm->bm_url && rstr_get(bm->bm_url)[0]) {
+      bm->bm_vfs_id = vfs_add_mapping(rstr_get(bm->bm_title),
+				      rstr_get(bm->bm_url));
+    } else {
+      vfs_del_mapping(bm->bm_vfs_id);
+      bm->bm_vfs_id = 0;
+    }
+  } else {
+    if(!bm->bm_vfs_id)
+      return;
+    vfs_del_mapping(bm->bm_vfs_id);
+    bm->bm_vfs_id = 0;
+  }
+}
 
 /**
  *
@@ -873,6 +909,7 @@ bm_set_title(void *opaque, rstr_t *str)
 
   rstr_set(&bm->bm_title, str);
   service_set_title(bm->bm_service, str);
+  update_vfs_mapping(bm);
   bookmarks_save();
 }
 
@@ -887,11 +924,10 @@ bm_set_url(void *opaque, rstr_t *str)
 
   rstr_set(&bm->bm_url, str);
   service_set_url(bm->bm_service, str);
+  update_vfs_mapping(bm);
   bookmarks_save();
   nav_update_bookmarked();
 }
-
-
 
 
 /**
@@ -901,7 +937,6 @@ static void
 bm_set_type(void *opaque, rstr_t *str)
 {
   bookmark_t *bm = opaque;
-
   rstr_set(&bm->bm_type, str);
   service_set_type(bm->bm_service, str);
   bookmarks_save();
@@ -918,6 +953,19 @@ bm_set_icon(void *opaque, rstr_t *str)
 
   rstr_set(&bm->bm_icon, str);
   service_set_icon(bm->bm_service, str);
+  bookmarks_save();
+}
+
+
+/**
+ *
+ */
+static void
+bm_set_vfs(void *opaque, int v)
+{
+  bookmark_t *bm = opaque;
+  bm->bm_vfs = v;
+  update_vfs_mapping(bm);
   bookmarks_save();
 }
 
@@ -969,7 +1017,7 @@ bm_delete(void *opaque, prop_event_t event, ...)
  */
 static void
 bookmark_add(const char *title, const char *url, const char *type,
-	     const char *icon, const char *id)
+	     const char *icon, const char *id, int vfs)
 {
   if(title == NULL || url == NULL)
     return;
@@ -1015,7 +1063,7 @@ bookmark_add(const char *title, const char *url, const char *type,
 		 PROP_TAG_COURIER, nav_courier,
 		 NULL);
 
-  // Construct the edit page
+  // Construct the settings page
 
   prop_t *m = prop_create(p, "model");
   prop_t *md = prop_create(p, "metadata");
@@ -1032,22 +1080,26 @@ bookmark_add(const char *title, const char *url, const char *type,
   settings_create_bound_string(m, _p("Title"), prop_create(md, "title"));
   settings_create_bound_string(m, _p("URL"), prop_create(md, "url"));
 
-  bm->bm_type_setting = 
-    settings_create_multiopt(m, "type", _p("Type"), 0);
+  bm->bm_type_setting =
+    setting_create(SETTING_MULTIOPT, m, SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Type")),
+                   SETTING_VALUE(type),
+                   SETTING_OPTION("other",  _p("Other")),
+                   SETTING_OPTION("music",  _p("Music")),
+                   SETTING_OPTION("video",  _p("Video")),
+                   SETTING_OPTION("tv",     _p("TV")),
+                   SETTING_OPTION("photos", _p("Photos")),
+                   SETTING_CALLBACK(change_type, bm),
+                   SETTING_COURIER(nav_courier),
+                   NULL);
 
-  settings_multiopt_add_opt(bm->bm_type_setting, "other",  _p("Other"),
-			    !strcmp(type, "other"));
-  settings_multiopt_add_opt(bm->bm_type_setting, "music",  _p("Music"),
-			    !strcmp(type, "music"));
-  settings_multiopt_add_opt(bm->bm_type_setting, "video",  _p("Video"),
-			    !strcmp(type, "video"));
-  settings_multiopt_add_opt(bm->bm_type_setting, "tv",     _p("TV"),
-			    !strcmp(type, "tv"));
-  settings_multiopt_add_opt(bm->bm_type_setting, "photos", _p("Photos"),
-			    !strcmp(type, "photos"));
-  
-  settings_multiopt_initiate(bm->bm_type_setting, change_type, bm,
-			     nav_courier, NULL, NULL, NULL);
+  bm->bm_vfs_setting =
+    setting_create(SETTING_BOOL, m, SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Published in Virtual File System")),
+                   SETTING_VALUE(vfs),
+                   SETTING_CALLBACK(bm_set_vfs, bm),
+                   SETTING_COURIER(nav_courier),
+                   NULL);
 
   prop_link(prop_create(md, "url"), prop_create(md, "shortdesc"));
 
@@ -1055,7 +1107,7 @@ bookmark_add(const char *title, const char *url, const char *type,
   settings_create_info(m, NULL,
 		       service_get_statustxt_prop(bm->bm_service));
 
-  bm->bm_delete = 
+  bm->bm_delete =
     settings_create_action(m, _p("Delete"), bm_delete, bm, 0, nav_courier);
 
   if(prop_set_parent(p, bookmark_nodes))
@@ -1079,7 +1131,7 @@ bookmarks_callback(void *opaque, prop_event_t event, ...)
     break;
 
   case PROP_REQ_NEW_CHILD:
-    bookmark_add("New bookmark", "none:", "other", NULL, NULL);
+    bookmark_add("New bookmark", "none:", "other", NULL, NULL, 0);
     break;
 
   case PROP_REQ_DELETE_VECTOR:
@@ -1099,7 +1151,8 @@ bookmark_load(htsmsg_t *o)
 	       htsmsg_get_str(o, "url"),
 	       htsmsg_get_str(o, "svctype"),
 	       htsmsg_get_str(o, "icon"),
-	       htsmsg_get_str(o, "id"));
+	       htsmsg_get_str(o, "id"),
+               htsmsg_get_u32_or_default(o, "vfs", 0));
 }
 
 /**

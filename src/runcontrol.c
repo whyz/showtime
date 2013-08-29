@@ -36,6 +36,12 @@ extern int showtime_can_poweroff;
 extern int showtime_can_open_shell;
 extern int showtime_can_logout;
 
+static prop_sub_t *sleeptime_sub;
+static prop_t *sleeptime_prop;
+static int sleeptime;
+static int sleeptimer_enabled;
+static callout_t sleep_timer;
+
 /**
  * Called from various places to indicate that user is active
  *
@@ -46,26 +52,6 @@ runcontrol_activity(void)
 {
   if(standby_delay)
     last_activity = showtime_get_ts();
-}
-
-
-/**
- *
- */
-static void 
-set_autostandby(void *opaque, int value)
-{
-  standby_delay = value;
-}
-
-
-/**
- *
- */
-static void
-runcontrol_save_settings(void *opaque, htsmsg_t *msg)
-{
-  htsmsg_store_save(msg, "runcontrol");
 }
 
 
@@ -113,11 +99,15 @@ init_autostandby(void)
   if(store == NULL)
     store = htsmsg_create_map();
 
-  settings_create_int(gconf.settings_general,
-		      "autostandby", _p("Automatic standby"), 
-		      0, store, 0, 60, 5, set_autostandby, NULL,
-		      SETTINGS_INITIAL_UPDATE, " min", NULL,
-		      runcontrol_save_settings, NULL);
+  setting_create(SETTING_INT, gconf.settings_general, SETTINGS_INITIAL_UPDATE,
+                 SETTING_TITLE(_p("Automatic standby")),
+                 SETTING_HTSMSG("autostandby", store, "runcontrol"),
+                 SETTING_WRITE_INT(&standby_delay),
+                 SETTING_RANGE(0, 60),
+                 SETTING_STEP(5),
+                 SETTING_UNIT_CSTR("min"),
+                 SETTING_ZERO_TEXT(_p("Off")),
+                 NULL);
 
   last_activity = showtime_get_ts();
 
@@ -127,6 +117,80 @@ init_autostandby(void)
 		 NULL);
 
   callout_arm(&autostandby_timer, check_autostandby, NULL, 1);
+}
+
+
+/**
+ *
+ */
+static void
+update_sleeptime(void *opaque, int v)
+{
+  TRACE(TRACE_DEBUG, "runcontrol", "Sleep timer set to %d", v);
+  sleeptime = v;
+}
+
+static void
+decrease_sleeptimer(callout_t *c, void *aux)
+{
+  if(!sleeptimer_enabled)
+    return;
+
+  sleeptime--;
+
+  if(sleeptime < 0) {
+    TRACE(TRACE_INFO, "runcontrol", "Automatic standby by sleep timer");
+    showtime_shutdown(SHOWTIME_EXIT_STANDBY);
+    return;
+  }
+  prop_set_int_ex(sleeptime_prop, sleeptime_sub, sleeptime);
+  callout_arm(&sleep_timer, decrease_sleeptimer, NULL, 60);
+
+}
+
+
+/**
+ *
+ */
+static void
+update_sleeptimer(void *opaque, int v)
+{
+  TRACE(TRACE_DEBUG, "runcontrol", "Sleep timer %s",
+        v ? "enabled" : "disabled");
+  sleeptimer_enabled = v;
+  if(v) {
+    prop_set_int(sleeptime_prop, 60);
+    callout_arm(&sleep_timer, decrease_sleeptimer, NULL, 60);
+  } else {
+    callout_disarm(&sleep_timer);
+  }
+}
+
+
+/**
+ *
+ */
+static void
+init_sleeptimer(prop_t *rc)
+{
+  const int maxtime = 180;
+  sleeptime_prop = prop_create(rc, "sleepTime");
+  prop_set_int(sleeptime_prop, 60);
+  prop_set_int_clipping_range(sleeptime_prop, 0, maxtime);
+
+  prop_set(rc, "sleepTimeMax",  PROP_SET_INT, maxtime);
+  prop_set(rc, "sleepTimeStep", PROP_SET_INT, 5);
+
+  sleeptime_sub =
+    prop_subscribe(0,
+                   PROP_TAG_CALLBACK_INT, update_sleeptime, NULL,
+                   PROP_TAG_ROOT, sleeptime_prop,
+                   NULL);
+
+  prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE,
+                 PROP_TAG_NAME("global", "runcontrol", "sleepTimer"),
+		 PROP_TAG_CALLBACK_INT, update_sleeptimer, NULL,
+		 NULL);
 }
 
 
@@ -162,15 +226,15 @@ void
 runcontrol_init(void)
 {
   prop_t *rc;
-  
+
   rc = prop_create(prop_get_global(), "runcontrol");
 
-  prop_set_int(prop_create(rc, "canStandby"),   !!gconf.can_standby);
-  prop_set_int(prop_create(rc, "canPowerOff"),  !!gconf.can_poweroff);
-  prop_set_int(prop_create(rc, "canLogout"),    !!gconf.can_logout);
-  prop_set_int(prop_create(rc, "canOpenShell"), !!gconf.can_open_shell);
-  prop_set_int(prop_create(rc, "canRestart"),   !!gconf.can_restart);
-  prop_set_int(prop_create(rc, "canExit"),       !gconf.can_not_exit);
+  prop_set(rc, "canStandby",   PROP_SET_INT,  !!gconf.can_standby);
+  prop_set(rc, "canPowerOff",  PROP_SET_INT,  !!gconf.can_poweroff);
+  prop_set(rc, "canLogout",    PROP_SET_INT,  !!gconf.can_logout);
+  prop_set(rc, "canOpenShell", PROP_SET_INT,  !!gconf.can_open_shell);
+  prop_set(rc, "canRestart",   PROP_SET_INT,  !!gconf.can_restart);
+  prop_set(rc, "canExit",      PROP_SET_INT,   !gconf.can_not_exit);
 
   if(!(gconf.can_standby ||
        gconf.can_poweroff ||
@@ -183,8 +247,10 @@ runcontrol_init(void)
   settings_create_separator(gconf.settings_general, 
 			  _p("Starting and stopping Showtime"));
 
-  if(gconf.can_standby)
+  if(gconf.can_standby) {
     init_autostandby();
+    init_sleeptimer(rc);
+  }
 
   if(gconf.can_poweroff)
     settings_create_action(gconf.settings_general, _p("Power off system"),

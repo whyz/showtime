@@ -1,0 +1,106 @@
+#!/bin/bash
+
+OS="android"
+DEFAULT_UI="glw"
+CONFIGURE_POSTFIX="android"
+
+source support/configure.inc
+
+SDK="${ANDROID_HOME}"
+NDK="${ANDROID_HOME}/../ndk"
+
+show_help(){
+  common_help
+  echo "  --sdk=PREFIX          Use Android SDK from this path [$SDK]"
+  echo "  --ndk=DIR             Use Android NDK from this path [$NDK]"
+  exit 1
+}
+
+for opt do
+  optval="${opt#*=}"
+  case "$opt" in
+  --help) show_help
+  ;;
+  --ndk=*) NDK="$optval"
+  ;;
+  --sdk=*) SDK="$optval"
+  ;;
+  *)
+  common_opt $opt $optval
+  esac
+done
+
+if [ -z "${SDK}" ]; then
+    echo "Android SDK not found"
+    echo "Either specify path to SDK using --sdk=/path/to/sdk"
+    echo " OR "
+    echo "Set ANDROID_HOME environment variable"
+    die
+fi
+
+echo "Using Android SDK at : ${SDK}"
+echo
+
+if [ ! -x "${SDK}/tools/ant" ]; then
+    echo "''ant'' not found in ${SDK}/tools/"
+    echo "Check that your configured path to the SDK is correct"
+    die
+fi
+
+TOOLCHAIN=${TOPDIR}/build.android/toolchain/bin/arm-linux-androideabi-
+
+if [ ! -f "${TOOLCHAIN}gcc" ]; then
+    echo "Installing toolchain..."
+    if [ ! -f "${NDK}/build/tools/make-standalone-toolchain.sh" ]; then
+        echo "NDK not found, either set NDK environment varable or specify --ndk=/path/to/ndk"
+        die
+    fi
+    ${NDK}/build/tools/make-standalone-toolchain.sh --platform=android-18 --install-dir=${TOPDIR}/build.android/toolchain
+fi
+
+
+CC=${TOOLCHAIN}gcc
+CXX=${TOOLCHAIN}g++
+
+setup_env "$@"
+
+enable sqlite_internal
+enable spidermonkey
+enable glw_backend_opengl_es
+enable glw
+enable polarssl
+enable librtmp
+enable httpserver
+#enable dvd
+enable libfreetype
+enable stdin
+enable trex
+
+bzip2_setup
+freetype_setup --host=arm-linux-gnueabihf
+
+LIBAV_CFLAGS="-I${EXT_INSTALL_DIR}/include"
+LIBAV_LDFLAGS="-L${EXT_INSTALL_DIR}/lib"
+LIBAV_ARCH_FLAGS="--cross-prefix=${TOOLCHAIN} --enable-cross-compile --arch=armv7 --target-os=linux"
+
+libav_setup
+rtmpdump_setup
+xmp_setup
+
+# libspotify_setup "12.1.103-Linux-armv6-bcm2708hardfp"
+
+cat >> ${CONFIG_MAK} <<EOF
+LDFLAGS_cfg +=  -lOpenSLES -lGLESv2 -llog
+SDK = ${SDK}
+NDK = ${NDK}
+ADB = ${SDK}/platform-tools/adb
+EOF
+
+finalize
+
+echo
+echo "NOTE: Support for Android is still experimental"
+echo "NOTE: Video playback does not work at all"
+echo "NOTE: A lot of other things are probably broken as well"
+echo "NOTE: You have been warned"
+echo

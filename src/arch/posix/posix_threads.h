@@ -53,6 +53,7 @@ extern int hts_cond_wait_timeout(hts_cond_t *c, hts_mutex_t *m, int delta);
 #define THREAD_PRIO_VIDEO         -5
 #define THREAD_PRIO_DEMUXER        3
 #define THREAD_PRIO_UI_WORKER_HIGH 5
+#define THREAD_PRIO_UI_WORKER_MED  8
 #define THREAD_PRIO_FILESYSTEM     10
 #define THREAD_PRIO_MODEL          12
 #define THREAD_PRIO_METADATA       13
@@ -85,4 +86,8 @@ typedef pthread_key_t hts_key_t;
 #define hts_thread_get_specific(k)    pthread_getspecific(k)
 
 #endif
+
+#define HTS_MUTEX_DECL(name) hts_mutex_t name = PTHREAD_MUTEX_INITIALIZER
+
+
 
