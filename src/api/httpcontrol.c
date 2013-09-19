@@ -275,10 +275,14 @@ hc_binreplace(http_connection_t *hc, const char *remain, void *opaque,
   if(method != HTTP_CMD_POST || data == NULL)
     return 405;
   
-  TRACE(TRACE_INFO, "BINREPLACE", "Replacing %s with %d bytes received",
-	gconf.binary, (int)len);
+  const char *fname = gconf.upgrade_path ?: gconf.binary;
 
-  int fd = open(gconf.binary, O_TRUNC | O_RDWR, 0777);
+  TRACE(TRACE_INFO, "BINREPLACE", "Replacing %s with %d bytes received",
+	fname, (int)len);
+
+  unlink(fname);
+
+  int fd = open(fname, O_CREAT | O_RDWR, 0777);
   if(fd == -1) {
     TRACE(TRACE_ERROR, "BINREPLACE", "Unable to open file");
     return HTTP_STATUS_UNSUPPORTED_MEDIA_TYPE;
@@ -358,7 +362,7 @@ hc_diagnostics(http_connection_t *hc, const char *remain, void *opaque,
 
 
     htsbuf_qprintf(&out,
-		   "showtime.log.%d (Last modified %s ago): <a href=\"/showtime/logfile/%d\">View</a> | <a href=\"/showtime/logfile/%d?mode=download\">Download</a><br>", i, timestr, i, i);
+		   "showtime.log.%d (Last modified %s ago): <a href=\"/showtime/logfile/%d\">View</a> | <a href=\"/showtime/logfile/%d?mode=download\">Download</a>| <a href=\"/showtime/logfile/%d?mode=pastebin\">Pastebin</a><br>", i, timestr, i, i, i);
   }
   htsbuf_qprintf(&out, 
 		 "</body></html>");
@@ -388,6 +392,37 @@ hc_logfile(http_connection_t *hc, const char *remain, void *opaque,
 
   if(buf == NULL)
     return 404;
+
+  if(mode != NULL && !strcmp(mode, "pastebin")) {
+    buf_t *result = NULL;
+    htsbuf_queue_t hq;
+    htsbuf_queue_init(&hq, 0);
+
+    htsbuf_append(&hq, "sprunge=", 8);
+    htsbuf_append_and_escape_url(&hq, buf_cstr(buf));
+    buf_release(buf);
+
+    char errbuf[256];
+
+    int ret = http_req("http://sprunge.us",
+		       HTTP_RESULT_PTR(&result),
+		       HTTP_POSTDATA(&hq, "application/x-www-form-urlencoded"),
+		       HTTP_ERRBUF(errbuf, sizeof(errbuf)),
+		       NULL);
+
+
+    if(ret) {
+      htsbuf_append(&out, errbuf, strlen(errbuf));
+      return http_send_reply(hc, 0, "text/plain", NULL, NULL, 0, &out);
+    }
+
+    htsbuf_qprintf(&out, "<html><body><a href=\"%s\">%s</a></body></html>",
+		   buf_cstr(result), buf_cstr(result));
+
+    buf_release(result);
+    return http_send_reply(hc, 0, "text/html", NULL, NULL, 0, &out);
+  }
+
   htsbuf_append_buf(&out, buf);
   if (mode != NULL && !strcmp(mode, "download")) {
     snprintf(p1, sizeof(p1), "attachment; filename=\"showtime.log.%d\"", n);

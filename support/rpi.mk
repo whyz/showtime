@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := ${PROG}.stripped
 
 SRCS += src/arch/rpi/rpi_main.c \
+	src/arch/rpi/rpi_cec.c \
 	src/arch/rpi/omx.c \
 	src/arch/rpi/rpi_audio.c \
 	src/arch/rpi/rpi_video.c \
@@ -28,3 +29,21 @@ ${PROG}.stripped: ${PROG}.bundle
 	${STRIP} -o $@ $<
 
 stripped: ${PROG}.stripped
+
+SQDIR=${BUILDDIR}/sqfs
+SYMS=${BUILDDIR}/showtime.syms
+
+${SYMS}: ${PROG}.bundle support/rpi.mk
+	${OBJDUMP} -t -j .text $< | awk '{print $$1 " " $$NF}'|sort >$@
+
+${BUILDDIR}/showtime.sqfs: ${PROG}.stripped ${SYMS}
+	rm -rf "${SQDIR}"
+	mkdir -p "${SQDIR}/bin"
+	mkdir -p "${SQDIR}/lib"
+	cp ${PROG}.stripped "${SQDIR}/bin/showtime"
+	cp ${SYMS} "${SQDIR}/bin/showtime.syms"
+	cp -d ${LIBSPOTIFY_PATH}/lib/libspotify.* "${SQDIR}/lib"
+
+	mksquashfs "${SQDIR}" ${BUILDDIR}/showtime.sqfs  -noD -noF -noI -noappend
+
+squashfs: ${BUILDDIR}/showtime.sqfs

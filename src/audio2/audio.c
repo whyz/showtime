@@ -103,6 +103,7 @@ audio_decoder_create(struct media_pipe *mp)
   ad->ad_frame = avcodec_alloc_frame();
   ad->ad_pts = AV_NOPTS_VALUE;
   ad->ad_epoch = 0;
+  ad->ad_vol_scale = 1.0f;
 
   hts_thread_create_joinable("audio decoder", &ad->ad_tid,
                              audio_decode_thread, ad, THREAD_PRIO_AUDIO);
@@ -227,28 +228,7 @@ audio_setup_spdif_muxer(audio_decoder_t *ad, AVCodec *codec,
   ad->ad_in_sample_rate = 0;
   ad->ad_in_sample_format = 0;
   ad->ad_in_channel_layout = 0;
-  ad->ad_matrix_loaded = 0;
   prop_set(ad->ad_mp->mp_prop_ctrl, "canAdjustVolume", PROP_SET_INT, 0);
-}
-
-
-/**
- *
- */
-static void
-audio_set_matrix(audio_decoder_t *ad)
-{
-  if(ad->ad_avr == NULL)
-    return;
-
-  double d = ad->ad_vol_scale;
-  int i;
-  double mtx[64];
-
-  for(i = 0; i < 64; i++)
-    mtx[i] = ad->ad_matrix[i] * d;
-
-  avresample_set_matrix(ad->ad_avr, mtx, 8);
 }
 
 
@@ -446,11 +426,10 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 	  avresample_free(&ad->ad_avr);
 	}
 
-        int r = avresample_get_matrix(ad->ad_avr, ad->ad_matrix, 8);
-        ad->ad_matrix_loaded = !r;
-        prop_set(mp->mp_prop_ctrl, "canAdjustVolume", PROP_SET_INT, !r);
-        if(!r && ad->ad_vol_scale != 1.0)
-          audio_set_matrix(ad);
+	if(ac->ac_set_volume != NULL) {
+	  prop_set(mp->mp_prop_ctrl, "canAdjustVolume", PROP_SET_INT, 1);
+	  ac->ac_set_volume(ad, ad->ad_vol_scale);
+	}
       }
       if(ad->ad_avr != NULL)
 	avresample_convert(ad->ad_avr, NULL, 0, 0,
@@ -478,6 +457,8 @@ audio_decode_thread(void *aux)
   if(ac->ac_init != NULL)
     ac->ac_init(ad);
 
+  ad->ad_discontinuity = 1;
+
   hts_mutex_lock(&mp->mp_mutex);
 
   while(run) {
@@ -492,7 +473,7 @@ audio_decode_thread(void *aux)
     media_buf_t *data = TAILQ_FIRST(&mq->mq_q_data);
     media_buf_t *ctrl = TAILQ_FIRST(&mq->mq_q_ctrl);
 
-    if(avail >= ad->ad_tile_size && blocked == 0 && !ad->ad_paused) {
+    if(avail >= ad->ad_tile_size && blocked == 0 && !ad->ad_paused && !ctrl) {
       assert(avail != 0);
 
       int samples = MIN(ad->ad_tile_size, avail);
@@ -546,9 +527,10 @@ audio_decode_thread(void *aux)
 	audio_process_audio(ad, mb);
 	break;
 
-      case MB_CTRL_SET_VOLUME:
-        ad->ad_vol_scale = pow(10, mb->mb_data32 / 20.0);
-        audio_set_matrix(ad);
+      case MB_CTRL_SET_VOLUME_MULTIPLIER:
+        ad->ad_vol_scale = mb->mb_float;
+	if(ac->ac_set_volume != NULL)
+	  ac->ac_set_volume(ad, ad->ad_vol_scale);
         break;
 
       case MB_CTRL_PAUSE:
@@ -570,6 +552,7 @@ audio_decode_thread(void *aux)
 
 	if(mp->mp_seek_audio_done != NULL)
 	  mp->mp_seek_audio_done(mp);
+	ad->ad_discontinuity = 1;
 	break;
 
       case MB_CTRL_EXIT:

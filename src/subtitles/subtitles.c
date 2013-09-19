@@ -167,7 +167,7 @@ subtitle_provider_register(subtitle_provider_t *sp, const char *id,
   sp->sp_setting_autosel =
     setting_create(SETTING_BOOL, sp->sp_settings, 0,
                    SETTING_VALUE(sp->sp_autosel),
-                   SETTING_VALUE(_p("Automatically select from this source")),
+                   SETTING_TITLE(_p("Automatically select from this source")),
                    SETTING_CALLBACK(sp_set_autosel, sp),
                    SETTING_MUTEX(&subtitle_provider_mutex),
                    NULL);
@@ -361,7 +361,7 @@ fs_sub_scan_dir(sub_scanner_t *ss, const char *url, const char *video,
     }
 
     const char *postfix = strrchr(rstr_get(fde->fde_url), '.');
-    if(!strcasecmp(postfix, ".zip")) {
+    if(postfix != NULL && !strcasecmp(postfix, ".zip")) {
       char zipurl[1024];
       snprintf(zipurl, sizeof(zipurl), "zip://%s", rstr_get(fde->fde_url));
       fs_sub_scan_dir(ss, zipurl, video, descend_filter, level - 1, sp1, sp2);

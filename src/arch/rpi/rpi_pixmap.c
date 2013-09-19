@@ -119,7 +119,8 @@ setup_tunnel(rpi_pixmap_decoder_t *rpd)
   rpd->rpd_tunnel = omx_tunnel_create(rpd->rpd_decoder,
 				      rpd->rpd_decoder->oc_outport,
 				      rpd->rpd_resizer,
-				      rpd->rpd_resizer->oc_inport);
+				      rpd->rpd_resizer->oc_inport,
+				      "decoder -> resizer");
   OMX_INIT_STRUCTURE(portdef);
 
   portdef.nPortIndex = rpd->rpd_resizer->oc_outport;
@@ -299,10 +300,15 @@ rpi_pixmap_decode(pixmap_t *pm, const image_meta_t *im,
   }
 
   if(rpd->rpd_change != 2) {
-    while(rpd->rpd_change == 0)
+    while(rpd->rpd_change == 0 && !rpd->rpd_decoder->oc_stream_corrupt)
       hts_cond_wait(&rpd->rpd_cond, &rpd->rpd_mtx);
 
+    
+
     hts_mutex_unlock(&rpd->rpd_mtx);
+    if(rpd->rpd_decoder->oc_stream_corrupt)
+      goto err;
+
     setup_tunnel(rpd);
   } else {
     hts_mutex_unlock(&rpd->rpd_mtx);

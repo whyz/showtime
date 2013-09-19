@@ -224,6 +224,12 @@ typedef struct glw_video {
 
   int gv_spu_in_menu;
 
+  // 2D cordinates on screen
+
+  glw_rect_t gv_rect;
+
+  int gv_invisible;
+
 } glw_video_t;
 
 
@@ -236,6 +242,8 @@ typedef struct glw_video_engine {
   int gve_init_on_ui_thread;
 
   void (*gve_deliver)(const frame_info_t *fi, glw_video_t *gv);
+
+  int (*gve_set_codec)(media_codec_t *mc, glw_video_t *gv);
 
   void (*gve_blackout)(glw_video_t *gv);
 

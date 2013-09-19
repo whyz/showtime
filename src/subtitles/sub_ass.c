@@ -26,6 +26,7 @@
 #include "video/video_settings.h"
 #include "ext_subtitles.h"
 #include "subtitles.h"
+#include "misc/charset_detector.h"
 
 /**
  *
@@ -98,6 +99,8 @@ typedef struct ass_style {
   int as_margin_left;
   int as_margin_right;
   int as_margin_vertical;
+
+  int as_encoding;
 
 } ass_style_t;
 
@@ -284,6 +287,8 @@ ass_parse_v4style(ass_decoder_ctx_t *adc, const char *str)
       as->as_fontsize = atoi(val);
     else if(!strcasecmp(key, "fontname"))
       mystrset(&as->as_fontname, val);
+    else if(!strcasecmp(key, "encoding"))
+      as->as_encoding = atoi(val);
   }
   LIST_INSERT_HEAD(&adc->adc_styles, as, as_link);
 }
@@ -484,6 +489,7 @@ ass_handle_override(ass_dialoge_t *ad, const char *src, int len)
   }
 }
 
+extern char font_subs[];
 
 /**
  *
@@ -535,7 +541,12 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
     ad_txt_append(&ad, TR_CODE_BOLD_ON);
   if(as->as_italic)
     ad_txt_append(&ad, TR_CODE_ITALIC_ON);
-  if(as->as_fontname)
+
+  if(font_subs[0])
+    ad_txt_append(&ad, TR_CODE_FONT_FAMILY |
+		  freetype_family_id(font_subs, fontdomain));
+  
+  else if(as->as_fontname)
     ad_txt_append(&ad, TR_CODE_FONT_FAMILY |
 		  freetype_family_id(as->as_fontname, fontdomain));
 
@@ -714,6 +725,24 @@ load_ssa(const char *url, char *buf, size_t len)
   ext_subtitles_t *es = calloc(1, sizeof(ext_subtitles_t));
   ass_decoder_ctx_t adc;
   adc_init(&adc);
+
+  es->es_utf8_clean = utf8_verify(buf);
+  if(!es->es_utf8_clean) {
+    const char *lang = NULL;
+    const char *name = charset_detector(buf, len, &lang);
+
+    if(name != NULL) {
+      TRACE(TRACE_DEBUG, "SSA",
+	    "%s is not UTF-8 clean, detected encoding %s, language %s",
+	    url, name, lang);
+      es->es_detected_charset = charset_get(name);
+    } else {
+      TRACE(TRACE_DEBUG, "SSA",
+	    "%s is not UTF-8 clean, unable to figure encoding", url);
+    }
+  } else {
+    TRACE(TRACE_DEBUG, "SSA", "%s is UTF-8 clean", url);
+  }
 
   TAILQ_INIT(&es->es_entries);
 

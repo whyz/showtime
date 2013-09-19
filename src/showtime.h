@@ -41,6 +41,8 @@ void showtime_init(void);
 
 void showtime_fini(void);
 
+void showtime_swrefresh(void);
+
 extern void panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
 
 extern const char *showtime_dataroot(void);
@@ -187,7 +189,7 @@ void *shutdown_hook_add(void (*fn)(void *opaque, int exitcode), void *opaque,
 #define SHOWTIME_EXIT_LOGOUT   12
 #define SHOWTIME_EXIT_RESTART  13
 #define SHOWTIME_EXIT_SHELL    14
-
+#define SHOWTIME_EXIT_REBOOT   15
 
 
 typedef struct gconf {
@@ -196,6 +198,7 @@ typedef struct gconf {
 
   char *dirname;   // Directory where executable resides
   char *binary;    // Executable itself
+  char *upgrade_path; // What to upgrade
 
   char *cache_path;
   char *persistent_path;
@@ -207,6 +210,7 @@ typedef struct gconf {
   int ffmpeglog;
   int noui;
   int fullscreen;
+  int swrefresh;
 
   int can_standby;
   int can_poweroff;
@@ -256,6 +260,8 @@ typedef struct gconf {
 
   int ignore_the_prefix;
 
+  uint32_t log_server_ipv4;
+  int log_server_port;
 
 } gconf_t;
 
