@@ -20,6 +20,8 @@
 
 #include "event.h"
 #include "misc/str.h"
+#include "htsmsg/htsmsg_store.h"
+#include "settings.h"
 
 #include <bcm_host.h>
 #include <OMX_Core.h>
@@ -136,6 +138,11 @@ const static action_type_t *btn_to_action[256] = {
 };
 
 
+#define CEC_DEBUG(fmt...) do {			\
+  if(gconf.enable_cec_debug)			\
+    TRACE(TRACE_DEBUG, "CEC", fmt);		\
+  } while(0)
+
 
 /**
  *
@@ -151,7 +158,7 @@ cec_emit_key_down(int code)
     event_t *e = event_create_action_multi(avec, i);
     event_to_ui(e);
   } else {
-    TRACE(TRACE_DEBUG, "CEC", "Unmapped code 0x%02x", code);
+    CEC_DEBUG("Unmapped code 0x%02x", code);
   }
 }
 
@@ -165,10 +172,9 @@ cec_send_msg(int follower, uint8_t *response, int len, int is_reply)
 
   bin2hex(hexbuf, sizeof(hexbuf), response + 1, len - 1);
 
-  TRACE(TRACE_DEBUG, "CEC", 
-	"TX: %-27s [0x%02x]          (to:0x%x) %s\n",
-	cec_cmd_to_str[opcode], opcode,
-	follower, hexbuf);
+  CEC_DEBUG("TX: %-27s [0x%02x]          (to:0x%x) %s\n",
+	    cec_cmd_to_str[opcode], opcode,
+	    follower, hexbuf);
 
   vc_cec_send_message(follower, response, len, is_reply);
 }
@@ -182,7 +188,7 @@ static uint16_t physical_address;
 static CEC_AllDevices_T logical_address;
 static uint16_t active_physical_address;
 
-
+#if 0
 static void
 send_image_view_on(void)
 {
@@ -190,14 +196,14 @@ send_image_view_on(void)
   response[0] = CEC_Opcode_ImageViewOn;
   cec_send_msg(0x0, response, 1, VC_FALSE);
 }
+#endif
 
 
 static void
 send_active_source(int is_reply)
 {
-  TRACE(TRACE_DEBUG, "CEC",
-	"Sending active source. Physical address: 0x%x",
-	physical_address);
+  CEC_DEBUG("Sending active source. Physical address: 0x%x",
+	    physical_address);
   vc_cec_send_ActiveSource(physical_address, is_reply);
   cec_we_are_not_active = 0;
   active_physical_address = physical_address;
@@ -211,9 +217,8 @@ SetStreamPath(const VC_CEC_MESSAGE_T *msg)
 
   requestedAddress = (msg->payload[1] << 8) + msg->payload[2];
   if (requestedAddress != physical_address) {
-    TRACE(TRACE_DEBUG, "CEC",
-	  "SetStreamPath -> requestAddress 0x%x not us, ignoring",
-	  requestedAddress);
+    CEC_DEBUG("SetStreamPath -> requestAddress 0x%x not us, ignoring",
+	      requestedAddress);
 
     return;
   }
@@ -299,9 +304,9 @@ handle_ActiveSource(const VC_CEC_MESSAGE_T *msg)
   active_physical_address = (msg->payload[1] << 8) | msg->payload[2];
   cec_we_are_not_active = active_physical_address != physical_address;
 
-  TRACE(TRACE_DEBUG, "CEC", "Currently active address: 0x%x. That is %sus", 
-	active_physical_address,
-	cec_we_are_not_active ? "not " : "");
+  CEC_DEBUG("Currently active address: 0x%x. That is %sus", 
+	    active_physical_address,
+	    cec_we_are_not_active ? "not " : "");
 }
 
 /**
@@ -311,11 +316,18 @@ static void
 lginit()
 {
   uint8_t msg[4];
+
+  static int lg_inited;
+  if(lg_inited)
+    return;
+
+  CEC_DEBUG("LG TV detected");
+
+  lg_inited = 1;
   
   give_device_power_status(CEC_TV_ADDRESS, CEC_POWER_STATUS_ON_PENDING);
 
   myVendorId = CEC_VENDOR_ID_LG;
-  //  vc_cec_set_vendor_id(myVendorId);
 
   msg[0] = CEC_Opcode_DeviceVendorID;
   msg[1] = myVendorId >> 16;
@@ -326,7 +338,7 @@ lginit()
   msg[0] = CEC_Opcode_ReportPhysicalAddress;
   msg[1] = physical_address >> 8;
   msg[2] = physical_address;
-  msg[3] = CEC_DeviceType_Rec;
+  msg[3] = CEC_DeviceType_Tuner;
   cec_send_msg(0xf, msg, 4, VC_FALSE);
 
   give_device_power_status(CEC_TV_ADDRESS,CEC_POWER_STATUS_ON);
@@ -353,7 +365,6 @@ handle_device_vendor_id(const VC_CEC_MESSAGE_T *msg)
   if(msg->initiator != 0)
     return;
 
-  TRACE(TRACE_DEBUG, "CEC", "TV device id: 0x%06x", deviceid);
   tv_vendor_id = deviceid;
   if(deviceid == 0xe091) {
     lginit();
@@ -387,13 +398,13 @@ handle_vendor_command_lg(const VC_CEC_MESSAGE_T *msg)
   case SL_COMMAND_CONNECT_REQUEST:
     response[0] = CEC_Opcode_VendorCommand;
     response[1] = SL_COMMAND_SET_DEVICE_MODE;
-    response[2] = CEC_DeviceType_Rec ;
+    response[2] = CEC_DeviceType_Tuner;
     vc_cec_send_message(msg->initiator, response, 3, VC_TRUE);
 
-    response[0] = CEC_Opcode_ImageViewOn ;
+    response[0] = CEC_Opcode_ImageViewOn;
     vc_cec_send_message(CEC_TV_ADDRESS, response, 1, VC_FALSE);
 
-    response[0] = CEC_Opcode_ActiveSource ;
+    response[0] = CEC_Opcode_ActiveSource;
     response[1] = physical_address >> 8;
     response[2] = physical_address;
     vc_cec_send_message(CEC_BROADCAST_ADDR, response, 3, VC_FALSE);
@@ -451,7 +462,7 @@ cec_callback(void *callback_data, uint32_t param0, uint32_t param1,
   default:
     break;
   case VC_CEC_BUTTON_PRESSED:
-    TRACE(TRACE_DEBUG, "CEC", "Key down: %x", msg.payload[1]);
+    CEC_DEBUG("Key down: %x", msg.payload[1]);
     cec_emit_key_down(msg.payload[1]);
     break;
 
@@ -460,11 +471,10 @@ cec_callback(void *callback_data, uint32_t param0, uint32_t param1,
 
     opcode = CEC_CB_OPCODE(param1);
     bin2hex(hexbuf, sizeof(hexbuf), msg.payload+1, msg.length-1);
-    TRACE(TRACE_DEBUG, "CEC", 
-	  "RX: %-27s [0x%02x] (from:0x%x to:0x%x) %s\n",
-	  cec_cmd_to_str[opcode], opcode,
-	  CEC_CB_INITIATOR(param1), CEC_CB_FOLLOWER(param1),
-	  hexbuf);
+    CEC_DEBUG("RX: %-27s [0x%02x] (from:0x%x to:0x%x) %s\n",
+	      cec_cmd_to_str[opcode], opcode,
+	      CEC_CB_INITIATOR(param1), CEC_CB_FOLLOWER(param1),
+	      hexbuf);
 
     if(CEC_CB_FOLLOWER(param1) != logical_address &&
        CEC_CB_FOLLOWER(param1) != 0xf)
@@ -520,8 +530,11 @@ cec_callback(void *callback_data, uint32_t param0, uint32_t param1,
       handle_vendor_command(&msg);
       break;
 
+    case CEC_Opcode_FeatureAbort:
+      break;
+
     default:
-      TRACE(TRACE_DEBUG, "CEC", "Unhandled RX command: 0x%02x", opcode);
+      CEC_DEBUG("Unhandled RX command: 0x%02x", opcode);
 
       if(msg.follower == 0xf)
 	break; // Never Abort on broadcast messages
@@ -553,6 +566,17 @@ tv_service_callback(void *callback_data, uint32_t reason,
   }
 }
 
+static int fixed_la;
+
+/**
+ *
+ */
+static void
+set_logical_address(void *opaque, const char *str)
+{
+  fixed_la = str ? atoi(str) & 0xf : 0;
+}
+
 
 /**
  * We deal with CEC and HDMI events, etc here
@@ -561,6 +585,15 @@ static void *
 cec_thread(void *aux)
 {
   TV_DISPLAY_STATE_T state;
+
+  htsmsg_t *s = htsmsg_store_load("cec") ?: htsmsg_create_map();
+
+  setting_create(SETTING_STRING, gconf.settings_dev,
+		 SETTINGS_INITIAL_UPDATE,
+		 SETTING_TITLE_CSTR("CEC Logical address"),
+		 SETTING_CALLBACK(set_logical_address, NULL),
+		 SETTING_HTSMSG("logicaladdress", s, "cec"),
+		 NULL);
 
   vc_tv_register_callback(tv_service_callback, NULL);
   vc_tv_get_display_state(&state);
@@ -575,8 +608,7 @@ cec_thread(void *aux)
     if(!vc_cec_get_physical_address(&physical_address) &&
        physical_address == 0xffff) {
     } else {
-      TRACE(TRACE_DEBUG, "CEC",
-	    "Got physical address 0x%04x\n", physical_address);
+      CEC_DEBUG("Got physical address 0x%04x\n", physical_address);
       break;
     }
     
@@ -584,37 +616,36 @@ cec_thread(void *aux)
   }
 
 
-  const int addresses = 
-    (1 << CEC_AllDevices_eRec1) |
-    (1 << CEC_AllDevices_eRec2) |
-    (1 << CEC_AllDevices_eRec3) |
-    (1 << CEC_AllDevices_eFreeUse);
+  if(!fixed_la) {
+    const int addresses = 
+      (1 << CEC_AllDevices_eRec1) |
+      (1 << CEC_AllDevices_eRec2) |
+      (1 << CEC_AllDevices_eRec3) |
+      (1 << CEC_AllDevices_eFreeUse);
 
-  for(logical_address = 0; logical_address < 15; logical_address++) {
-    if(((1 << logical_address) & addresses) == 0)
-      continue;
-    if(vc_cec_poll_address(CEC_AllDevices_eRec1) > 0)
-      break;
+    for(logical_address = 0; logical_address < 15; logical_address++) {
+      if(((1 << logical_address) & addresses) == 0)
+	continue;
+      if(vc_cec_poll_address(logical_address) > 0)
+	break;
+    }
+
+    if(logical_address == 15) {
+      printf("Unable to find a free logical address, retrying\n");
+      sleep(1);
+      goto restart;
+    }
+
+  } else {
+    logical_address = fixed_la;
   }
 
-  if(logical_address == 15) {
-    printf("Unable to find a free logical address, retrying\n");
-    sleep(1);
-    goto restart;
-  }
-
-  vc_cec_set_logical_address(logical_address, CEC_DeviceType_Rec, myVendorId);
-
-  sleep(1);
-  send_image_view_on();
-  sleep(1);
-  send_active_source(0);
+  vc_cec_set_logical_address(logical_address, CEC_DeviceType_Tuner, myVendorId);
 
   while(1) {
     sleep(1);
   }
 
-  vc_cec_set_logical_address(0xd, CEC_DeviceType_Rec, myVendorId);
   return NULL;
 }
 
