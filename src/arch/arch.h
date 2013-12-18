@@ -1,7 +1,6 @@
 /*
- *  System specific stuff
- *
- *  Copyright (C) 2008 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #pragma once
@@ -27,6 +29,8 @@ void arch_exit(void) __attribute__((noreturn));
 int64_t arch_cache_avail_bytes(void);
 
 int arch_pipe(int pipefd[2]);
+
+void arch_sync_path(const char *path);
 
 // If arch_stop_req() returns non ozer it will not actually
 // schedule an exit of showtime but rather suspend the UI and turn off 

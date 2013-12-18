@@ -1,6 +1,6 @@
 /*
- *  Showtime HTTP server
- *  Copyright (C) 2010 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #include <stdio.h>
@@ -367,7 +370,7 @@ hc_diagnostics(http_connection_t *hc, const char *remain, void *opaque,
   htsbuf_qprintf(&out, 
 		 "</body></html>");
 
-  return http_send_reply(hc, 0, "text/html", NULL, NULL, 0, &out);
+  return http_send_reply(hc, 0, "text/html; charset=utf-8", NULL, NULL, 0, &out);
 }
 
 
@@ -428,7 +431,7 @@ hc_logfile(http_connection_t *hc, const char *remain, void *opaque,
     snprintf(p1, sizeof(p1), "attachment; filename=\"showtime.log.%d\"", n);
     http_set_response_hdr(hc, "Content-Disposition", p1);
   }
-  return http_send_reply(hc, 0, "text/plain", NULL, NULL, 0, &out);
+  return http_send_reply(hc, 0, "text/plain; charset=utf-8", NULL, NULL, 0, &out);
 }
 
 
@@ -568,7 +571,7 @@ static const struct {
   const char *pfx;
   const char *contenttype;
 } cttable[] = {
-  { "html", "text/html" },
+  { "html", "text/html; charset=utf-8" },
   { "js", "application/javascript" },
   { "css", "text/css" },
 };

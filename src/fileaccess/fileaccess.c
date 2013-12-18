@@ -1,6 +1,6 @@
 /*
- *  File access common functions
- *  Copyright (C) 2008 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #include "config.h"
@@ -133,8 +136,15 @@ fa_resolve_proto(const char *url, fa_protocol_t **p,
   hts_mutex_lock(&fap_mutex);
 
   LIST_FOREACH(fap, &fileaccess_all_protocols, fap_link) {
-    if(strcmp(fap->fap_name, buf))
-      continue;
+
+    if(fap->fap_match_proto != NULL) {
+      if(fap->fap_match_proto(buf))
+	continue;
+    } else {
+      if(strcmp(fap->fap_name, buf))
+	continue;
+    }
+
     *p = fap;
     fap_retain(fap);
     hts_mutex_unlock(&fap_mutex);

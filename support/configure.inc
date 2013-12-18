@@ -45,7 +45,6 @@ CONFIG_LIST="
  stdin
  release
  avahi
- appleremote
  bonjour
  nvctrl
  libgme
@@ -87,6 +86,8 @@ CONFIG_LIST="
  bughunt
  bspatch
  connman
+ libntfs
+ miner
 "
 
 cleanup() {

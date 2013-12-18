@@ -1,6 +1,6 @@
 /*
- *  Property trees
- *  Copyright (C) 2008 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #ifndef PROP_H__
@@ -115,6 +118,8 @@ typedef void (prop_lockmgr_t)(void *ptr, int lock);
 prop_t *prop_get_global(void);
 
 void prop_init(void);
+
+void prop_init_late(void);
 
 /**
  * Use with PROP_TAG_NAME_VECTOR

@@ -1,6 +1,6 @@
 /*
- *  Showtime mediacenter
- *  Copyright (C) 2007-2012 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 
@@ -243,6 +246,7 @@ showtime_init(void)
 
   /* Callout framework */
   callout_init();
+  prop_init_late();
 
   /* Initialize htsmsg_store() */
   htsmsg_store_init();
@@ -597,7 +601,13 @@ showtime_shutdown(int retcode)
 
   showtime_flush_caches();
 
-  if(!arch_stop_req()) {
+  TRACE(TRACE_DEBUG, "core", "Caches flushed");
+
+  int r = arch_stop_req();
+
+  TRACE(TRACE_DEBUG, "core", "arch stop=%d", r);
+
+  if(!r) {
     // If arch_stop_req() returns -1 it will not actually
     // exit showtime but rather suspend the UI and turn off HDMI ,etc
     // Typically used on some targets where we want to enter a 

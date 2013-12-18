@@ -1,6 +1,6 @@
 /*
- *  Showtime mediacenter
- *  Copyright (C) 2007-2012 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 
@@ -175,7 +178,6 @@ main(int argc, char **argv)
 #if ENABLE_WEBPOPUP
   linux_webpopup_init();
 #endif
-  linux_init_monitors();
 
   add_xdg_paths();
 
@@ -216,8 +218,8 @@ add_xdg_path(const char *class, const char *type)
 
     snprintf(id, sizeof(id), "xdg-user-dir-%s", class);
 
-    service_create(id, title, path, type, NULL, 0, 1,
-		   SVC_ORIGIN_SYSTEM);
+    service_create_managed(id, title, path, type, NULL, 0, 1,
+			   SVC_ORIGIN_SYSTEM, 1);
   }
   fclose(fp);
 }

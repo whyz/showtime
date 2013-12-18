@@ -1,7 +1,6 @@
 /*
- *  Plugin mananger
- *  Copyright (C) 2010 Andreas Öman
- *  Copyright (C) 2012 Fábio Ferreira
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #include <sys/types.h>
@@ -37,6 +39,7 @@
 #include "prop/prop_concat.h"
 #include "notifications.h"
 #include "misc/strtab.h"
+#include "arch/arch.h"
 
 #if ENABLE_SPIDERMONKEY
 #include "js/js.h"
@@ -1248,9 +1251,14 @@ plugin_install(plugin_t *pl, const char *package)
     return -1;
   }
 
+
   snprintf(path, sizeof(path),
 	   "zip://file://%s/installedplugins/%s.zip", gconf.persistent_path,
 	   pl->pl_id);
+
+#ifdef STOS
+  arch_sync_path(path);
+#endif
 
   if(plugin_load(path, errbuf, sizeof(errbuf), 1, 1, 1)) {
     prop_set_string(pl->pl_statustxt, errbuf);

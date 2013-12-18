@@ -1,6 +1,6 @@
 /*
- *  Service discovery
- *  Copyright (C) 2009 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #include <stdio.h>
@@ -27,6 +30,7 @@
 #include "misc/strtab.h"
 #include "settings.h"
 #include "htsmsg/htsmsg_store.h"
+#include "misc/str.h"
 
 #ifdef CONFIG_AVAHI
 #include "avahi.h"
@@ -106,20 +110,6 @@ update_service(service_instance_t *si)
  *
  */
 static void
-remove_bad_chars(char *s)
-{
-  while(*s) {
-    if(*s == ':' || *s == '/')
-      *s = '_';
-    s++;
-  }
-}
-
-
-/**
- *
- */
-static void
 sd_settings_saver(void *opaque, htsmsg_t *msg)
 {
   service_instance_t *si = opaque;
@@ -142,7 +132,7 @@ sd_add_service(service_instance_t *si, const char *title,
     si->si_url = strdup(url);
     
     snprintf(tmp, sizeof(tmp), "sd/%s", url);
-    remove_bad_chars(tmp+3);
+    str_cleanup(tmp + 3, "/:");
 
     si->si_settings_path = strdup(tmp);
     si->si_settings_store = htsmsg_store_load(tmp) ?: htsmsg_create_map();
@@ -164,6 +154,7 @@ sd_add_service(service_instance_t *si, const char *title,
     si->si_setting_title =
       setting_create(SETTING_STRING, si->si_settings, SETTINGS_INITIAL_UPDATE,
                      SETTING_TITLE(_p("Name")),
+		     SETTING_VALUE(title),
                      SETTING_HTSMSG_CUSTOM_SAVER("title",
                                                  si->si_settings_store,
                                                  sd_settings_saver,
@@ -174,6 +165,7 @@ sd_add_service(service_instance_t *si, const char *title,
     si->si_setting_type =
       setting_create(SETTING_STRING, si->si_settings, SETTINGS_INITIAL_UPDATE,
                      SETTING_TITLE(_p("Type")),
+		     SETTING_VALUE(contents),
                      SETTING_HTSMSG_CUSTOM_SAVER("type",
                                                  si->si_settings_store,
                                                  sd_settings_saver,

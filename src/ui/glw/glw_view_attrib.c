@@ -1,6 +1,6 @@
 /*
- *  GL Widgets, view loader, widget attributes
- *  Copyright (C) 2008 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 
@@ -935,13 +938,9 @@ static int
 set_args(glw_view_eval_context_t *ec, const token_attrib_t *a,
 	   struct token *t)
 {
-  if(t->type != TOKEN_PROPERTY_OWNER &&
-     t->type != TOKEN_PROPERTY_REF)
-    return glw_view_seterr(ec->ei, t,
-			   "Attribute '%s' expects a property, got %s",
-			   a->name, token2name(t));
-
-  glw_set(ec->w, GLW_ATTRIB_ARGS, t->t_prop, NULL);
+  if(t->type == TOKEN_PROPERTY_OWNER ||
+     t->type == TOKEN_PROPERTY_REF)
+    glw_set(ec->w, GLW_ATTRIB_ARGS, t->t_prop, NULL);
   return 0;
 }
 

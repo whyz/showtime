@@ -1,6 +1,6 @@
 /*
- *  Property trees
- *  Copyright (C) 2008 Andreas Öman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -14,11 +14,17 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #ifndef PROP_I_H__
 #define PROP_I_H__
 
+#define PROP_MAGIC 0xdeadf00d
+
+// #define PROP_SUB_STATS
 
 #include "prop.h"
 #include "misc/pool.h"
@@ -138,7 +144,9 @@ typedef enum {
  *
  */
 struct prop {
-
+#ifdef PROP_DEBUG
+  uint32_t hp_magic;
+#endif
   /**
    * Refcount. Not protected by mutex. Modification needs to be issued
    * using atomic ops. This refcount only protects the memory allocated
@@ -293,10 +301,23 @@ struct prop {
 
 };
 
+
+/**
+ *
+ */
+typedef struct prop_originator_tracking {
+  prop_t *pot_p;
+  struct prop_originator_tracking *pot_next;
+} prop_originator_tracking_t;
+
+
 /**
  *
  */
 struct prop_sub {
+#ifdef PROP_SUB_STATS
+  LIST_ENTRY(prop_sub) hps_all_sub_link;
+#endif
 
   /**
    * Callback. May never be changed. Not protected by mutex
@@ -332,6 +353,24 @@ struct prop_sub {
   prop_lockmgr_t *hps_lockmgr;
 
   /**
+   * Linkage to property. Protected by global mutex
+   */
+  LIST_ENTRY(prop_sub) hps_value_prop_link;
+  prop_t *hps_value_prop;
+
+  /**
+   * Linkage to property. Protected by global mutex
+   */
+  LIST_ENTRY(prop_sub) hps_canonical_prop_link;
+  prop_t *hps_canonical_prop;
+
+  
+  union {
+    prop_originator_tracking_t *hps_pots;
+    prop_t *hps_origin;
+  };
+
+  /**
    * Refcount. Not protected by mutex. Modification needs to be issued
    * using atomic ops.
    */
@@ -349,7 +388,8 @@ struct prop_sub {
    * Used to avoid sending two notification when relinking
    * to another tree. Protected by global mutex
    */
-  uint8_t hps_pending_unlink;
+  uint8_t hps_pending_unlink : 1;
+  uint8_t hps_multiple_origins : 1;
 
   /**
    * Flags as passed to prop_subscribe(). May never be changed
@@ -361,17 +401,6 @@ struct prop_sub {
    */
   int hps_user_int;
 
-  /**
-   * Linkage to property. Protected by global mutex
-   */
-  LIST_ENTRY(prop_sub) hps_value_prop_link;
-  prop_t *hps_value_prop;
-
-  /**
-   * Linkage to property. Protected by global mutex
-   */
-  LIST_ENTRY(prop_sub) hps_canonical_prop_link;
-  prop_t *hps_canonical_prop;
 
 };
 

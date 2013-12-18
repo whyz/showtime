@@ -1,7 +1,6 @@
 /*
- *  Various string manipulation functions
- *  Copyright (C) 2010 Andreas Öman
- *  Copyright (C) 2010 Mattias Wadman
+ *  Showtime Mediacenter
+ *  Copyright (C) 2007-2013 Lonelycoder AB
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -15,6 +14,9 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *  This program is also available under a commercial proprietary license.
+ *  For more information, contact andreas@lonelycoder.com
  */
 
 #include <stdio.h>
@@ -29,6 +31,21 @@
 
 #include "unicode_casefolding.h"
 #include "charset_detector.h"
+
+
+/**
+ * Remove forbidden characters
+ */
+void
+str_cleanup(char *s, const char *forbidden)
+{
+  while(*s) {
+    if(index(forbidden, *s))
+      *s = '_';
+    s++;
+  }
+}
+
 
 /**
  * De-escape HTTP URL
