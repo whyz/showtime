@@ -2,6 +2,25 @@ language: German
 native: Deutsch
 maintainer: Maximilian Jänsch <showtime@jaensch-koloska.de>
 #
+# ./ext/miner/miner.c
+#
+id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
+# Missing translation
+msg: 
+
+id: Donate money to the Showtime project by mining litecoints
+# Missing translation
+msg: 
+
+id: Donations
+# Missing translation
+msg: 
+
+id: Show me more
+# Missing translation
+msg: 
+
+#
 # ./glwskins/default/cmdmenu.view
 #
 id: Add current page to bookmarks
@@ -239,8 +258,8 @@ id: Year:
 msg: Jahr:
 
 id: Seen %d times
-msg[0]: 
-msg[1]: 
+msg[0]: %d mal gesehen
+msg[1]: %d mal gesehen
 
 #
 # ./glwskins/default/pages/listitems/add.view
@@ -314,24 +333,23 @@ msg: Änderungen %s
 id: Check for updates now
 msg: Jetzt auf Updates prüfen
 
-id: Checking current installed version
-# Missing translation
-msg: 
-
 id: Checking for updates...
 msg: Prüfe auf Updates...
+
+id: Checking installed version of %s
+msg: Prüfe installierte Version von %s
 
 id: Current version:
 msg: Aktuelle Version:
 
 id: Download and install...
-msg: Download und installieren...
+msg: Heunterladen und installieren...
 
-id: Downloading...
-msg: Download...
+id: Downloading %s
+msg: Lade %s herunter
 
-id: Installing...
-msg: Installiere...
+id: Installing %s
+msg: Installiere %s
 
 id: New version %s is available for download
 msg: Neue Version %s ist verfügbar
@@ -339,9 +357,8 @@ msg: Neue Version %s ist verfügbar
 id: No upgrade available
 msg: Kein Update verfügbar
 
-id: Patching binary
-# Missing translation
-msg: 
+id: Patching %s
+msg: Patche %s
 
 id: Restarting Showtime in %d seconds...
 msg: Showtime wird in %s Sekunden neugestartet
@@ -361,6 +378,9 @@ msg: Testversion
 id: Unable to query for new version
 msg: Kann nicht auf neue Version prüfen
 
+id: Verifying %s
+msg: Prüfe %s
+
 #
 # ./glwskins/default/pages/video.view
 #
@@ -374,8 +394,7 @@ msg: Wiedergabestatus
 # ./glwskins/default/pages/wideinfo/video.view
 #
 id: Seen:
-# Missing translation
-msg: 
+msg: Gesehen:
 
 #
 # ./glwskins/default/playdecks/dvd.view
@@ -419,8 +438,20 @@ msg: Keine Medien geladen
 #
 # ./glwskins/default/sysinfo.view
 #
-id: Memory usage:
-msg: Speichernutzung
+id: CPU Temp
+msg: CPU Temperatur
+
+id: GPU Temp
+msg: GPU Temperatur
+
+id: Memory usage
+msg: Speicher-Nutzung
+
+id: System Free
+msg: System frei
+
+id: System Total
+msg: System gesamt
 
 #
 # ./glwskins/default/universe.view
@@ -430,6 +461,37 @@ msg: Ton aus
 
 id: Master volume: %d dB
 msg: Lautstärke: %d dB
+
+#
+# ./resources/spuminer/settings.view
+#
+id: Apart from enabling this option you do not need to do anything else to make your donations for the project.
+# Missing translation
+msg: 
+
+id: Enable mining
+# Missing translation
+msg: 
+
+id: For more information about Litecoin, please visit http://litecoin.org
+# Missing translation
+msg: 
+
+id: If you like Showtime you can donate money to the project by letting your Playstation 3 mine Litecoins while Showtime is running.
+# Missing translation
+msg: 
+
+id: Mining will not interfere with video playback performance as it only uses the leftover capacity of the SPU processors.
+# Missing translation
+msg: 
+
+id: Please consider enabling this option. / %s
+# Missing translation
+msg: 
+
+id: Thanks for your support!
+# Missing translation
+msg: 
 
 #
 # ./src/api/tmdb.c
@@ -445,6 +507,15 @@ msg: Originaltitel benutzen
 #
 id: System is low on memory (%d kB RAM available)
 msg: Speicher ist knapp (%d kb RAM verfügbar)
+
+#
+# ./src/arch/rpi/rpi_cec.c
+#
+id: Configure how Showtime communicates with your TV
+msg: Einstellen wie Showtime sich mit dem Fernseher verbindet
+
+id: Consumer Electronics Control
+msg: Consumer Electronics Control (CEC)
 
 #
 # ./src/backend/dvd/cdda.c
@@ -546,7 +617,7 @@ id: Spotify: Connection error: %s
 msg: Spotify: Verbindungsfehler: %s
 
 id: Starred
-msg: Starred
+msg: Favorisiert
 
 #
 # ./src/blobcache_file.c
@@ -642,8 +713,8 @@ id: File access
 msg: Datei-Zugriff
 
 id: %d archive parts
-msg[0]: 
-msg[1]: 
+msg[0]: %d Archivteil 
+msg[1]: %d Archivteile
 
 id: %d directories
 msg[0]: %d Verzeichniss
@@ -656,6 +727,9 @@ msg[1]: %d Dateien
 #
 # ./src/i18n.c
 #
+id: Default character set
+msg: Standard Zeichensatz
+
 id: Ignore 'The' at beginning of words when sorting
 msg: "Der,Die,Das" beim Sortieren ignorieren
 
@@ -677,9 +751,6 @@ msg: Bevorzugte Audio-Sprache
 id: Primary subtitle language code
 msg: Bevorzugte Untertitel-Sprache
 
-id: SRT character set
-msg: Schriftsatz für srt-Untertitel
-
 id: Secondary audio language code
 msg: Zweite Audio-Sprache
 
@@ -691,6 +762,12 @@ msg: Dritte Audio-Sprache
 
 id: Tertiary subtitle language code
 msg: Dritte Untertitel-Sprache
+
+#
+# ./src/js/js_page.c
+#
+id: No handler for URL
+msg: kann URL nicht verarbeiten
 
 #
 # ./src/keymapper.c
@@ -720,12 +797,10 @@ id: Audio delay
 msg: Audioverzögerung
 
 id: Audio volume
-# Missing translation
-msg: 
+msg: Lautstärke
 
 id: Go to standby after video ends
-# Missing translation
-msg: 
+msg: Nach Filmende in Satndby gehen
 
 id: Stretch video to fullscreen
 msg: Video auf Vollbild strecken
@@ -737,15 +812,13 @@ id: Subtitle delay
 msg: Untertitelverzögerung
 
 id: Subtitle horizontal displacement
-# Missing translation
-msg: 
+msg: Horizontale Untertitelverschiebung
 
 id: Subtitle scaling
 msg: Untertitelskalierung
 
 id: Subtitle vertical displacement
-# Missing translation
-msg: 
+msg: Vertikale Untertitelverschiebung
 
 id: Video zoom
 msg: Videozoom
@@ -763,20 +836,16 @@ id: Automatic
 msg: Automatisch
 
 id: Manual
-# Missing translation
-msg: 
+msg: Manuell
 
 id: Mark all as seen
-# Missing translation
-msg: 
+msg: Alle als gesehen markieren
 
 id: Mark all as unseen
-# Missing translation
-msg: 
+msg: Alle als ungesehen markieren
 
 id: Metadata mode
-# Missing translation
-msg: 
+msg: Metadaten-Modus
 
 #
 # ./src/metadata/metadata.c
@@ -827,7 +896,7 @@ id: Providers for Music
 msg: Quelle für Musik
 
 id: Providers for Video
-msg: Quelle für Musik
+msg: Quelle für Video
 
 id: Refresh metadata
 msg: Metadaten erneuern
@@ -880,9 +949,6 @@ msg: Lesezeichen
 id: Music
 msg: Musik
 
-id: No handler for URL
-msg: kann URL nicht verarbeiten
-
 id: Other
 msg: Andere
 
@@ -890,8 +956,7 @@ id: Photos
 msg: Foto
 
 id: Published in Virtual File System
-# Missing translation
-msg: 
+msg: Im virtuellen Dateisystem veröffentlicht 
 
 id: Removed bookmark: %s
 msg: Lesezeichen %s entfernt
@@ -909,19 +974,25 @@ id: URL
 msg: URL
 
 #
+# ./src/networking/connman.c
+#
+id: Enable Wi-Fi
+msg: Wi-Fi einschalten
+
+id: Network connections
+msg: Netzwerk Verbindungen
+
+#
 # ./src/networking/ftp_server.c
 #
 id: Enable FTP server
-# Missing translation
-msg: 
+msg: FTP-Server aktivieren
 
 id: FTP server
-# Missing translation
-msg: 
+msg: FTP-Server
 
 id: Server TCP port
-# Missing translation
-msg: 
+msg: Server TCP-Port
 
 #
 # ./src/plugins.c
@@ -1017,7 +1088,7 @@ id: TV channels
 msg: TV-Kanäle
 
 id: Unable to load plugin.json: %s
-msg: Kann plugin.json nicht laden
+msg: Kann plugin.json: %s nicht laden
 
 id: Unable to load plugin.json: Malformed JSON
 msg: kann plugin.json nicht laden: fehlformatiertes JSON
@@ -1046,6 +1117,9 @@ msg: Video streaming
 id: Automatic standby
 msg: Automatisch in standby wechseln
 
+id: Enable SSH server
+msg: SSH-Server einschalten
+
 id: Logout
 msg: Logout
 
@@ -1055,12 +1129,21 @@ msg: Shell öffnen
 id: Power off system
 msg: System abschalten
 
+id: SSH server
+msg: SSH-Server
+
+id: Standby
+msg: Standby
+
 id: Starting and stopping Showtime
 msg: Showtime starten und stoppen
 
 #
 # ./src/sd/sd.c
 #
+id: Enabled on home screen
+msg: Verfügbar im Hauptmenü
+
 id: Name
 msg: Name
 
@@ -1095,15 +1178,16 @@ id: Look and feel
 msg: Aussehen und Bedienung
 
 id: Network services, etc
-# Missing translation
-msg: 
+msg: Netzwerkdienste, usw.
 
 id: Network settings
-# Missing translation
-msg: 
+msg: Netzwerk Einstellungen
 
 id: Settings useful for developers
 msg: Nützliche Einstellungen für Entwickler
+
+id: System name
+msg: System Name
 
 id: System related settings
 msg: Systembezogene Einstellungen
@@ -1211,11 +1295,10 @@ id: Reset subtitle font to default
 msg: Untertitelschriftart auf Standard setzen
 
 id: Unable to install font: %s
-# Missing translation
-msg: 
+msg: Kann Schriftart: %s nicht installieren
 
 id: Use font %s for
-msg: Benutze Font %s für 
+msg: Benutze Schriftart %s für 
 
 id: User interface
 msg: Benutzeroberfläche
@@ -1224,19 +1307,16 @@ msg: Benutzeroberfläche
 # ./src/ui/glw/glw_ps3.c
 #
 id: Seek using L2 and R2 button
-# Missing translation
-msg: 
+msg: Suche per L2 und R2
 
 id: Yes with Select button
-# Missing translation
-msg: 
+msg: JA mit Selct-Knopf
 
 #
 # ./src/ui/glw/glw_settings.c
 #
 id: Font and icon size
-# Missing translation
-msg: 
+msg: Schrift und Icon Größe
 
 id: Horizontal underscan
 msg: Horizontaler underscan
@@ -1245,12 +1325,10 @@ id: Screensaver delay
 msg: Bildschirmschonerverzögerung
 
 id: Vertical underscan
-# Missing translation
-msg: 
+msg: Vertikaler underscan
 
 id: Wrap when reaching beginning/end of lists
-# Missing translation
-msg: 
+msg: Endlose Bewegung durch Listen
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1290,12 +1368,6 @@ msg: Software update
 
 id: Upgrade to releases from
 msg: Update auf
-
-#
-# ./src/upnp/upnp.c
-#
-id: Enabled on home screen
-msg: Verfügbar im Hauptmenü
 
 #
 # ./src/upnp/upnp_browse.c

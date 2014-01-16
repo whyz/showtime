@@ -2,6 +2,25 @@
 native: 正體中文
 maintainer: Chinghan Yu<cassine.bbs@ptt.cc>
 #
+# ./ext/miner/miner.c
+#
+id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
+# Missing translation
+msg: 
+
+id: Donate money to the Showtime project by mining litecoints
+# Missing translation
+msg: 
+
+id: Donations
+# Missing translation
+msg: 
+
+id: Show me more
+# Missing translation
+msg: 
+
+#
 # ./glwskins/default/cmdmenu.view
 #
 id: Add current page to bookmarks
@@ -332,12 +351,12 @@ msg: %s 版本的更新紀錄
 id: Check for updates now
 msg: 立即檢查更新
 
-id: Checking current installed version
-# Missing translation
-msg: 
-
 id: Checking for updates...
 msg: 正在檢查更新…
+
+id: Checking installed version of %s
+# Missing translation
+msg: 
 
 id: Current version:
 msg: 目前版本
@@ -345,11 +364,13 @@ msg: 目前版本
 id: Download and install...
 msg: 下載並安裝
 
-id: Downloading...
-msg: 正在下載…
+id: Downloading %s
+# Missing translation
+msg: 
 
-id: Installing...
-msg: 正在安裝…
+id: Installing %s
+# Missing translation
+msg: 
 
 id: New version %s is available for download
 msg: 已有 %s 版更新可供下載
@@ -357,7 +378,7 @@ msg: 已有 %s 版更新可供下載
 id: No upgrade available
 msg: 尚未有任何更新
 
-id: Patching binary
+id: Patching %s
 # Missing translation
 msg: 
 
@@ -378,6 +399,10 @@ msg: 測試版本
 
 id: Unable to query for new version
 msg: 無法查詢最新版本
+
+id: Verifying %s
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/pages/video.view
@@ -437,8 +462,25 @@ msg: 未載入任何媒體
 #
 # ./glwskins/default/sysinfo.view
 #
-id: Memory usage:
-msg: 記憶體使用量：
+id: CPU Temp
+# Missing translation
+msg: 
+
+id: GPU Temp
+# Missing translation
+msg: 
+
+id: Memory usage
+# Missing translation
+msg: 
+
+id: System Free
+# Missing translation
+msg: 
+
+id: System Total
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/universe.view
@@ -448,6 +490,37 @@ msg: 靜音模式
 
 id: Master volume: %d dB
 msg: 主音量： %d dB
+
+#
+# ./resources/spuminer/settings.view
+#
+id: Apart from enabling this option you do not need to do anything else to make your donations for the project.
+# Missing translation
+msg: 
+
+id: Enable mining
+# Missing translation
+msg: 
+
+id: For more information about Litecoin, please visit http://litecoin.org
+# Missing translation
+msg: 
+
+id: If you like Showtime you can donate money to the project by letting your Playstation 3 mine Litecoins while Showtime is running.
+# Missing translation
+msg: 
+
+id: Mining will not interfere with video playback performance as it only uses the leftover capacity of the SPU processors.
+# Missing translation
+msg: 
+
+id: Please consider enabling this option. / %s
+# Missing translation
+msg: 
+
+id: Thanks for your support!
+# Missing translation
+msg: 
 
 #
 # ./src/api/tmdb.c
@@ -465,6 +538,17 @@ msg:
 #
 id: System is low on memory (%d kB RAM available)
 msg: 系統記憶體不足（剩餘 %d kB 可用）
+
+#
+# ./src/arch/rpi/rpi_cec.c
+#
+id: Configure how Showtime communicates with your TV
+# Missing translation
+msg: 
+
+id: Consumer Electronics Control
+# Missing translation
+msg: 
 
 #
 # ./src/backend/dvd/cdda.c
@@ -688,6 +772,10 @@ msg[1]:
 #
 # ./src/i18n.c
 #
+id: Default character set
+# Missing translation
+msg: 
+
 id: Ignore 'The' at beginning of words when sorting
 # Missing translation
 msg: 
@@ -710,9 +798,6 @@ msg: 主要音訊語言代碼
 id: Primary subtitle language code
 msg: 主要字幕語言代碼
 
-id: SRT character set
-msg: SRT 字元集
-
 id: Secondary audio language code
 msg: 次要音訊語言代碼
 
@@ -724,6 +809,12 @@ msg: 第三音訊語言代碼
 
 id: Tertiary subtitle language code
 msg: 第三字幕語言代碼
+
+#
+# ./src/js/js_page.c
+#
+id: No handler for URL
+msg: URL 位址沒有對應的處理規則
 
 #
 # ./src/keymapper.c
@@ -923,9 +1014,6 @@ msg: 書籤
 id: Music
 msg: 音樂
 
-id: No handler for URL
-msg: URL 位址沒有對應的處理規則
-
 id: Other
 msg: 其他
 
@@ -950,6 +1038,17 @@ msg: 類型
 
 id: URL
 msg: 網址
+
+#
+# ./src/networking/connman.c
+#
+id: Enable Wi-Fi
+# Missing translation
+msg: 
+
+id: Network connections
+# Missing translation
+msg: 
 
 #
 # ./src/networking/ftp_server.c
@@ -1111,6 +1210,10 @@ msg:
 id: Automatic standby
 msg: 自動待機
 
+id: Enable SSH server
+# Missing translation
+msg: 
+
 id: Logout
 msg: 登出
 
@@ -1120,12 +1223,23 @@ msg: 開啟 Shell 介面
 id: Power off system
 msg: 關閉主機
 
+id: SSH server
+# Missing translation
+msg: 
+
+id: Standby
+# Missing translation
+msg: 
+
 id: Starting and stopping Showtime
 msg: 啟動與結束 Showtime
 
 #
 # ./src/sd/sd.c
 #
+id: Enabled on home screen
+msg: 顯示於首頁
+
 id: Name
 msg: 名稱
 
@@ -1171,6 +1285,10 @@ msg:
 
 id: Settings useful for developers
 msg: 開發者相關設定
+
+id: System name
+# Missing translation
+msg: 
 
 id: System related settings
 msg: 系統設定
@@ -1375,12 +1493,6 @@ msg: 軟體更新
 
 id: Upgrade to releases from
 msg: 更新自
-
-#
-# ./src/upnp/upnp.c
-#
-id: Enabled on home screen
-msg: 顯示於首頁
 
 #
 # ./src/upnp/upnp_browse.c

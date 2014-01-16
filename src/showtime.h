@@ -235,6 +235,7 @@ typedef struct gconf {
   int enable_hls_debug;
   int enable_ftp_debug;
   int enable_cec_debug;
+  int enable_fa_scanner_debug;
 
   const char *devplugin;
   const char *plugin_repo;
@@ -267,6 +268,8 @@ typedef struct gconf {
   int log_server_port;
 
   int showtime_shell_fd;
+
+  char system_name[64];
 
 } gconf_t;
 

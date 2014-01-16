@@ -2,6 +2,25 @@ language: Dutch
 native: Nederlands
 maintainer: GuardianSoul, eussNL
 #
+# ./ext/miner/miner.c
+#
+id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
+# Missing translation
+msg: 
+
+id: Donate money to the Showtime project by mining litecoints
+# Missing translation
+msg: 
+
+id: Donations
+# Missing translation
+msg: 
+
+id: Show me more
+# Missing translation
+msg: 
+
+#
 # ./glwskins/default/cmdmenu.view
 #
 id: Add current page to bookmarks
@@ -324,12 +343,12 @@ msg: Veranderingen voor %s uitgaven
 id: Check for updates now
 msg: Nu op updates controleren
 
-id: Checking current installed version
-# Missing translation
-msg: 
-
 id: Checking for updates...
 msg: Controleren op updates...
+
+id: Checking installed version of %s
+# Missing translation
+msg: 
 
 id: Current version:
 msg: Huidige versie:
@@ -337,11 +356,13 @@ msg: Huidige versie:
 id: Download and install...
 msg: Downloaden en installeren...
 
-id: Downloading...
-msg: Downloaden...
+id: Downloading %s
+# Missing translation
+msg: 
 
-id: Installing...
-msg: Installeren
+id: Installing %s
+# Missing translation
+msg: 
 
 id: New version %s is available for download
 msg: Nieuwe versie %s kan worden gedownload
@@ -349,7 +370,7 @@ msg: Nieuwe versie %s kan worden gedownload
 id: No upgrade available
 msg: Geen updates beschikbaar
 
-id: Patching binary
+id: Patching %s
 # Missing translation
 msg: 
 
@@ -370,6 +391,10 @@ msg: Test
 
 id: Unable to query for new version
 msg: Kan niet zoeken naar een nieuwere versie
+
+id: Verifying %s
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/pages/video.view
@@ -429,8 +454,25 @@ msg: Geen media geladen
 #
 # ./glwskins/default/sysinfo.view
 #
-id: Memory usage:
-msg: Geheugenverbruik:
+id: CPU Temp
+# Missing translation
+msg: 
+
+id: GPU Temp
+# Missing translation
+msg: 
+
+id: Memory usage
+# Missing translation
+msg: 
+
+id: System Free
+# Missing translation
+msg: 
+
+id: System Total
+# Missing translation
+msg: 
 
 #
 # ./glwskins/default/universe.view
@@ -440,6 +482,37 @@ msg: Geluid gedempt
 
 id: Master volume: %d dB
 msg: Hoofdvolume: %d dB
+
+#
+# ./resources/spuminer/settings.view
+#
+id: Apart from enabling this option you do not need to do anything else to make your donations for the project.
+# Missing translation
+msg: 
+
+id: Enable mining
+# Missing translation
+msg: 
+
+id: For more information about Litecoin, please visit http://litecoin.org
+# Missing translation
+msg: 
+
+id: If you like Showtime you can donate money to the project by letting your Playstation 3 mine Litecoins while Showtime is running.
+# Missing translation
+msg: 
+
+id: Mining will not interfere with video playback performance as it only uses the leftover capacity of the SPU processors.
+# Missing translation
+msg: 
+
+id: Please consider enabling this option. / %s
+# Missing translation
+msg: 
+
+id: Thanks for your support!
+# Missing translation
+msg: 
 
 #
 # ./src/api/tmdb.c
@@ -455,6 +528,17 @@ msg: Originele titel gebruiken
 #
 id: System is low on memory (%d kB RAM available)
 msg: Het systeem heeft weinig geheugen over (%d kB RAM beschikbaar)
+
+#
+# ./src/arch/rpi/rpi_cec.c
+#
+id: Configure how Showtime communicates with your TV
+# Missing translation
+msg: 
+
+id: Consumer Electronics Control
+# Missing translation
+msg: 
 
 #
 # ./src/backend/dvd/cdda.c
@@ -671,6 +755,10 @@ msg[1]:
 #
 # ./src/i18n.c
 #
+id: Default character set
+# Missing translation
+msg: 
+
 id: Ignore 'The' at beginning of words when sorting
 # Missing translation
 msg: 
@@ -693,9 +781,6 @@ msg: Primaire audiotaal
 id: Primary subtitle language code
 msg: Primaire ontertitelingstaal
 
-id: SRT character set
-msg: SRT-tekenset
-
 id: Secondary audio language code
 msg: Secondaire audiotaal
 
@@ -707,6 +792,12 @@ msg: Tertiaire audiotaal
 
 id: Tertiary subtitle language code
 msg: Tertiaire audiotaal
+
+#
+# ./src/js/js_page.c
+#
+id: No handler for URL
+msg: Geen handler voor URL
 
 #
 # ./src/keymapper.c
@@ -896,9 +987,6 @@ msg: Bladwijzers
 id: Music
 msg: Muziek
 
-id: No handler for URL
-msg: Geen handler voor URL
-
 id: Other
 msg: Overige
 
@@ -923,6 +1011,17 @@ msg: Type
 
 id: URL
 msg: URL
+
+#
+# ./src/networking/connman.c
+#
+id: Enable Wi-Fi
+# Missing translation
+msg: 
+
+id: Network connections
+# Missing translation
+msg: 
 
 #
 # ./src/networking/ftp_server.c
@@ -1066,6 +1165,10 @@ msg: Video's streamen
 id: Automatic standby
 msg: Automatische slaapstand
 
+id: Enable SSH server
+# Missing translation
+msg: 
+
 id: Logout
 msg: Uitloggen
 
@@ -1075,12 +1178,23 @@ msg: Shell openen
 id: Power off system
 msg: Systeem uitschakelen
 
+id: SSH server
+# Missing translation
+msg: 
+
+id: Standby
+# Missing translation
+msg: 
+
 id: Starting and stopping Showtime
 msg: Showtime starten en stoppen
 
 #
 # ./src/sd/sd.c
 #
+id: Enabled on home screen
+msg: Ingeschakeld op beginscherm
+
 id: Name
 msg: Naam
 
@@ -1124,6 +1238,10 @@ msg:
 
 id: Settings useful for developers
 msg: Handige instellingen voor ontwikkelaars
+
+id: System name
+# Missing translation
+msg: 
 
 id: System related settings
 msg: Systeemgerelateerde instellingen
@@ -1319,12 +1437,6 @@ msg: Softwareupdate
 
 id: Upgrade to releases from
 msg: Type updates
-
-#
-# ./src/upnp/upnp.c
-#
-id: Enabled on home screen
-msg: Ingeschakeld op beginscherm
 
 #
 # ./src/upnp/upnp_browse.c

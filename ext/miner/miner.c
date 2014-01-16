@@ -539,7 +539,9 @@ miner_init(void)
   hts_mutex_init(&m->m_sock_mutex);
 
   settings_add_url(NULL,
-		   _p("Donations"), NULL, NULL, NULL, MYURL, 0);
+		   _p("Donations"), NULL,
+		   "dataroot://resources/spuminer/icon_16_litecoin.png",
+		   _p("Donate money to the Showtime project by mining litecoints"), MYURL, 0);
 
   miner_store = htsmsg_store_load("spuminer") ?: htsmsg_create_map();
 
@@ -550,7 +552,7 @@ miner_init(void)
 
   int enabled = htsmsg_get_u32_or_default(miner_store, "enabled", 0);
 
-  if(runs >= 1 && !enabled) {
+  if((runs % 5) == 1 && !enabled) {
     rstr_t *r = _("Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3");
     rstr_t *s = _("Show me more");
     news_ref = add_news("miningpitch", rstr_get(r), MYURL, rstr_get(s));

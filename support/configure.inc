@@ -88,6 +88,7 @@ CONFIG_LIST="
  connman
  libntfs
  miner
+ cedar
 "
 
 cleanup() {
@@ -437,7 +438,7 @@ freetype_setup()
 
     
     (cd ${FREETYPE_BUILD_DIR} && \
-        CC=${TOOLCHAIN}gcc AR=${TOOLCHAIN}ar RANLIB=${TOOLCHAIN}ranlib \
+        CC="${CC}" AR=${TOOLCHAIN}ar RANLIB=${TOOLCHAIN}ranlib \
         ${FREETYPE_SRC_DIR}/configure \
         $1 \
 	--prefix=${EXT_INSTALL_DIR} \

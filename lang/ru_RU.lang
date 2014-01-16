@@ -2,6 +2,21 @@ language: Russian
 native: Русский 
 maintainer: pvc1 <pvc1@yandex.ru> 
 #
+# ./ext/miner/miner.c
+#
+id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
+msg: Нравится Showtime? Вы можете пожертвовать деньги на проект через майнинг Litecoins на вашей PS3
+
+id: Donate money to the Showtime project by mining litecoints
+msg: Пожертвовать деньги на проект Showtime через майнинг litecoins
+
+id: Donations
+msg: Пожертвования
+
+id: Show me more
+msg: Показать мне больше
+
+#
 # ./glwskins/default/cmdmenu.view
 #
 id: Add current page to bookmarks
@@ -314,11 +329,11 @@ msg: Лог изменений для релиза %s
 id: Check for updates now
 msg: Проверить обновления сейчас
 
-id: Checking current installed version
-msg: Проверка текущей установленной версии
-
 id: Checking for updates...
 msg: Проверка обновлений...
+
+id: Checking installed version of %s
+msg: Проверка установленной версии %s
 
 id: Current version:
 msg: Текущая версия:
@@ -326,11 +341,11 @@ msg: Текущая версия:
 id: Download and install...
 msg: Загрузить и установить...
 
-id: Downloading...
-msg: Загрузка...
+id: Downloading %s
+msg: Загрузка %s
 
-id: Installing...
-msg: Установка...
+id: Installing %s
+msg: Установка %s
 
 id: New version %s is available for download
 msg: Новая версия %s доступна для загрузки
@@ -338,8 +353,8 @@ msg: Новая версия %s доступна для загрузки
 id: No upgrade available
 msg: Нет обновлений
 
-id: Patching binary
-msg: Обновление файлов
+id: Patching %s
+msg: Исправление %s
 
 id: Restarting Showtime in %d seconds...
 msg: Перезапуск Showtime через %d секунд...
@@ -358,6 +373,9 @@ msg: Тестовый
 
 id: Unable to query for new version
 msg: Невозможно проверить новую версию
+
+id: Verifying %s
+msg: Проверка %s
 
 #
 # ./glwskins/default/pages/video.view
@@ -416,8 +434,20 @@ msg: Медиа-файл не загружен
 #
 # ./glwskins/default/sysinfo.view
 #
-id: Memory usage:
-msg: Использование памяти:
+id: CPU Temp
+msg: Температура CPU
+
+id: GPU Temp
+msg: Температура GPU
+
+id: Memory usage
+msg: Использование памяти
+
+id: System Free
+msg: Свободно
+
+id: System Total
+msg: Всего
 
 #
 # ./glwskins/default/universe.view
@@ -427,6 +457,30 @@ msg: Звук выключен
 
 id: Master volume: %d dB
 msg: Общая громкость: %d дБ
+
+#
+# ./resources/spuminer/settings.view
+#
+id: Apart from enabling this option you do not need to do anything else to make your donations for the project.
+msg: Помимо включения этой опции, вам не нужно ничего делать больше, чтобы сделать свое пожертвование для проекта.
+
+id: Enable mining
+msg: Включить майнинг
+
+id: For more information about Litecoin, please visit http://litecoin.org
+msg: Дополнительные сведения о Litecoin на сайте http://litecoin.org
+
+id: If you like Showtime you can donate money to the project by letting your Playstation 3 mine Litecoins while Showtime is running.
+msg: Если вам нравится Showtime, то вы можете пожертвовать деньги для проекта, позволив вашей Playstation 3 майнить Litecoins, пока запущен Showtime.
+
+id: Mining will not interfere with video playback performance as it only uses the leftover capacity of the SPU processors.
+msg: Майнинг не влияет на производительность для воспроизведения видео, т.к. н использует оставшуюся часть потенциала SPU процессоров.
+
+id: Please consider enabling this option. / %s
+msg: Пожалуйста, обратите внимание включение этой опции. / %s
+
+id: Thanks for your support!
+msg: Спасибо за вашу поддержку!
 
 #
 # ./src/api/tmdb.c
@@ -442,6 +496,15 @@ msg: Использовать оригинальное название
 #
 id: System is low on memory (%d kB RAM available)
 msg: Мало памяти (доступно %d Кб RAM)
+
+#
+# ./src/arch/rpi/rpi_cec.c
+#
+id: Configure how Showtime communicates with your TV
+msg: Настройка соединения Showtime с вашим ТВ
+
+id: Consumer Electronics Control
+msg: Управление бытовой электроникой
 
 #
 # ./src/backend/dvd/cdda.c
@@ -653,6 +716,9 @@ msg[1]: файлов: %d
 #
 # ./src/i18n.c
 #
+id: Default character set
+msg: Набор символов по умолчанию
+
 id: Ignore 'The' at beginning of words when sorting
 msg: Игнорировать 'The' в начале названия при сортировке
 
@@ -674,9 +740,6 @@ msg: Код основного языка аудио
 id: Primary subtitle language code
 msg: Код основного языка субтитров
 
-id: SRT character set
-msg: Набор символов SRT
-
 id: Secondary audio language code
 msg: Код второго языка аудио
 
@@ -688,6 +751,12 @@ msg: Код третьего языка аудио
 
 id: Tertiary subtitle language code
 msg: Код третьего языка субтитров
+
+#
+# ./src/js/js_page.c
+#
+id: No handler for URL
+msg: Нет обработчика для URL
 
 #
 # ./src/keymapper.c
@@ -869,9 +938,6 @@ msg: Закладки
 id: Music
 msg: Музыка
 
-id: No handler for URL
-msg: Нет обработчика для URL
-
 id: Other
 msg: Прочее
 
@@ -895,6 +961,15 @@ msg: Тип
 
 id: URL
 msg: URL
+
+#
+# ./src/networking/connman.c
+#
+id: Enable Wi-Fi
+msg: Включить Wi-Fi
+
+id: Network connections
+msg: Сетевые подключения
 
 #
 # ./src/networking/ftp_server.c
@@ -1031,6 +1106,9 @@ msg: Потоковое видео
 id: Automatic standby
 msg: Автоматический режим ожидания
 
+id: Enable SSH server
+msg: Включить SSH-сервер
+
 id: Logout
 msg: Выход из системы
 
@@ -1040,12 +1118,21 @@ msg: Открыть оболочку
 id: Power off system
 msg: Отключение системы
 
+id: SSH server
+msg: SSH-сервер
+
+id: Standby
+msg: Режим ожидания
+
 id: Starting and stopping Showtime
 msg: Запуск и остановка Showtime
 
 #
 # ./src/sd/sd.c
 #
+id: Enabled on home screen
+msg: Включено на главном экране
+
 id: Name
 msg: Имя
 
@@ -1087,6 +1174,9 @@ msg: Сетевые настройки
 
 id: Settings useful for developers
 msg: Настройки полезные для разработчиков
+
+id: System name
+msg: Имя системы
 
 id: System related settings
 msg: Системные настройки
@@ -1267,12 +1357,6 @@ msg: Обновление ПО
 
 id: Upgrade to releases from
 msg: Обновление до релиза
-
-#
-# ./src/upnp/upnp.c
-#
-id: Enabled on home screen
-msg: Включено на главном экране
 
 #
 # ./src/upnp/upnp_browse.c

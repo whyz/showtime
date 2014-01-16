@@ -2,6 +2,21 @@
 native: 简体中文
 maintainer: Rural Hunter<ruralhunter@gmail.com>
 #
+# ./ext/miner/miner.c
+#
+id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
+msg: 您喜欢Showtime吗？可以利用PS3的计算能力挖莱特币来帮助这个项目哦
+
+id: Donate money to the Showtime project by mining litecoints
+msg: 挖莱特币捐献给Showtime
+
+id: Donations
+msg: 捐献
+
+id: Show me more
+msg: 显示更多
+
+#
 # ./glwskins/default/cmdmenu.view
 #
 id: Add current page to bookmarks
@@ -17,10 +32,10 @@ msg: 将当前页从书签删除
 # ./glwskins/default/cmdmenu/cmdmenu_common.view
 #
 id: Activate sleep timer
-msg: 启用休眠定时器
+msg: 启用定时关机
 
 id: Disable sleep timer
-msg: 禁用休眠定时器
+msg: 禁用定时关机
 
 id: Exit Showtime
 msg: 退出Showtime
@@ -50,7 +65,7 @@ id: System
 msg: 系统
 
 id: Time until sleep
-msg: 直到休眠
+msg: 直到关机
 
 id: min
 msg: 最小
@@ -314,12 +329,11 @@ msg: 版本%s更新记录
 id: Check for updates now
 msg: 立刻检查更新
 
-id: Checking current installed version
-# Missing translation
-msg: 
-
 id: Checking for updates...
 msg: 正在检查更新...
+
+id: Checking installed version of %s
+msg: 检查%s的安装版本
 
 id: Current version:
 msg: 当前版本：
@@ -327,11 +341,11 @@ msg: 当前版本：
 id: Download and install...
 msg: 正在下载并安装...
 
-id: Downloading...
-msg: 正在下载...
+id: Downloading %s
+msg: 正在下载%s
 
-id: Installing...
-msg: 正在安装...
+id: Installing %s
+msg: 正在安装%s
 
 id: New version %s is available for download
 msg: 新版本%s可用
@@ -339,9 +353,8 @@ msg: 新版本%s可用
 id: No upgrade available
 msg: 无可用更新
 
-id: Patching binary
-# Missing translation
-msg: 
+id: Patching %s
+msg: 正在更新%s
 
 id: Restarting Showtime in %d seconds...
 msg: %d秒后重启Showtime...
@@ -361,6 +374,9 @@ msg: 测试版
 id: Unable to query for new version
 msg: 无法检查最新版
 
+id: Verifying %s
+msg: 正在验证%s
+
 #
 # ./glwskins/default/pages/video.view
 #
@@ -374,8 +390,7 @@ msg: 播放信息
 # ./glwskins/default/pages/wideinfo/video.view
 #
 id: Seen:
-# Missing translation
-msg: 
+msg: 看过
 
 #
 # ./glwskins/default/playdecks/dvd.view
@@ -419,8 +434,20 @@ msg: 未载入媒体
 #
 # ./glwskins/default/sysinfo.view
 #
-id: Memory usage:
-msg: 内存使用率：
+id: CPU Temp
+msg: CPU温度
+
+id: GPU Temp
+msg: GPU温度
+
+id: Memory usage
+msg: 内存占用
+
+id: System Free
+msg: 系统剩余
+
+id: System Total
+msg: 系统总数
 
 #
 # ./glwskins/default/universe.view
@@ -430,6 +457,30 @@ msg: 已静音
 
 id: Master volume: %d dB
 msg: 主音量: %d dB
+
+#
+# ./resources/spuminer/settings.view
+#
+id: Apart from enabling this option you do not need to do anything else to make your donations for the project.
+msg: 给这个项目作贡献，除了启用这个选项外你不许要做任何额外操作。
+
+id: Enable mining
+msg: 启用挖矿
+
+id: For more information about Litecoin, please visit http://litecoin.org
+msg: 想了解更多莱特币的相关信息，请访问http://litecoin.org
+
+id: If you like Showtime you can donate money to the project by letting your Playstation 3 mine Litecoins while Showtime is running.
+msg: 如果你喜欢Showtime，你可以让你的PS3在Showtime运行的时候作为莱特币挖矿机挖矿捐献给这个项目
+
+id: Mining will not interfere with video playback performance as it only uses the leftover capacity of the SPU processors.
+msg: 挖矿不会影响视频播放性能，它只会利用PS3空闲的计算能力。
+
+id: Please consider enabling this option. / %s
+msg: 请考虑启用此选项。/ %s
+
+id: Thanks for your support!
+msg: 感谢您的支持！
 
 #
 # ./src/api/tmdb.c
@@ -445,6 +496,15 @@ msg: 使用原标题
 #
 id: System is low on memory (%d kB RAM available)
 msg: 系统内存偏少(%d kB RAM可用)
+
+#
+# ./src/arch/rpi/rpi_cec.c
+#
+id: Configure how Showtime communicates with your TV
+msg: 配置Showtime和电视的交互
+
+id: Consumer Electronics Control
+msg: 消费型电子产品控制
 
 #
 # ./src/backend/dvd/cdda.c
@@ -642,8 +702,8 @@ id: File access
 msg: 文件访问
 
 id: %d archive parts
-msg[0]: 
-msg[1]: 
+msg[0]: %d个分卷
+msg[1]: %d个分卷
 
 id: %d directories
 msg[0]: %d个文件夹
@@ -656,6 +716,9 @@ msg[1]: %d个文件
 #
 # ./src/i18n.c
 #
+id: Default character set
+msg: 默认字符集
+
 id: Ignore 'The' at beginning of words when sorting
 msg: 排序时忽略开头的'The'
 
@@ -677,9 +740,6 @@ msg: 音频首选语言代码
 id: Primary subtitle language code
 msg: 字幕首选语言代码
 
-id: SRT character set
-msg: SRT字幕字符集
-
 id: Secondary audio language code
 msg: 音频次选语言代码
 
@@ -691,6 +751,12 @@ msg: 音频第三语言代码
 
 id: Tertiary subtitle language code
 msg: 字幕第三语言代码
+
+#
+# ./src/js/js_page.c
+#
+id: No handler for URL
+msg: 无法处理URL
 
 #
 # ./src/keymapper.c
@@ -720,12 +786,10 @@ id: Audio delay
 msg: 音频延迟
 
 id: Audio volume
-# Missing translation
-msg: 
+msg: 音量
 
 id: Go to standby after video ends
-# Missing translation
-msg: 
+msg: 视频播放结束后自动关机
 
 id: Stretch video to fullscreen
 msg: 拉升视频至全屏
@@ -737,15 +801,13 @@ id: Subtitle delay
 msg: 字幕延迟
 
 id: Subtitle horizontal displacement
-# Missing translation
-msg: 
+msg: 字幕水平移位
 
 id: Subtitle scaling
 msg: 字幕缩放
 
 id: Subtitle vertical displacement
-# Missing translation
-msg: 
+msg: 字幕垂直移位
 
 id: Video zoom
 msg: 视频缩放
@@ -763,20 +825,16 @@ id: Automatic
 msg: 自动
 
 id: Manual
-# Missing translation
-msg: 
+msg: 手动
 
 id: Mark all as seen
-# Missing translation
-msg: 
+msg: 标记所有为已播放
 
 id: Mark all as unseen
-# Missing translation
-msg: 
+msg: 标记所有为未播放
 
 id: Metadata mode
-# Missing translation
-msg: 
+msg: 元数据模式
 
 #
 # ./src/metadata/metadata.c
@@ -880,9 +938,6 @@ msg: 收藏夹
 id: Music
 msg: 音乐
 
-id: No handler for URL
-msg: 无法处理URL
-
 id: Other
 msg: 其它
 
@@ -890,8 +945,7 @@ id: Photos
 msg: 照片
 
 id: Published in Virtual File System
-# Missing translation
-msg: 
+msg: 虚拟文件系统中已发布
 
 id: Removed bookmark: %s
 msg: 删除书签: %s
@@ -909,19 +963,25 @@ id: URL
 msg: URL
 
 #
+# ./src/networking/connman.c
+#
+id: Enable Wi-Fi
+msg: 启用Wi-Fi
+
+id: Network connections
+msg: 网络连接
+
+#
 # ./src/networking/ftp_server.c
 #
 id: Enable FTP server
-# Missing translation
-msg: 
+msg: 启用FTP服务器
 
 id: FTP server
-# Missing translation
-msg: 
+msg: FTP服务器
 
 id: Server TCP port
-# Missing translation
-msg: 
+msg: 服务器TCP端口
 
 #
 # ./src/plugins.c
@@ -1044,7 +1104,10 @@ msg: 视频流
 # ./src/runcontrol.c
 #
 id: Automatic standby
-msg: 自动待机
+msg: 自动关机
+
+id: Enable SSH server
+msg: 启用SSH服务器
 
 id: Logout
 msg: 注销
@@ -1055,12 +1118,21 @@ msg: 打开Shell
 id: Power off system
 msg: 关机
 
+id: SSH server
+msg: SSH服务器
+
+id: Standby
+msg: 关机
+
 id: Starting and stopping Showtime
 msg: 启动和关闭Showtime
 
 #
 # ./src/sd/sd.c
 #
+id: Enabled on home screen
+msg: 已在首页启用
+
 id: Name
 msg: 名称
 
@@ -1095,15 +1167,16 @@ id: Look and feel
 msg: 外观
 
 id: Network services, etc
-# Missing translation
-msg: 
+msg: 网络服务等
 
 id: Network settings
-# Missing translation
-msg: 
+msg: 网络设置
 
 id: Settings useful for developers
 msg: 供开发者使用的设置
+
+id: System name
+msg: 系统名称
 
 id: System related settings
 msg: 系统相关设置
@@ -1211,8 +1284,7 @@ id: Reset subtitle font to default
 msg: 重置字幕字体
 
 id: Unable to install font: %s
-# Missing translation
-msg: 
+msg: 无法安装字体：%s
 
 id: Use font %s for
 msg: 使用字体%s
@@ -1224,19 +1296,16 @@ msg: 用户界面
 # ./src/ui/glw/glw_ps3.c
 #
 id: Seek using L2 and R2 button
-# Missing translation
-msg: 
+msg: 使用L2/R2快速进退
 
 id: Yes with Select button
-# Missing translation
-msg: 
+msg: 使用Select按键确认
 
 #
 # ./src/ui/glw/glw_settings.c
 #
 id: Font and icon size
-# Missing translation
-msg: 
+msg: 字体和图标大小
 
 id: Horizontal underscan
 msg: 水平欠扫描
@@ -1245,12 +1314,10 @@ id: Screensaver delay
 msg: 屏幕保护延迟
 
 id: Vertical underscan
-# Missing translation
-msg: 
+msg: 垂直欠扫描
 
 id: Wrap when reaching beginning/end of lists
-# Missing translation
-msg: 
+msg: 列表浏览开始结尾循环
 
 #
 # ./src/ui/glw/glw_x11.c
@@ -1290,12 +1357,6 @@ msg: 软件更新
 
 id: Upgrade to releases from
 msg: 更新选择
-
-#
-# ./src/upnp/upnp.c
-#
-id: Enabled on home screen
-msg: 已在首页启用
 
 #
 # ./src/upnp/upnp_browse.c

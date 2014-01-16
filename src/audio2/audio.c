@@ -158,7 +158,7 @@ audio_decoder_destroy(struct audio_decoder *ad)
 {
   mp_send_cmd(ad->ad_mp, &ad->ad_mp->mp_audio, MB_CTRL_EXIT);
   hts_thread_join(&ad->ad_tid);
-
+  mq_flush(ad->ad_mp, &ad->ad_mp->mp_audio, 1);
   avcodec_free_frame(&ad->ad_frame);
 
   if(ad->ad_avr != NULL) {
@@ -573,6 +573,11 @@ audio_decode_thread(void *aux)
 	if(mp->mp_seek_audio_done != NULL)
 	  mp->mp_seek_audio_done(mp);
 	ad->ad_discontinuity = 1;
+
+	if(ad->ad_avr != NULL) {
+	  avresample_read(ad->ad_avr, NULL, avresample_available(ad->ad_avr));
+	  assert(avresample_available(ad->ad_avr) == 0);
+	}
 	break;
 
       case MB_CTRL_EXIT:
