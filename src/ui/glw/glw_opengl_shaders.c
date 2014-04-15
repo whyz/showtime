@@ -431,8 +431,10 @@ glw_compile_shader(const char *path, int type, glw_root_t *gr)
   char log[4096];
   buf_t *b;
 
-  if((b = fa_load(path, gr->gr_vpaths, log, sizeof(log), NULL, 0,
-                  NULL, NULL)) == NULL) {
+  if((b = fa_load(path,
+                   FA_LOAD_VPATHS(gr->gr_vpaths),
+                   FA_LOAD_ERRBUF(log, sizeof(log)),
+                   NULL)) == NULL) {
     TRACE(TRACE_ERROR, "glw", "Unable to load shader %s -- %s",
 	  path, log);
     return 0;
@@ -690,7 +692,7 @@ glw_opengl_shaders_init(glw_root_t *gr, int delayed)
   //    gbr->gbr_renderer_draw = glw_renderer_shader;
 
 
-  // Video renderer
+  // yuv2rgb Video renderer
 
   SHADERPATH("yuv2rgb_v.glsl");
   vs = glw_compile_shader(path, GL_VERTEX_SHADER, gr);
@@ -705,7 +707,23 @@ glw_opengl_shaders_init(glw_root_t *gr, int delayed)
   fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
   gbr->gbr_yuv2rgb_2f = glw_link_program(gbr, "yuv2rgb_2f_norm", vs, fs);
   glDeleteShader(fs);
+  glDeleteShader(vs);
 
+  // rgb2rgb Video renderer
+
+  SHADERPATH("rgb2rgb_v.glsl");
+  vs = glw_compile_shader(path, GL_VERTEX_SHADER, gr);
+
+
+  SHADERPATH("rgb2rgb_1f_norm.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_rgb2rgb_1f = glw_link_program(gbr, "rgb2rgb_1f_norm", vs, fs);
+  glDeleteShader(fs);
+
+  SHADERPATH("rgb2rgb_2f_norm.glsl");
+  fs = glw_compile_shader(path, GL_FRAGMENT_SHADER, gr);
+  gbr->gbr_rgb2rgb_2f = glw_link_program(gbr, "rgb2rgb_2f_norm", vs, fs);
+  glDeleteShader(fs);
   glDeleteShader(vs);
 
   if(!delayed) {

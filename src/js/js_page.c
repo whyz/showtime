@@ -21,27 +21,34 @@
 
 #include <sys/types.h>
 #include <assert.h>
+#include <unistd.h>
 #include <string.h>
+
 #include "js.h"
-
-
 #include "backend/backend.h"
 #include "backend/backend_prop.h"
 #include "backend/search.h"
 #include "navigator.h"
 #include "misc/str.h"
 #include "misc/regex.h"
+#include "misc/cancellable.h"
 #include "prop/prop_nodefilter.h"
 #include "event.h"
+#include "metadata/playinfo.h"
 #include "metadata/metadata.h"
+#include "metadata/metadata_str.h"
 #include "htsmsg/htsmsg_json.h"
 
 TAILQ_HEAD(js_item_queue, js_item);
 
-static hts_mutex_t js_page_mutex; // protects global lists
+LIST_HEAD(js_model_list, js_model);
+
+static HTS_MUTEX_DECL(js_page_mutex); // protects global lists
+static HTS_MUTEX_DECL(js_model_mutex); // protects global model lists
 
 static struct js_route_list js_routes;
 static struct js_searcher_list js_searchers;
+static struct js_model_list js_models;
 
 static JSFunctionSpec item_proto_functions[];
 
@@ -79,6 +86,8 @@ typedef struct js_searcher {
 typedef struct js_model {
 
   js_context_private_t jm_ctxpriv; // Must be first
+
+  LIST_ENTRY(js_model) jm_link;
 
   int jm_refcount;
 
@@ -127,6 +136,10 @@ typedef struct js_model {
 
   int jm_sync;  // Synchronous mode (no callbacks allowed, etc)
 
+  struct js_setting_group_list jm_setting_groups;
+
+  cancellable_t jm_cancellable;
+
 } js_model_t;
 
 
@@ -135,14 +148,6 @@ static JSObject *make_model_object(JSContext *cx, js_model_t *jm,
 
 static void install_nodesub(js_model_t *jm);
 
-/**
- *
- */
-void
-js_page_init(void)
-{
-  hts_mutex_init(&js_page_mutex);
-}
 
 /**
  *
@@ -154,8 +159,12 @@ js_model_create(JSContext *cx, jsval openfunc, int sync)
   jm->jm_refcount = 1;
   jm->jm_openfunc = openfunc;
   jm->jm_sync = sync;
+  jm->jm_ctxpriv.jcp_c = &jm->jm_cancellable;
   JS_AddNamedRoot(cx, &jm->jm_openfunc, "openfunc");
   TAILQ_INIT(&jm->jm_items);
+  hts_mutex_lock(&js_model_mutex);
+  LIST_INSERT_HEAD(&js_models, jm, jm_link);
+  hts_mutex_unlock(&js_model_mutex);
   return jm;
 }
 
@@ -189,6 +198,9 @@ js_model_destroy(js_model_t *jm)
   if(jm->jm_pc != NULL)
     prop_courier_destroy(jm->jm_pc);
   free(jm->jm_url);
+  hts_mutex_lock(&js_model_mutex);
+  LIST_REMOVE(jm, jm_link);
+  hts_mutex_unlock(&js_model_mutex);
   free(jm);
 }
 
@@ -658,7 +670,7 @@ js_appendItem0(JSContext *cx, js_model_t *model, prop_t *parent,
   *rval = JSVAL_VOID;
 
   if(metabind != NULL)
-    metadb_bind_url_to_prop(NULL, metabind, item);
+    playinfo_bind_url_to_prop(metabind, item);
 
   if(type != NULL) {
     prop_set_string(prop_create(item, "type"), type);
@@ -809,21 +821,21 @@ init_model_props(js_model_t *jm, prop_t *model)
 {
   struct prop_nf *pnf;
 
-  jm->jm_nodes   = prop_ref_inc(prop_create(model, "items"));
-  jm->jm_actions = prop_ref_inc(prop_create(model, "actions"));
-  jm->jm_type    = prop_ref_inc(prop_create(model, "type"));
-  jm->jm_error   = prop_ref_inc(prop_create(model, "error"));
-  jm->jm_contents= prop_ref_inc(prop_create(model, "contents"));
-  jm->jm_entries = prop_ref_inc(prop_create(model, "entries"));
-  jm->jm_metadata= prop_ref_inc(prop_create(model, "metadata"));
-  jm->jm_options = prop_ref_inc(prop_create(model, "options"));
+  jm->jm_nodes   = prop_create_r(model, "items");
+  jm->jm_actions = prop_create_r(model, "actions");
+  jm->jm_type    = prop_create_r(model, "type");
+  jm->jm_error   = prop_create_r(model, "error");
+  jm->jm_contents= prop_create_r(model, "contents");
+  jm->jm_entries = prop_create_r(model, "entries");
+  jm->jm_metadata= prop_create_r(model, "metadata");
+  jm->jm_options = prop_create_r(model, "options");
 
   pnf = prop_nf_create(prop_create(model, "nodes"),
 		       jm->jm_nodes,
 		       prop_create(model, "filter"),
 		       PROP_NF_AUTODESTROY);
 
-  prop_set_int(prop_create(model, "canFilter"), 1);
+  prop_set(model, "canFilter", PROP_SET_INT, 1);
 
   prop_nf_release(pnf);
 }
@@ -1365,7 +1377,8 @@ js_open_invoke(JSContext *cx, js_model_t *jm)
   JS_DefineFunctions(cx, obj, page_functions_sync);
 
   if(jm->jm_url != NULL)
-    js_createPageOptions(cx, obj, jm->jm_url, jm->jm_options);
+    js_createPageOptions(cx, obj, jm->jm_url, jm->jm_options,
+                         &jm->jm_setting_groups);
 
   if(jm->jm_args != NULL) {
     argfmt[0] = 'o';
@@ -1447,7 +1460,7 @@ js_open(js_model_t *jm)
     jsrefcount s = JS_SuspendRequest(cx);
     prop_courier_wait(jm->jm_pc, &q, 0);
     JS_ResumeRequest(cx, s);
-    prop_notify_dispatch(&q);
+    prop_notify_dispatch(&q, 0);
 
     if(jm->jm_pending_want_more && jm->jm_paginator) {
       jm->jm_pending_want_more = 0;
@@ -1457,6 +1470,8 @@ js_open(js_model_t *jm)
   }
 
   JS_RemoveRoot(cx, &jm->jm_item_proto);
+
+  js_setting_group_flush_from_list(cx, &jm->jm_setting_groups);
 
   js_model_release(jm);
 
@@ -1523,22 +1538,24 @@ js_backend_open(prop_t *page, const char *url, int sync)
       strvec_addpn(&jm->jm_args, url + matches[i].rm_so, 
 		   matches[i].rm_eo - matches[i].rm_so);
   
-  model = prop_create(page, "model");
+  model = prop_create_r(page, "model");
 
   init_model_props(jm, model);
 
-  jm->jm_source    = prop_ref_inc(prop_create(page, "source"));
-  jm->jm_eventsink = prop_ref_inc(prop_create(page, "eventSink"));
-  jm->jm_loading   = prop_ref_inc(prop_create(model, "loading"));
+  jm->jm_source    = prop_create_r(page, "source");
+  jm->jm_eventsink = prop_create_r(page, "eventSink");
+  jm->jm_loading   = prop_create_r(model, "loading");
   jm->jm_root      = prop_ref_inc(page);
   jm->jm_url       = strdup(url);
 
+  prop_ref_dec(model);
+
   hts_mutex_unlock(&js_page_mutex);
-  if(sync) {
-    js_open(jm);
-  } else {
-    model_launch(jm);
+  if(!sync) {
+    jm->jm_pc = prop_courier_create_waitable();
+    prop_set_int(jm->jm_loading, 1);
   }
+  js_open(jm);
   return 0;
 }
 
@@ -1550,7 +1567,7 @@ void
 js_backend_search(struct prop *model, const char *query)
 {
   js_searcher_t *jss;
-  prop_t *parent = prop_create(model, "nodes");
+  prop_t *parent = prop_create_r(model, "nodes");
   js_model_t *jm;
 
   JSContext *cx = js_newctx(NULL);
@@ -1573,6 +1590,7 @@ js_backend_search(struct prop *model, const char *query)
   hts_mutex_unlock(&js_page_mutex);
   JS_EndRequest(cx);
   JS_DestroyContext(cx);
+  prop_ref_dec(parent);
 }
 
 
@@ -1722,9 +1740,39 @@ js_page_flush_from_plugin(JSContext *cx, js_plugin_t *jsp)
   js_route_t *jsr;
   js_searcher_t *jss;
 
+  hts_mutex_lock(&js_page_mutex);
+
   while((jsr = LIST_FIRST(&jsp->jsp_routes)) != NULL)
     js_route_delete(cx, jsr);
 
   while((jss = LIST_FIRST(&jsp->jsp_searchers)) != NULL)
     js_searcher_delete(cx, jss);
+
+  hts_mutex_unlock(&js_page_mutex);
+}
+
+
+
+/**
+ *
+ */
+int
+js_wait_for_models_to_terminate(void)
+{
+  int i;
+  js_model_t *jm;
+  hts_mutex_lock(&js_model_mutex);
+  LIST_FOREACH(jm, &js_models, jm_link)
+    cancellable_cancel(&jm->jm_cancellable);
+
+  for(i = 0; i < 100; i++) {
+    if(LIST_FIRST(&js_models) == NULL)
+      break;
+
+    hts_mutex_unlock(&js_model_mutex);
+    usleep(10000);
+    hts_mutex_lock(&js_model_mutex);
+  }
+  hts_mutex_unlock(&js_model_mutex);
+  return i == 100;
 }

@@ -25,20 +25,26 @@
 #include "glw.h"
 #include "glw_event.h"
 
+
 /**
  *
  */
 static void
 event_bubble(glw_t *w, event_t *e)
 {
+  glw_root_t *gr = w->glw_root;
   if(e->e_nav == NULL)
     e->e_nav = prop_ref_inc(w->glw_root->gr_prop_nav);
 
   while(w != NULL) {
-    if(glw_signal0(w, GLW_SIGNAL_EVENT_BUBBLE, e))
+    w->glw_flags &= ~GLW_FLOATING_FOCUS;
+    if(glw_bubble_event(w, e))
       return;
     w = w->glw_parent;
   }
+
+  if(!glw_root_event_handler(gr, e))
+    event_release(e);
 }
 
 
@@ -53,6 +59,7 @@ typedef struct glw_event_navOpen {
   prop_t *origin;
   prop_t *model;
   char *how;
+  char *parent_url;
 } glw_event_navOpen_t;
 
 
@@ -70,6 +77,7 @@ glw_event_map_navOpen_dtor(glw_root_t *gr, glw_event_map_t *gem)
   free(no->url);
   free(no->view);
   free(no->how);
+  free(no->parent_url);
   free(no);
 }
 
@@ -85,7 +93,7 @@ glw_event_map_navOpen_fire(glw_t *w, glw_event_map_t *gem, event_t *src)
     return; // Must have an URL to fire
 
   event_t *e = event_create_openurl(no->url, no->view, no->origin,
-				    no->model, no->how);
+				    no->model, no->how, no->parent_url);
   
   e->e_mapped = 1;
   event_bubble(w, e);
@@ -98,7 +106,8 @@ glw_event_map_navOpen_fire(glw_t *w, glw_event_map_t *gem, event_t *src)
  */
 glw_event_map_t *
 glw_event_map_navOpen_create(const char *url, const char *view, prop_t *origin,
-			     prop_t *model, const char *how)
+			     prop_t *model, const char *how,
+                             const char *parent_url)
 {
   glw_event_navOpen_t *no = malloc(sizeof(glw_event_navOpen_t));
   
@@ -107,7 +116,8 @@ glw_event_map_navOpen_create(const char *url, const char *view, prop_t *origin,
   no->origin   = prop_ref_inc(origin);
   no->model    = prop_ref_inc(model);
   no->how      = how    ? strdup(how)   : NULL;
-  
+  no->parent_url = parent_url ? strdup(parent_url) : NULL;
+
   no->map.gem_dtor = glw_event_map_navOpen_dtor;
   no->map.gem_fire = glw_event_map_navOpen_fire;
   return &no->map;
@@ -403,7 +413,7 @@ glw_event_find_target2(glw_t *w, glw_t *forbidden, const char *id)
 {
   glw_t *c, *r;
 
-  if(w->glw_id != NULL && !strcmp(w->glw_id, id))
+  if(w->glw_id_rstr != NULL && !strcmp(rstr_get(w->glw_id_rstr), id))
     return w;
 
   if(w->glw_class->gc_flags & GLW_NAVIGATION_SEARCH_BOUNDARY)
@@ -495,7 +505,7 @@ glw_event_map_internal_fire(glw_t *w, glw_event_map_t *gem, event_t *src)
     if((t = glw_event_find_target(w, g->target)) == NULL) {
       TRACE(TRACE_ERROR, "GLW", "Targeted widget %s not found", g->target);
     } else {
-      glw_signal0(t, GLW_SIGNAL_EVENT, e);
+      glw_send_event(t, e);
     }
   } else {
     event_bubble(w, e);
@@ -544,4 +554,29 @@ glw_event_map_intercept(glw_t *w, event_t *e)
     }
   }
   return 0;
+}
+
+
+/**
+ *
+ */
+int
+glw_event_distribute_to_childs(glw_t *w, event_t *e)
+{
+  glw_t *c;
+
+  TAILQ_FOREACH(c, &w->glw_childs, glw_parent_link)
+    if(glw_send_event(c, e))
+      return 1;
+  return 0;
+}
+
+
+/**
+ *
+ */
+int
+glw_event_to_selected_child(glw_t *w, event_t *e)
+{
+  return w->glw_selected != NULL && glw_send_event(w->glw_selected, e);
 }

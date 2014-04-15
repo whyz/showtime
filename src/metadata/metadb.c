@@ -37,14 +37,10 @@
 #include "htsmsg/htsmsg_json.h"
 #include "settings.h"
 #include "notifications.h"
-
-#define METADATA_VERSION_STR "1"
+#include "metadata_sources.h"
 
 // If not set to true by metadb_init() no metadb actions will occur
 static db_pool_t *metadb_pool;
-static hts_mutex_t mip_mutex;
-
-static void mip_update_by_url(sqlite3 *db, const char *url);
 
 static int
 rc2metadatacode(int rc)
@@ -109,6 +105,7 @@ metadb_init(void)
 {
   sqlite3 *db;
   char buf[256];
+  char buf2[256];
 
   snprintf(buf, sizeof(buf), "%s/metadb", gconf.persistent_path);
   mkdir(buf, 0770);
@@ -116,16 +113,15 @@ metadb_init(void)
 
   //  unlink(buf);
 
-  hts_mutex_init(&mip_mutex);
-
   metadb_pool = db_pool_create(buf, 2);
   db = metadb_get();
   if(db == NULL)
     return;
 
   snprintf(buf, sizeof(buf), "%s/resources/metadb", showtime_dataroot());
+  snprintf(buf2, sizeof(buf2), "%s/kvstore/kvstore.db", gconf.persistent_path);
 
-  int r = db_upgrade_schema(db, buf, "metadb");
+  int r = db_upgrade_schema(db, buf, "metadb", "kvstore", buf2);
 
   metadb_close(db);
 
@@ -210,10 +206,9 @@ db_item_create(sqlite3 *db, const char *url, int contenttype, time_t mtime,
 
   rc = db_prepare(db, &stmt,
 		  "INSERT INTO item "
-		  "(url, contenttype, mtime, parent, metadataversion, "
-                  "indexstatus) "
+		  "(url, contenttype, mtime, parent, indexstatus) "
 		  "VALUES "
-		  "(?1, ?2, ?3, ?4, " METADATA_VERSION_STR ", ?5)");
+		  "(?1, ?2, ?3, ?4, ?5)");
 
   if(rc != SQLITE_OK)
     return METADATA_PERMANENT_ERROR;
@@ -1211,33 +1206,37 @@ metadb_metadata_writex(void *db, const char *url, time_t mtime,
     char sql[512];
 
     snprintf(sql, sizeof(sql),
-             "UPDATE item SET metadataversion=" METADATA_VERSION_STR
+             "UPDATE item SET "
              "%s"
              "%s"
              "%s"
              "%s"
              " WHERE id=?1",
-             md->md_contenttype ? ", contenttype=?2" : "",
-             mtime              ? ", mtime=?3" : "",
-             parent_id          ? ", parent=?4" : "",
-             indexstatus        ? ", indexstatus=?5" : "");
-    
-    rc = db_prepare(db, &stmt, sql);
+             md->md_contenttype ? "contenttype=?2," : "",
+             mtime              ? "mtime=?3," : "",
+             parent_id          ? "parent=?4," : "",
+             indexstatus        ? "indexstatus=?5," : "");
 
-    if(rc != SQLITE_OK)
-      return METADATA_PERMANENT_ERROR;
+    char *x = strrchr(sql, ',');
+    if(x != NULL) {
+      *x = ' ';
+      rc = db_prepare(db, &stmt, sql);
 
-    sqlite3_bind_int64(stmt, 1, item_id);
+      if(rc != SQLITE_OK)
+        return METADATA_PERMANENT_ERROR;
 
-    sqlite3_bind_int(stmt,   2, md->md_contenttype);
-    sqlite3_bind_int(stmt,   3, mtime);
-    sqlite3_bind_int64(stmt, 4, parent_id);
-    sqlite3_bind_int(stmt,   5, indexstatus);
+      sqlite3_bind_int64(stmt, 1, item_id);
 
-    rc = db_step(stmt);
-    sqlite3_finalize(stmt);
-    if(rc == METADATA_DEADLOCK)
-      return METADATA_DEADLOCK;
+      sqlite3_bind_int(stmt,   2, md->md_contenttype);
+      sqlite3_bind_int(stmt,   3, mtime);
+      sqlite3_bind_int64(stmt, 4, parent_id);
+      sqlite3_bind_int(stmt,   5, indexstatus);
+
+      rc = db_step(stmt);
+      sqlite3_finalize(stmt);
+      if(rc == METADATA_DEADLOCK)
+        return METADATA_DEADLOCK;
+    }
   }
 
   int r;
@@ -1886,7 +1885,7 @@ metadb_get_videoitem(void *db, const char *url)
  */
 int
 metadb_get_videoinfo(void *db, const char *url,
-		     struct metadata_source_queue *sources,
+                     metadata_source_query_info_t *msqi, int num_msqi,
 		     int *fixed_ds, metadata_t **mdp,
                      int only_preferred)
 {
@@ -1960,19 +1959,21 @@ metadb_get_videoinfo(void *db, const char *url,
     if(!dsenabled)
       continue;
 
-    if(sources != NULL) {
-      metadata_source_t *ms;
+    if(num_msqi) {
+      int i;
+      for(i = 0; i < num_msqi; i++) {
+        const struct metadata_source *ms = msqi[i].msqi_ms;
+        if(ms->ms_id == dsid && ms->ms_cfgid == cfgid)
+          break;
+      }
 
-      TAILQ_FOREACH(ms, sources, ms_link)
-	if(ms->ms_id == dsid && cfgid == ms->ms_cfgid) {
-	  ms->ms_mark = 1;
-	  ms->ms_qtype = qtype;
-	  ms->ms_status = status;
-	  break;
-	}
-
-      if(ms == NULL)
-	continue;
+      if(i != num_msqi) {
+        msqi[i].msqi_mark = 1;
+        msqi[i].msqi_qtype = qtype;
+        msqi[i].msqi_status = status;
+      } else {
+        continue;
+      }
     }
 
     if(status == METAITEM_STATUS_ABSENT)
@@ -2183,9 +2184,7 @@ metadb_metadata_get(void *db, const char *url, time_t mtime)
   rc = db_prepare(db, &sel,
 		  "SELECT id,contenttype,parent from item "
 		  "where url=?1 AND "
-		  "mtime=?2 AND "
-		  "metadataversion=" METADATA_VERSION_STR
-		  );
+		  "mtime=?2");
 
   if(rc != SQLITE_OK) {
     db_rollback(db);
@@ -2248,8 +2247,7 @@ metadb_metadata_scandir(void *db, const char *url, time_t *mtime)
   int rc;
 
   rc = db_prepare(db, &sel,
-		  "SELECT id, url, contenttype, mtime, playcount, "
-		  "lastplay, metadataversion "
+		  "SELECT id, url, contenttype, mtime "
 		  "FROM item "
 		  "WHERE parent = ?1"
 		  );
@@ -2383,501 +2381,21 @@ metadb_parent_item(void *db, const char *url, const char *parent_url)
 
 
 
-
 /**
  *
  */
-void
-metadb_register_play(const char *url, int inc, int content_type)
+metadata_t *
+metadata_get_video_data(const char *url)
 {
-  int rc;
-  int i;
-  void *db;
+  void *db = metadb_get();
+  metadata_t *md;
 
-  if((db = metadb_get()) == NULL)
-    return;
-
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  for(i = 0; i < 2; i++) {
-    sqlite3_stmt *stmt;
-
-    rc = db_prepare(db, &stmt,
-		    i == 0 ? 
-		    "UPDATE item "
-		    "SET playcount = playcount + ?3, "
-		    "lastplay = ?2 "
-		    "WHERE url=?1"
-		    :
-		    "INSERT INTO item "
-		    "(url, contenttype, playcount, lastplay) "
-		    "VALUES "
-		    "(?1, ?4, ?3, ?2)"
-		    );
-
-    if(rc != SQLITE_OK) {
-      db_rollback(db);
-      metadb_close(db);
-      return;
-    }
-
-    sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, 2, time(NULL));
-    sqlite3_bind_int(stmt, 3, inc);
-    sqlite3_bind_int(stmt, 4, content_type);
-    rc = db_step(stmt);
-    sqlite3_finalize(stmt);
-    if(rc == SQLITE_LOCKED) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
-    if(i == 0 && rc == SQLITE_DONE && sqlite3_changes(db) > 0)
-      break;
-  }
-  db_commit(db);
-  hts_mutex_lock(&mip_mutex);
-  mip_update_by_url(db, url);
-  hts_mutex_unlock(&mip_mutex);
+  int r = metadb_get_videoinfo(db, url, NULL, 0, NULL, &md, 0);
   metadb_close(db);
+  if(r)
+    return NULL;
+  return md;
 }
 
 
 
-/**
- *
- */
-void
-metadb_set_video_restartpos(const char *url, int64_t pos_ms)
-{
-  int rc;
-  int i;
-  void *db;
-
-  if(pos_ms >= 0 && pos_ms < 60000)
-    return;
-
-  if((db = metadb_get()) == NULL)
-    return;
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  for(i = 0; i < 2; i++) {
-    sqlite3_stmt *stmt;
-
-    rc = db_prepare(db, &stmt,
-		    i == 0 ? 
-		    "UPDATE item "
-		    "SET restartposition = ?2, contenttype = ?3 "
-		    "WHERE url=?1"
-		    :
-		    "INSERT INTO item "
-		    "(url, contenttype, restartposition) "
-		    "VALUES "
-		    "(?1, ?3, ?2)");
-
-    if(rc != SQLITE_OK) {
-      db_rollback(db);
-      metadb_close(db);
-      return;
-    }
-
-    sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-    if(pos_ms > 0)
-      sqlite3_bind_int64(stmt, 2, pos_ms);
-    sqlite3_bind_int(stmt, 3, CONTENT_VIDEO);
-    rc = db_step(stmt);
-    sqlite3_finalize(stmt);
-    if(rc == SQLITE_LOCKED) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
-    if(i == 0 && rc == SQLITE_DONE && sqlite3_changes(db) > 0)
-      break;
-  }
-  db_commit(db);
-  mip_update_by_url(db, url);
-  metadb_close(db);
-}
-
-
-/**
- *
- */
-int64_t
-video_get_restartpos(const char *url)
-{
-  int rc;
-  void *db;
-  sqlite3_stmt *stmt;
-  int64_t rval = 0;
-
-  if((db = metadb_get()) == NULL)
-    return 0;
-
-  rc = db_prepare(db, &stmt,
-		  "SELECT restartposition "
-		  "FROM item "
-		  "WHERE url = ?1"
-		  );
-
-  if(rc == SQLITE_OK) {
-    sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-    rc = db_step(stmt);
-
-    if(rc == SQLITE_ROW)
-      rval = sqlite3_column_int64(stmt, 0);
-    sqlite3_finalize(stmt);
-  }
-  metadb_close(db);
-  return rval;
-}
-
-/**
- *
- */
-typedef struct metadb_item_prop {
-  LIST_ENTRY(metadb_item_prop) mip_link;
-  prop_t *mip_playcount;
-  prop_t *mip_lastplayed;
-  prop_t *mip_restartpos;
-
-  char *mip_url;
-  
-  prop_sub_t *mip_destroy_sub;
-  prop_sub_t *mip_playcount_sub;
-
-  int mip_refcount;
-
-} metadb_item_prop_t;
-
-#define MIP_HASHWIDTH 311
-
-static LIST_HEAD(, metadb_item_prop) mip_hash[MIP_HASHWIDTH];
-
-
-
-typedef struct metadb_item_info {
-  int mii_playcount;
-  int mii_lastplayed;
-  int mii_restartpos;
-} metadb_item_info_t;
-
-/**
- *
- */
-static int
-mip_get(sqlite3 *db, const char *url, metadb_item_info_t *mii)
-{
-  int rc = METADATA_PERMANENT_ERROR;
-  sqlite3_stmt *stmt;
-
-  rc = db_prepare(db, &stmt,
-		  "SELECT "
-		  "playcount,lastplay,restartposition "
-		  "FROM item "
-		  "WHERE url=?1"
-		  );
-
-  if(rc != SQLITE_OK)
-    return METADATA_PERMANENT_ERROR;
-
-  sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-
-  rc = db_step(stmt);
-  if(rc == SQLITE_ROW) {
-    mii->mii_playcount  = sqlite3_column_int(stmt, 0);
-    mii->mii_lastplayed = sqlite3_column_int(stmt, 1);
-    mii->mii_restartpos = sqlite3_column_int(stmt, 2);
-    rc = 0;
-  }
-
-  sqlite3_finalize(stmt);
-  return rc;
-}
-
-
-/**
- *
- */
-static void
-mip_set(metadb_item_prop_t *mip, const metadb_item_info_t *mii)
-{
-  prop_set_int_ex(mip->mip_playcount, mip->mip_playcount_sub,
-		  mii->mii_playcount);
-  prop_set_int(mip->mip_lastplayed, mii->mii_lastplayed);
-  prop_set_float(mip->mip_restartpos, mii->mii_restartpos / 1000.0);
-}
-
-
-/**
- *
- */
-static void
-mip_update_by_url(sqlite3 *db, const char *url)
-{
-  metadb_item_prop_t *mip;
-  metadb_item_info_t mii;
-  int loaded = 0;
-
-  unsigned int hash = mystrhash(url) % MIP_HASHWIDTH;
-
-  LIST_FOREACH(mip, &mip_hash[hash], mip_link) {
-    if(strcmp(mip->mip_url, url))
-      continue;
-
-    if(loaded == 0) {
-      if(mip_get(db, url, &mii))
-	break;
-      loaded = 1;
-    }
-    mip_set(mip, &mii);
-  }
-}
-
-
-/**
- *
- */
-static void
-mip_release(metadb_item_prop_t *mip)
-{
-  mip->mip_refcount--;
-  if(mip->mip_refcount > 0)
-    return;
-
-  LIST_REMOVE(mip, mip_link);
-
-  prop_unsubscribe(mip->mip_destroy_sub);
-  prop_unsubscribe(mip->mip_playcount_sub);
-  prop_ref_dec(mip->mip_playcount);
-  prop_ref_dec(mip->mip_lastplayed);
-  prop_ref_dec(mip->mip_restartpos);
-  free(mip->mip_url);
-  free(mip);
-
-}
-
-/**
- *
- */
-static void
-metadb_item_prop_destroyed(void *opaque, prop_event_t event, ...)
-{
-  metadb_item_prop_t *mip = opaque;
-  if(event == PROP_DESTROYED)
-    mip_release(mip);
-}
-
-/**
- *
- */
-static void
-metadb_set_playcount(void *opaque, prop_event_t event, ...)
-{
-  metadb_item_prop_t *mip = opaque;
-  int rc, i;
-  void *db;
-  va_list ap;
-
-  if(event == PROP_DESTROYED) {
-    mip_release(mip);
-    return;
-  }
-  if(event != PROP_SET_INT) 
-    return;
-
-  va_start(ap, event);
-  int v = va_arg(ap, int);
-  va_end(ap);
-
-  if((db = metadb_get()) == NULL)
-    return;
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  for(i = 0; i < 2; i++) {
-    sqlite3_stmt *stmt;
-    rc = db_prepare(db, &stmt, 
-		    i == 0 ? 
-		    "UPDATE item "
-		    "SET playcount = ?2 "
-		    "WHERE url=?1"
-		    :
-		    "INSERT INTO item "
-		    "(url, playcount, metadataversion) "
-		    "VALUES "
-		    "(?1, ?2, " METADATA_VERSION_STR ")"
-		    );
-    
-    if(rc != SQLITE_OK) {
-      db_rollback(db);
-      metadb_close(db);
-      return;
-    }
-
-    sqlite3_bind_text(stmt, 1, mip->mip_url, -1, SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 2, v);
-    rc = db_step(stmt);
-    sqlite3_finalize(stmt);
-    if(rc == SQLITE_LOCKED) {
-      db_rollback_deadlock(db);
-      goto again;
-    }
-
-    if(rc == SQLITE_DONE && sqlite3_changes(db) == 0) {
-      continue;
-    }
-    break;
-  }
-
-  db_commit(db);
-  mip_update_by_url(db, mip->mip_url);
-  metadb_close(db);
-}
-
-
-
-/**
- *
- */
-static void
-metadb_bind_url_to_prop0(void *db, const char *url, prop_t *parent)
-{
-  metadb_item_prop_t *mip = malloc(sizeof(metadb_item_prop_t));
-
-  hts_mutex_lock(&mip_mutex);
-  mip->mip_refcount = 2;
-
-  mip->mip_destroy_sub =
-    prop_subscribe(PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, metadb_item_prop_destroyed, mip,
-		   PROP_TAG_ROOT, parent,
-		   PROP_TAG_MUTEX, &mip_mutex,
-		   NULL);
-
-  assert(mip->mip_destroy_sub != NULL);
-
-
-  mip->mip_playcount  = prop_create_r(parent, "playcount");
-  mip->mip_lastplayed = prop_create_r(parent, "lastplayed");
-  mip->mip_restartpos = prop_create_r(parent, "restartpos");
-  
-  mip->mip_playcount_sub =
-    prop_subscribe(PROP_SUB_NO_INITIAL_UPDATE | PROP_SUB_TRACK_DESTROY,
-		   PROP_TAG_CALLBACK, metadb_set_playcount, mip,
-		   PROP_TAG_ROOT, mip->mip_playcount,
-		   PROP_TAG_MUTEX, &mip_mutex,
-		   NULL);
-  
-  assert(mip->mip_playcount_sub != NULL);
-
-  mip->mip_url = strdup(url);
-  
-  unsigned int hash = mystrhash(url) % MIP_HASHWIDTH;
-  
-  LIST_INSERT_HEAD(&mip_hash[hash], mip, mip_link);
-  
-  metadb_item_info_t mii;
-  if(!mip_get(db, url, &mii))
-    mip_set(mip, &mii);
-  hts_mutex_unlock(&mip_mutex);
-}
-
-
-void
-metadb_bind_url_to_prop(void *db, const char *url, prop_t *parent)
-{
-  if(db != NULL)
-    return metadb_bind_url_to_prop0(db, url, parent);
-
-  if((db = metadb_get()) != NULL)
-    metadb_bind_url_to_prop0(db, url, parent);
-  metadb_close(db);
-}
-
-
-/**
- *
- */
-void
-metadb_mark_urls_as(const char **urls, int num_urls, int seen,
-                    int content_type)
-{
-  int i, j;
-  void *db;
-
-  if((db = metadb_get()) == NULL)
-    return;
- again:
-  if(db_begin(db)) {
-    metadb_close(db);
-    return;
-  }
-
-  for(j = 0; j < num_urls; j++) {
-    const char *url = urls[j];
-
-    for(i = 0; i < 2; i++) {
-      sqlite3_stmt *stmt;
-      int rc;
-      if(!seen) {
-        rc = db_prepare(db, &stmt,
-                        "UPDATE item "
-                        "SET playcount = 0 "
-                        "WHERE url=?1"
-                        );
-
-      } else {
-
-        rc = db_prepare(db, &stmt,
-                        i == 0 ?
-                        "UPDATE item "
-                        "SET playcount = 1, "
-                        "lastplay = ?2 "
-                        "WHERE url=?1 AND playcount = 0"
-                        :
-                        "INSERT INTO item "
-                        "(url, contenttype, 1, lastplay) "
-                        "VALUES "
-                        "(?1, ?3, ?2)"
-                        );
-      }
-
-      if(rc != SQLITE_OK) {
-        db_rollback(db);
-        metadb_close(db);
-        return;
-      }
-
-      sqlite3_bind_text(stmt, 1, url, -1, SQLITE_STATIC);
-      sqlite3_bind_int(stmt, 2, time(NULL));
-      sqlite3_bind_int(stmt, 3, content_type);
-      rc = db_step(stmt);
-      sqlite3_finalize(stmt);
-      if(rc == SQLITE_LOCKED) {
-        db_rollback_deadlock(db);
-        goto again;
-      }
-      if(!seen)
-        break;
-      if(i == 0 && rc == SQLITE_DONE && sqlite3_changes(db) > 0)
-        break;
-    }
-  }
-  db_commit(db);
-  hts_mutex_lock(&mip_mutex);
-  for(j = 0; j < num_urls; j++)
-    mip_update_by_url(db, urls[j]);
-  hts_mutex_unlock(&mip_mutex);
-  metadb_close(db);
-}

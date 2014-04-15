@@ -51,6 +51,7 @@
 #include "misc/md5.h"
 #include "misc/str.h"
 #include "i18n.h"
+#include "metadata/playinfo.h"
 
 typedef struct seek_item {
   prop_t *si_prop;
@@ -251,7 +252,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
   if(flags & BACKEND_VIDEO_RESUME ||
      (video_settings.resume_mode == VIDEO_RESUME_YES &&
       !(flags & BACKEND_VIDEO_START_FROM_BEGINNING))) {
-    int64_t start = video_get_restartpos(canonical_url) * 1000;
+    int64_t start = playinfo_get_restartpos(canonical_url) * 1000;
     if(start) {
       mp->mp_seek_base = start;
       video_seek(fctx, mp, &mb, start, "restart position");
@@ -347,6 +348,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
       }
 
       mb->mb_keyframe = !!(pkt.flags & AV_PKT_FLAG_KEY);
+      av_free_packet(&pkt);
     }
 
     /*
@@ -379,7 +381,7 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 	// Update restartpos every 5 seconds
 	if(sec < restartpos_last || sec >= restartpos_last + 5) {
 	  restartpos_last = sec;
-	  metadb_set_video_restartpos(canonical_url, ets->ts / 1000);
+	  playinfo_set_restartpos(canonical_url, ets->ts / 1000, 1);
 	}
       
 	if(sec != lastsec) {
@@ -427,16 +429,17 @@ video_player_loop(AVFormatContext *fctx, media_codec_t **cwvec,
 
   // Compute stop position (in percentage of video length)
 
-  int spp = mp->mp_seek_base * 100 / fctx->duration;
+  int spp = fctx->duration ? (mp->mp_seek_base * 100 / fctx->duration) : 0;
 
   if(spp >= video_settings.played_threshold || event_is_type(e, EVENT_EOF)) {
-    metadb_set_video_restartpos(canonical_url, -1);
-    metadb_register_play(canonical_url, 1, CONTENT_VIDEO);
+    playinfo_set_restartpos(canonical_url, -1, 0);
+    playinfo_register_play(canonical_url, 1);
     TRACE(TRACE_DEBUG, "Video",
 	  "Playback reached %d%%, counting as played (%s)",
 	  spp, canonical_url);
   } else if(last_timestamp_presented != PTS_UNSET) {
-    metadb_set_video_restartpos(canonical_url, last_timestamp_presented / 1000);
+    playinfo_set_restartpos(canonical_url, last_timestamp_presented / 1000,
+			    0);
   }
   return e;
 }
@@ -575,6 +578,9 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
 {
   rstr_t *title = NULL;
   video_args_t va = *va0;
+
+  prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 1);
+
   if(va.mimetype == NULL) {
     struct fa_stat fs;
 
@@ -600,7 +606,12 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
    * Check file type
    */
   fa_handle_t *fh;
-  fh = fa_open_ex(url, errbuf, errlen, FA_BUFFERED_BIG, mp->mp_prop_io);
+
+  fa_open_extra_t foe = {
+    .foe_stats = mp->mp_prop_io
+  };
+
+  fh = fa_open_ex(url, errbuf, errlen, FA_BUFFERED_BIG, &foe);
   if(fh == NULL)
     return NULL;
 
@@ -611,14 +622,7 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     if(x)
       *x = 0;
 
-    if(utf8_verify(tmp)) {
-      title = rstr_alloc(tmp);
-    } else {
-      char *t = utf8_from_bytes(tmp, 0, NULL, NULL, 0);
-      title = rstr_alloc(t);
-      free(t);
-    }
-
+    title = rstr_from_bytes(tmp, NULL, 0);
     va.title = rstr_get(title);
 
     prop_set(mp->mp_prop_metadata, "title", PROP_SET_RSTRING, title);
@@ -630,6 +634,7 @@ be_file_playvideo(const char *url, media_pipe_t *mp,
     if(fa_probe_iso(NULL, fh) == 0) {
       fa_close(fh);
     isdvd:
+      prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
 #if ENABLE_DVD
       return dvd_play(url, mp, errbuf, errlen, 1);
 #else
@@ -692,12 +697,12 @@ be_file_playvideo_fh(const char *url, media_pipe_t *mp,
       TRACE(TRACE_DEBUG, "Video", "Unable to compute opensub hash");
   }
 
-  AVIOContext *avio = fa_libav_reopen(fh);
+  AVIOContext *avio = fa_libav_reopen(fh, 0);
   va.filesize = avio_size(avio);
 
   AVFormatContext *fctx;
   if((fctx = fa_libav_open_format(avio, url, errbuf, errlen,
-				  va.mimetype)) == NULL) {
+				  va.mimetype, 0, -1, 2)) == NULL) {
     fa_libav_close(avio);
     return NULL;
   }
@@ -793,12 +798,22 @@ be_file_playvideo_fh(const char *url, media_pipe_t *mp,
       mcp.height = ctx->height;
       mcp.profile = ctx->profile;
       mcp.level = ctx->level;
+      mcp.sar_num = st->sample_aspect_ratio.num;
+      mcp.sar_den = st->sample_aspect_ratio.den;
+
+      mcp.frame_rate_num = st->avg_frame_rate.num;
+      mcp.frame_rate_den = st->avg_frame_rate.den;
+
+      if(!mcp.frame_rate_num  || !mcp.frame_rate_num) {
+	mcp.frame_rate_num = ctx->time_base.den;
+	mcp.frame_rate_den = ctx->time_base.num;
+      }
       break;
 
     case AVMEDIA_TYPE_AUDIO:
       if(va.flags & BACKEND_VIDEO_NO_AUDIO)
 	continue;
-      if(ctx->codec_id == CODEC_ID_DTS)
+      if(ctx->codec_id == AV_CODEC_ID_DTS)
 	ctx->channels = 0;
       break;
 
@@ -854,17 +869,16 @@ be_file_playvideo_fh(const char *url, media_pipe_t *mp,
 
   // Start it
   mp_configure(mp, (seek_is_fast ? MP_PLAY_CAPS_SEEK : 0) | MP_PLAY_CAPS_PAUSE,
-	       MP_BUFFER_DEEP, fctx->duration);
+	       MP_BUFFER_DEEP, fctx->duration, "video");
 
   if(!(va.flags & BACKEND_VIDEO_NO_AUDIO))
     mp_become_primary(mp);
 
-  prop_set_string(mp->mp_prop_type, "video");
-
   seek_index_t *si = build_index(mp, fctx, url);
   seek_index_t *ci = build_chapters(mp, fctx, url);
 
-  metadb_register_play(va.canonical_url, 0, CONTENT_VIDEO);
+  playinfo_register_play(va.canonical_url, 0);
+  prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
 
   event_t *e;
   e = video_player_loop(fctx, cwvec, mp, va.flags, errbuf, errlen,
@@ -933,7 +947,7 @@ attachment_load(struct attachment_list *alist, const char *url, int64_t offset,
 
   fh = fa_slice_open(fh, offset, size);
 
-  void *h = freetype_load_font_from_fh(fh, font_domain, NULL, 0);
+  void *h = freetype_load_dynamic_font_fh(fh, url, font_domain, NULL, 0);
   if(h != NULL)
      attachment_add_dtor(alist, freetype_unload_font, h);
 }

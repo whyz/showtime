@@ -33,11 +33,12 @@
 #include "misc/queue.h"
 #include "misc/layout.h"
 #include "misc/pool.h"
-#include "misc/pixmap.h" // for PIXMAP_ROW_ALIGN
+#include "image/pixmap.h" // for PIXMAP_ROW_ALIGN
 #include "prop/prop.h"
 #include "showtime.h"
 #include "settings.h"
 
+// #define GLW_TRACK_REFRESH
 
 // Beware: If you bump these over 16 remember to fix bitmasks too
 #define NUM_CLIPPLANES 6
@@ -52,6 +53,14 @@ LIST_HEAD(glw_prop_sub_list, glw_prop_sub);
 LIST_HEAD(glw_loadable_texture_list, glw_loadable_texture);
 TAILQ_HEAD(glw_loadable_texture_queue, glw_loadable_texture);
 LIST_HEAD(glw_video_list, glw_video);
+
+#ifndef likely
+#define likely(x)       __builtin_expect((x),1)
+#endif
+
+#ifndef unlikely
+#define unlikely(x)     __builtin_expect((x),0)
+#endif
 
 // ------------------- Backends -----------------
 
@@ -98,6 +107,16 @@ typedef float Vec2[2];
 #define GLW_SWAP(a, b) do { typeof(a) c = (b); (b) = (a); (a) = (c); } while(0)
 #define GLW_CLAMP(x, min, max) GLW_MIN(GLW_MAX((x), (min)), (max))
 
+// -- Flags for dynamic evaluation of view statements --
+
+#define GLW_VIEW_EVAL_LAYOUT     0x1
+#define GLW_VIEW_EVAL_ACTIVE     0x2
+#define GLW_VIEW_EVAL_FHP_CHANGE 0x4
+#define GLW_VIEW_EVAL_OTHER      0x8
+#define GLW_VIEW_EVAL_PROP       0x100
+#define GLW_VIEW_EVAL_KEEP       0x200
+
+// ----------------- Attributes ------------------------
 
 typedef enum {
   GLW_ATTRIB_END = 0,
@@ -114,10 +133,8 @@ typedef enum {
   GLW_ATTRIB_INT_STEP,
   GLW_ATTRIB_INT_MIN,
   GLW_ATTRIB_INT_MAX,
-  GLW_ATTRIB_PROPROOTS3,
   GLW_ATTRIB_TRANSITION_EFFECT,
   GLW_ATTRIB_EXPANSION,
-  GLW_ATTRIB_BIND_TO_ID,
   GLW_ATTRIB_CHILD_ASPECT,
   GLW_ATTRIB_CHILD_HEIGHT,
   GLW_ATTRIB_CHILD_WIDTH,
@@ -140,6 +157,23 @@ typedef enum {
   GLW_ATTRIB_AUDIO_VOLUME,
   GLW_ATTRIB_ASPECT,
   GLW_ATTRIB_CHILD_SCALE,
+  GLW_ATTRIB_PARENT_URL,
+  GLW_ATTRIB_ALPHA_SELF,
+  GLW_ATTRIB_SIZE_SCALE,
+  GLW_ATTRIB_DEFAULT_SIZE,
+  GLW_ATTRIB_MIN_SIZE,
+  GLW_ATTRIB_MAX_LINES,
+  GLW_ATTRIB_RGB,
+  GLW_ATTRIB_COLOR1,
+  GLW_ATTRIB_COLOR2,
+  GLW_ATTRIB_SCALING,
+  GLW_ATTRIB_TRANSLATION,
+  GLW_ATTRIB_ROTATION,
+  GLW_ATTRIB_CLIPPING,
+  GLW_ATTRIB_PLANE,
+  GLW_ATTRIB_MARGIN,
+  GLW_ATTRIB_BORDER,
+  GLW_ATTRIB_PADDING,
   GLW_ATTRIB_num,
 } glw_attribute_t;
 
@@ -206,9 +240,6 @@ typedef enum {
   GLW_POINTER_FOCUS_MOTION,
   GLW_POINTER_SCROLL,
   GLW_POINTER_GONE,
-  GLW_POINTER_TOUCH_PRESS,
-  GLW_POINTER_TOUCH_RELEASE,
-  GLW_POINTER_TOUCH_MOTION,
 } glw_pointer_event_type_t;
 
 typedef struct glw_pointer_event {
@@ -229,15 +260,10 @@ typedef enum {
   GLW_SIGNAL_DESTROY,
   GLW_SIGNAL_ACTIVE,
   GLW_SIGNAL_INACTIVE,
-  GLW_SIGNAL_LAYOUT,
 
   GLW_SIGNAL_CHILD_CREATED,
   GLW_SIGNAL_CHILD_DESTROYED,
   GLW_SIGNAL_CHILD_MOVED,
-
-  GLW_SIGNAL_EVENT_BUBBLE,
-
-  GLW_SIGNAL_EVENT,
 
   /**
    * Sent to widget when its focused child is changed.
@@ -245,11 +271,6 @@ typedef enum {
    */
   GLW_SIGNAL_FOCUS_CHILD_INTERACTIVE,
   GLW_SIGNAL_FOCUS_CHILD_AUTOMATIC,
-
-  /**
-   *
-   */
-  GLW_SIGNAL_POINTER_EVENT,
 
   /**
    *
@@ -310,6 +331,8 @@ typedef enum {
    *
    */
   GLW_SIGNAL_WRAP_CHECK,
+
+  GLW_SIGNAL_num,
 
 } glw_signal_t;
 
@@ -388,12 +411,37 @@ typedef struct glw_class {
   /**
    * Set attributes GLW_ATTRIB_... for the widget.
    */
-  void (*gc_set)(struct glw *w, va_list ap);
+  int (*gc_set_int)(struct glw *w, glw_attribute_t a, int value);
+
+  int (*gc_set_float)(struct glw *w, glw_attribute_t a, float value);
+
+  int (*gc_set_rstr)(struct glw *w, glw_attribute_t a, rstr_t *value);
+
+  int (*gc_set_prop)(struct glw *w, glw_attribute_t a, prop_t *p);
+
+  void (*gc_set_roots)(struct glw *w, prop_t *self, prop_t *parent,
+                       prop_t *clone);
+
+  int (*gc_bind_to_id)(struct glw *w, const char *id);
+
+  int (*gc_set_page_id)(struct glw *w, const char *id);
+
+  int (*gc_set_float3)(struct glw *w, glw_attribute_t a, const float *vector);
+
+  int (*gc_set_float4)(struct glw *w, glw_attribute_t a, const float *vector);
+
+  int (*gc_set_int16_4)(struct glw *w, glw_attribute_t a, const int16_t *v);
+
 
   /**
    * Ask widget to render itself in the current render context
    */
   void (*gc_render)(struct glw *w, const struct glw_rctx *rc);
+
+  /**
+   * Ask widget to layout itself in current render context
+   */
+  void (*gc_layout)(struct glw *w, const struct glw_rctx *rc);
 
   /**
    * Ask widget to retire the given child
@@ -420,6 +468,22 @@ typedef struct glw_class {
    *
    */
   void (*gc_suggest_focus)(struct glw *w, struct glw *c);
+
+  /**
+   *
+   */
+  int (*gc_send_event)(struct glw *w, struct event *e);
+
+  /**
+   *
+   */
+  int (*gc_bubble_event)(struct glw *w, struct event *e);
+
+  /**
+   *
+   */
+  int (*gc_pointer_event)(struct glw *w, const glw_pointer_event_t *gpe);
+
 
   /**
    * Send a GLW_SIGNAL_... to all listeners
@@ -459,8 +523,10 @@ typedef struct glw_class {
 
   /**
    * Select a child
+   *
+   * Return 1 if something was changed, otherwise return 0
    */
-  void (*gc_select_child)(struct glw *w, struct glw *c, struct prop *origin);
+  int (*gc_select_child)(struct glw *w, struct glw *c, struct prop *origin);
 
   /**
    * detachable widget control
@@ -476,62 +542,6 @@ typedef struct glw_class {
    *
    */
   void (*gc_get_rctx)(struct glw *w, struct glw_rctx *rc);
-
-  /**
-   *
-   */
-  void (*gc_set_rgb)(struct glw *w, const float *rgb);
-
-  /**
-   *
-   */
-  void (*gc_set_color1)(struct glw *w, const float *rgb);
-
-  /**
-   *
-   */
-  void (*gc_set_color2)(struct glw *w, const float *rgb);
-
-  /**
-   *
-   */
-  void (*gc_set_translation)(struct glw *w, const float *xyz);
-
-  /**
-   *
-   */
-  void (*gc_set_scaling)(struct glw *w, const float *xyz);
-
-  /**
-   *
-   */
-  void (*gc_set_border)(struct glw *w, const int16_t *v);
-
-
-  /**
-   *
-   */
-  void (*gc_set_padding)(struct glw *w, const int16_t *v);
-
-  /**
-   *
-   */
-  void (*gc_set_margin)(struct glw *w, const int16_t *v);
-
-  /**
-   *
-   */
-  void (*gc_set_clipping)(struct glw *w, const float *v);
-
-  /**
-   *
-   */
-  void (*gc_set_plane)(struct glw *w, const float *v);
-
-  /**
-   *
-   */
-  void (*gc_set_rotation)(struct glw *w, const float *v);
 
   /**
    *
@@ -611,37 +621,12 @@ typedef struct glw_class {
   /**
    *
    */
-  void (*gc_set_alpha_self)(struct glw *w, float a);
-
-  /**
-   *
-   */
   void (*gc_freeze)(struct glw *w);
 
   /**
    *
    */
   void (*gc_thaw)(struct glw *w);
-
-  /**
-   *
-   */
-  void (*gc_set_size_scale)(struct glw *w, const float v);
-
-  /**
-   *
-   */
-  void (*gc_set_default_size)(struct glw *w, int px);
-
-  /**
-   *
-   */
-  void (*gc_set_min_size)(struct glw *w, int px);
-
-  /**
-   *
-   */
-  void (*gc_set_max_lines)(struct glw *w, int lines);
 
   /**
    *
@@ -723,6 +708,9 @@ typedef struct glw_root {
 
   uint64_t gr_time_usec;
   float gr_time_sec;
+
+  int gr_need_refresh;
+  int64_t gr_scheduled_refresh;
 
   /**
    * Screensaver
@@ -891,6 +879,8 @@ typedef struct glw_root {
   int gr_externalize_cnt;
   struct glw *gr_externalized[GLW_MAX_EXTERNALIZED];
 
+  void *gr_private;
+
 } glw_root_t;
 
 
@@ -930,7 +920,6 @@ typedef struct glw_signal_handler {
   LIST_ENTRY(glw_signal_handler) gsh_link;
   glw_callback_t *gsh_func;
   void *gsh_opaque;
-  int16_t gsh_pri;
   int16_t gsh_defer_remove;
 } glw_signal_handler_t;
 
@@ -1057,9 +1046,11 @@ typedef struct glw {
 
   uint8_t glw_alignment;
 
-  char *glw_id;
+  uint8_t glw_dynamic_eval;   // GLW_VIEW_EVAL_ -flags
 
-  struct glw_event_map_list glw_event_maps;		  
+  rstr_t *glw_id_rstr;
+
+  struct glw_event_map_list glw_event_maps;
 
   struct glw_prop_sub_list glw_prop_subscriptions;
 
@@ -1189,13 +1180,7 @@ void glw_stencil_enable(glw_root_t *gr, const glw_rctx_t *rc,
 
 void glw_stencil_disable(glw_root_t *gr);
 
-
-static inline void
-glw_lp(float *v, const glw_root_t *gr, float t, float alpha)
-{
-  *v = *v + alpha * (t - *v);
-}
-
+void glw_lp(float *v, glw_root_t *gr, float t, float alpha);
 
 
 /**
@@ -1205,6 +1190,10 @@ glw_t *glw_view_create(glw_root_t *gr, rstr_t *url,
 		       glw_t *parent, struct prop *prop,
 		       struct prop *prop_parent, prop_t *args,
 		       struct prop *prop_clone, int cache, int nofail);
+
+void glw_view_eval_signal(glw_t *w, glw_signal_t sig);
+
+void glw_view_eval_layout(glw_t *w, const glw_rctx_t *rc, int mask);
 
 /**
  * Transitions
@@ -1220,65 +1209,6 @@ typedef enum {
 } glw_transition_type_t;
 
 
-/**
- *
- */
-#define GLW_ATTRIB_CHEW(attrib, ap)		\
-do {						\
-  switch((unsigned int)attrib) {		\
-  case GLW_ATTRIB_END:				\
-    break;					\
-  case GLW_ATTRIB_num ... UINT32_MAX:           \
-    abort();                                    \
-  case GLW_ATTRIB_PROPROOTS3:         		\
-    (void)va_arg(ap, void *);			\
-    (void)va_arg(ap, void *);			\
-  case GLW_ATTRIB_ARGS:				\
-  case GLW_ATTRIB_PROP_PARENT:			\
-  case GLW_ATTRIB_PROP_SELF:			\
-  case GLW_ATTRIB_PROP_MODEL:			\
-  case GLW_ATTRIB_PROP_ORIGIN:			\
-  case GLW_ATTRIB_BIND_TO_ID: 			\
-  case GLW_ATTRIB_PAGE_BY_ID:			\
-    (void)va_arg(ap, void *);			\
-    break;					\
-  case GLW_ATTRIB_MODE:                         \
-  case GLW_ATTRIB_TRANSITION_EFFECT:            \
-  case GLW_ATTRIB_CHILD_TILES_X:                \
-  case GLW_ATTRIB_CHILD_TILES_Y:                \
-  case GLW_ATTRIB_CHILD_HEIGHT:                 \
-  case GLW_ATTRIB_CHILD_WIDTH:                  \
-  case GLW_ATTRIB_PAGE:                         \
-  case GLW_ATTRIB_ALPHA_EDGES:                  \
-  case GLW_ATTRIB_PRIORITY:                     \
-  case GLW_ATTRIB_SPACING:                      \
-  case GLW_ATTRIB_X_SPACING:                    \
-  case GLW_ATTRIB_Y_SPACING:                    \
-  case GLW_ATTRIB_SCROLL_THRESHOLD:             \
-  case GLW_ATTRIB_RADIUS:			\
-    (void)va_arg(ap, int);			\
-    break;					\
-  case GLW_ATTRIB_ANGLE:			\
-  case GLW_ATTRIB_TIME:                         \
-  case GLW_ATTRIB_TRANSITION_TIME:              \
-  case GLW_ATTRIB_EXPANSION:                    \
-  case GLW_ATTRIB_VALUE:                        \
-  case GLW_ATTRIB_INT_STEP:                     \
-  case GLW_ATTRIB_INT_MIN:                      \
-  case GLW_ATTRIB_INT_MAX:                      \
-  case GLW_ATTRIB_CHILD_ASPECT:                 \
-  case GLW_ATTRIB_FILL:                         \
-  case GLW_ATTRIB_SATURATION:                   \
-  case GLW_ATTRIB_CENTER:                       \
-  case GLW_ATTRIB_ALPHA_FALLOFF:                \
-  case GLW_ATTRIB_BLUR_FALLOFF:                 \
-  case GLW_ATTRIB_AUDIO_VOLUME:                 \
-  case GLW_ATTRIB_ASPECT:                       \
-  case GLW_ATTRIB_CHILD_SCALE:                  \
-    (void)va_arg(ap, double);			\
-    break;					\
-  }						\
-} while(0)
 
 const char *glw_get_a_name(glw_t *w);
 
@@ -1296,8 +1226,6 @@ glw_t *glw_create(glw_root_t *gr, const glw_class_t *class,
 
 void glw_lock_check(const char *file, const int line);
 
-void glw_set(glw_t *w, ...) __attribute__((__sentinel__(0)));
-
 void glw_destroy(glw_t *w);
 
 void glw_suspend_subscriptions(glw_t *w);
@@ -1311,6 +1239,8 @@ glw_t *glw_get_prev_n(glw_t *c, int count);
 glw_t *glw_get_next_n(glw_t *c, int count);
 
 int glw_event(glw_root_t *gr, struct event *e);
+
+int glw_root_event_handler(glw_root_t *gr, event_t *e);
 
 int glw_event_to_widget(glw_t *w, struct event *e, int local);
 
@@ -1326,22 +1256,47 @@ int glw_navigate(glw_t *w, struct event *e, int local);
 
 glw_t *glw_find_neighbour(glw_t *w, const char *id);
 
-#define GLW_SIGNAL_PRI_INTERNAL 100
-
-void glw_signal_handler_register(glw_t *w, glw_callback_t *func, void *opaque, 
-				 int pri);
+void glw_signal_handler_register(glw_t *w, glw_callback_t *func, void *opaque);
 
 void glw_signal_handler_unregister(glw_t *w, glw_callback_t *func,
 				   void *opaque);
 
-#define glw_signal_handler_int(w, func) \
- glw_signal_handler_register(w, func, NULL, GLW_SIGNAL_PRI_INTERNAL)
+void glw_signal0(glw_t *w, glw_signal_t sig, void *extra);
 
-int glw_signal0(glw_t *w, glw_signal_t sig, void *extra);
+static inline int
+glw_send_event(glw_t *w, event_t *e)
+{
+  const glw_class_t *gc = w->glw_class;
+  return gc->gc_send_event != NULL && gc->gc_send_event(w, e);
+}
+
+static inline int
+glw_send_pointer_event(glw_t *w, const glw_pointer_event_t *gpe)
+{
+  const glw_class_t *gc = w->glw_class;
+  return gc->gc_pointer_event != NULL && gc->gc_pointer_event(w, gpe);
+}
+
+static inline int
+glw_bubble_event(glw_t *w, event_t *e)
+{
+  const glw_class_t *gc = w->glw_class;
+  return gc->gc_bubble_event != NULL && gc->gc_bubble_event(w, e);
+}
+
+int glw_event_distribute_to_childs(glw_t *w, event_t *e);
+
+int glw_event_to_selected_child(glw_t *w, event_t *e);
+
+
+
+
+
+
 
 #define glw_render0(w, rc) ((w)->glw_class->gc_render(w, rc))
 
-void glw_layout0(glw_t *w, glw_rctx_t *rc);
+void glw_layout0(glw_t *w, const glw_rctx_t *rc);
 
 void glw_rctx_init(glw_rctx_t *rc, int width, int height, int overscan);
 
@@ -1409,6 +1364,16 @@ void glw_hide(glw_t *w);
 
 void glw_unhide(glw_t *w);
 
+int glw_attrib_set_float3_clamped(float *dst, const float *src);
+
+int glw_attrib_set_float3(float *dst, const float *src);
+
+int glw_attrib_set_rgb(glw_rgb_t *rgb, const float *src);
+
+int glw_attrib_set_float4(float *dst, const float *src);
+
+int glw_attrib_set_int16_4(int16_t *dst, const int16_t *src);
+
 
 /**
  *
@@ -1443,4 +1408,39 @@ int glw_image_get_details(glw_t *w, char *path, size_t pathlen, float *alpha);
 
 void glw_project(glw_rect_t *r, const glw_rctx_t *rc, const glw_root_t *gr);
 
+#define GLW_REFRESH_FLAG_LAYOUT 0x1
+#define GLW_REFRESH_FLAG_RENDER 0x2
+
+#define GLW_REFRESH_LAYOUT_ONLY 2
+
+#ifdef GLW_TRACK_REFRESH
+
+#define glw_need_refresh(gr, how) \
+  glw_need_refresh0(gr, how, __FILE__, __LINE__)
+
+void glw_need_refresh0(glw_root_t *gr, int how, const char *file, int line);
+
+#else
+
+static inline void
+glw_need_refresh(glw_root_t *gr, int how)
+{
+  int flags = GLW_REFRESH_FLAG_LAYOUT;
+
+  if(how != GLW_REFRESH_LAYOUT_ONLY)
+    flags |= GLW_REFRESH_FLAG_RENDER;
+  gr->gr_need_refresh |= flags;
+}
+
+#endif
+
+static inline void
+glw_schedule_refresh(glw_root_t *gr, int64_t when)
+{
+  gr->gr_scheduled_refresh = MIN(gr->gr_scheduled_refresh, when);
+}
+
+
 #endif /* GLW_H */
+
+

@@ -28,11 +28,17 @@
 #include "video/video_decoder.h"
 #include "omx.h"
 #include "rpi_video.h"
+#include "rpi.h"
 
 static char omx_enable_mpg2;
 static char omx_enable_vp8;
 static char omx_enable_vp6;
 static char omx_enable_mjpeg;
+static char omx_enable_wvc1;
+static char omx_enable_h263;
+static char omx_enable_h264;
+static char omx_enable_theora;
+static char omx_enable_mpeg4;
 
 
 
@@ -45,6 +51,28 @@ rpi_video_port_settings_changed(omx_component_t *oc)
   media_codec_t *mc = oc->oc_opaque;
   const rpi_video_codec_t *rvc = mc->opaque;
   media_pipe_t *mp = mc->mp;
+  frame_info_t *fi = calloc(1, sizeof(frame_info_t));
+
+
+  int sar_num = 1;
+  int sar_den = 1;
+
+  if(rvc->rvc_sar_num && rvc->rvc_sar_den) {
+
+    sar_num = rvc->rvc_sar_num;
+    sar_den = rvc->rvc_sar_den;
+
+  } else {
+
+    OMX_CONFIG_POINTTYPE pixel_aspect;
+    OMX_INIT_STRUCTURE(pixel_aspect);
+    pixel_aspect.nPortIndex = 131;
+    if(OMX_GetParameter(oc->oc_handle, OMX_IndexParamBrcmPixelAspectRatio,
+			&pixel_aspect) == OMX_ErrorNone) {
+      sar_num = pixel_aspect.nX ?: sar_num;
+      sar_den = pixel_aspect.nY ?: sar_den;
+    }
+  }
 
   OMX_PARAM_PORTDEFINITIONTYPE port_image;
   OMX_INIT_STRUCTURE(port_image);
@@ -59,12 +87,22 @@ rpi_video_port_settings_changed(omx_component_t *oc)
 	     port_image.format.video.nFrameHeight);
     prop_set_string(mp->mp_video.mq_prop_codec, codec_info);
     TRACE(TRACE_DEBUG, "VideoCore",
-	  "Video decoder output port settings changed to %s", codec_info);
+	  "Video decoder output port settings changed to %s (SAR: %d:%d)",
+	  codec_info, sar_num, sar_den);
+
+    fi->fi_width   = port_image.format.video.nFrameWidth;
+    fi->fi_height  = port_image.format.video.nFrameHeight;
   }
+  fi->fi_dar_num = sar_num * fi->fi_width;
+  fi->fi_dar_den = sar_den * fi->fi_height;
+
 
   hts_mutex_lock(&mp->mp_mutex);
   media_buf_t *mb = media_buf_alloc_locked(mp, 0);
   mb->mb_data_type = MB_CTRL_RECONFIGURE;
+  mb->mb_frame_info = fi;
+  mb->mb_dtor = media_buf_dtor_frame_info;
+
   mb->mb_cw = media_codec_ref(mc);
   mb_enq(mp, &mp->mp_video, mb);
   hts_mutex_unlock(&mp->mp_mutex);
@@ -82,7 +120,11 @@ rpi_codec_decode(struct media_codec *mc, struct video_decoder *vd,
   const void *data = mb->mb_data;
   size_t len       = mb->mb_size;
 
-  if(mc->codec_id == CODEC_ID_MPEG4) {
+  int is_bframe = 0;
+
+  switch(mc->codec_id) {
+
+  case AV_CODEC_ID_MPEG4:
 
     if(mb->mb_size <= 7)
       return;
@@ -93,19 +135,23 @@ rpi_codec_decode(struct media_codec *mc, struct video_decoder *vd,
       frame_type = d[4] >> 6;
 
     if(frame_type == 2)
-      rvc->rvc_b_frames = 100;
+      is_bframe = 1;
+    break;
 
-    if(rvc->rvc_b_frames)
-      rvc->rvc_b_frames--;
-
-    if(mb->mb_pts == PTS_UNSET && mb->mb_dts != PTS_UNSET &&
-       (!rvc->rvc_b_frames || frame_type == 2)) // 2 == B frame
-      mb->mb_pts = mb->mb_dts;
+  case AV_CODEC_ID_H264:
+    h264_parser_decode_data(&rvc->rvc_h264_parser, mb->mb_data, mb->mb_size);
+    if(rvc->rvc_h264_parser.slice_type_nos == SLICE_TYPE_B)
+      is_bframe = 1;
+    break;
   }
 
   media_buf_meta_t *mbm = &vd->vd_reorder[vd->vd_reorder_ptr];
-  *mbm = mb->mb_meta;
+  copy_mbm_from_mb(mbm, mb);
+  mbm->mbm_pts = video_decoder_infer_pts(mbm, vd, is_bframe);
+
   vd->vd_reorder_ptr = (vd->vd_reorder_ptr + 1) & VIDEO_DECODER_REORDER_MASK;
+
+  int domark = 1;
 
   while(len > 0) {
     OMX_BUFFERHEADERTYPE *buf = omx_get_buffer(rvc->rvc_decoder);
@@ -116,15 +162,15 @@ rpi_codec_decode(struct media_codec *mc, struct video_decoder *vd,
     memcpy(buf->pBuffer, data, buf->nFilledLen);
     buf->nFlags = 0;
 
-    if(vd->vd_render_component) {
+    if(vd->vd_render_component && domark) {
       buf->hMarkTargetComponent = vd->vd_render_component;
       buf->pMarkData = mbm;
-      mbm = NULL;
+      domark = 0;
     }
 
-    if(rvc->rvc_last_epoch != mb->mb_epoch) {
-      buf->nFlags |= OMX_BUFFERFLAG_DISCONTINUITY;
-      rvc->rvc_last_epoch = mb->mb_epoch;
+    if(rvc->rvc_last_epoch != mbm->mbm_epoch) {
+      buf->nFlags |= OMX_BUFFERFLAG_STARTTIME | OMX_BUFFERFLAG_DISCONTINUITY;
+      rvc->rvc_last_epoch = mbm->mbm_epoch;
     }
 
     if(len <= buf->nAllocLen)
@@ -133,14 +179,14 @@ rpi_codec_decode(struct media_codec *mc, struct video_decoder *vd,
     data += buf->nFilledLen;
     len  -= buf->nFilledLen;
 
-    if(mb->mb_pts != PTS_UNSET)
-      buf->nTimeStamp = omx_ticks_from_s64(mb->mb_pts);
+    if(mbm->mbm_pts != PTS_UNSET)
+      buf->nTimeStamp = omx_ticks_from_s64(mbm->mbm_pts);
     else {
       buf->nFlags |= OMX_BUFFERFLAG_TIME_UNKNOWN;
       buf->nTimeStamp = omx_ticks_from_s64(0);
     }
 
-    if(mb->mb_skip)
+    if(mbm->mbm_skip)
       buf->nFlags |= OMX_BUFFERFLAG_DECODEONLY;
 
     omxchk(OMX_EmptyThisBuffer(rvc->rvc_decoder->oc_handle, buf));
@@ -180,6 +226,8 @@ rpi_codec_close(struct media_codec *mc)
 
   omx_component_destroy(rvc->rvc_decoder);
   hts_cond_destroy(&rvc->rvc_avail_cond);
+
+  h264_parser_fini(&rvc->rvc_h264_parser);
   free(rvc);
 }
 
@@ -188,10 +236,10 @@ rpi_codec_close(struct media_codec *mc)
  *
  */
 static void
-rpi_codec_reconfigure(struct media_codec *mc)
+rpi_codec_reconfigure(struct media_codec *mc, const frame_info_t *fi)
 {
   media_pipe_t *mp = mc->mp;
-  mp->mp_set_video_codec('omx', mc, mp->mp_video_frame_opaque);
+  mp->mp_set_video_codec('omx', mc, mp->mp_video_frame_opaque, fi);
 }
 
 
@@ -207,60 +255,76 @@ rpi_codec_create(media_codec_t *mc, const media_codec_params_t *mcp,
 
   switch(mc->codec_id) {
 
-  case CODEC_ID_H263:
+  case AV_CODEC_ID_H263:
+    if(!omx_enable_h263)
+      return 1;
     fmt = OMX_VIDEO_CodingH263;
     name = "h263";
     break;
 
-  case CODEC_ID_MPEG4:
+  case AV_CODEC_ID_MPEG4:
+    if(!omx_enable_mpeg4)
+      return 1;
     fmt = OMX_VIDEO_CodingMPEG4;
     name = "MPEG-4";
     break;
 
-  case CODEC_ID_H264:
+  case AV_CODEC_ID_H264:
+    if(!omx_enable_h264)
+      return 1;
     fmt = OMX_VIDEO_CodingAVC;
     name = "h264";
     break;
 
-  case CODEC_ID_MPEG2VIDEO:
+  case AV_CODEC_ID_MPEG2VIDEO:
     if(!omx_enable_mpg2)
       return 1;
     fmt = OMX_VIDEO_CodingMPEG2;
     name = "MPEG2";
     break;
 
-  case CODEC_ID_VP8:
+  case AV_CODEC_ID_VP8:
     if(!omx_enable_vp8)
       return 1;
     fmt = OMX_VIDEO_CodingVP8;
     name = "VP8";
     break;
 
-  case CODEC_ID_VP6F:
-  case CODEC_ID_VP6A:
+  case AV_CODEC_ID_VP6F:
+  case AV_CODEC_ID_VP6A:
     if(!omx_enable_vp6)
       return 1;
     fmt = OMX_VIDEO_CodingVP6;
     name = "VP6";
     break;
 
-  case CODEC_ID_MJPEG:
-  case CODEC_ID_MJPEGB:
+  case AV_CODEC_ID_MJPEG:
+  case AV_CODEC_ID_MJPEGB:
     if(!omx_enable_mjpeg)
       return 1;
     fmt = OMX_VIDEO_CodingMJPEG;
     name = "MJPEG";
     break;
 
-#if 0
-  case CODEC_ID_VC1:
-  case CODEC_ID_WMV3:
-    if(mcp->extradata_size == 0)
+  case AV_CODEC_ID_VC1:
+  case AV_CODEC_ID_WMV3:
+    if(!omx_enable_wvc1)
       return 1;
 
-    mc->decode = vc1_pt_decode;
-    return 0;
-#endif
+    if(mcp == NULL || mcp->extradata_size == 0)
+      return 1;
+
+    fmt = OMX_VIDEO_CodingWMV;
+    name = "VC1";
+    break;
+
+  case AV_CODEC_ID_THEORA:
+    if(!omx_enable_theora)
+      return 1;
+
+    fmt = OMX_VIDEO_CodingTheora;
+    name = "Theora";
+    break;
 
   default:
     return 1;
@@ -280,6 +344,11 @@ rpi_codec_create(media_codec_t *mc, const media_codec_params_t *mcp,
     return 1;
   }
 
+  if(mcp != NULL) {
+    rvc->rvc_sar_num = mcp->sar_num;
+    rvc->rvc_sar_den = mcp->sar_den;
+  }
+
   rvc->rvc_decoder = d;
   d->oc_port_settings_changed_cb = rpi_video_port_settings_changed;
   d->oc_opaque = mc;
@@ -290,8 +359,40 @@ rpi_codec_create(media_codec_t *mc, const media_codec_params_t *mcp,
   OMX_INIT_STRUCTURE(format);
   format.nPortIndex = 130; 
   format.eCompressionFormat = fmt;
+
+  format.xFramerate = 25 * (1<<16);
+  if(mcp != NULL && mcp->frame_rate_num && mcp->frame_rate_den)
+    format.xFramerate =(65536ULL * mcp->frame_rate_num) / mcp->frame_rate_den;
+
+  TRACE(TRACE_DEBUG, "OMX", "Frame rate set to %2.3f",
+	format.xFramerate / 65536.0f);
+
   omxchk(OMX_SetParameter(d->oc_handle,
 			  OMX_IndexParamVideoPortFormat, &format));
+
+
+  OMX_PARAM_PORTDEFINITIONTYPE portParam;
+  OMX_INIT_STRUCTURE(portParam);
+  portParam.nPortIndex = 130;
+
+  if(OMX_GetParameter(d->oc_handle, OMX_IndexParamPortDefinition,
+		      &portParam) == OMX_ErrorNone) {
+
+    if(mcp != NULL) {
+      portParam.format.video.nFrameWidth  = mcp->width;
+      portParam.format.video.nFrameHeight = mcp->height;
+    }
+
+    OMX_SetParameter(d->oc_handle, OMX_IndexParamPortDefinition, &portParam);
+  }
+
+
+  OMX_CONFIG_REQUESTCALLBACKTYPE notification;
+  OMX_INIT_STRUCTURE(notification);
+  notification.nPortIndex = 131;
+  notification.nIndex = OMX_IndexParamBrcmPixelAspectRatio;
+  notification.bEnable = OMX_TRUE;
+  OMX_SetParameter(d->oc_handle, OMX_IndexParamPortDefinition, &notification);
 
   OMX_PARAM_BRCMVIDEODECODEERRORCONCEALMENTTYPE ec;
   OMX_INIT_STRUCTURE(ec);
@@ -321,6 +422,13 @@ rpi_codec_create(media_codec_t *mc, const media_codec_params_t *mcp,
     omxchk(OMX_EmptyThisBuffer(rvc->rvc_decoder->oc_handle, buf));
   }
 
+  if(mc->codec_id == AV_CODEC_ID_H264) {
+    h264_parser_init(&rvc->rvc_h264_parser,
+		     mcp ? mcp->extradata : NULL,
+		     mcp ? mcp->extradata_size : 0);
+  }
+
+
   omx_enable_buffer_marks(d);
 
   mc->opaque = rvc;
@@ -339,24 +447,15 @@ rpi_codec_create(media_codec_t *mc, const media_codec_params_t *mcp,
 static void
 rpi_codec_init(void)
 {
-  char buf[64];
-  vc_gencmd(buf, sizeof(buf), "codec_enabled MPG2");
-  TRACE(TRACE_INFO, "VideoCore", "%s", buf);
-  omx_enable_mpg2 = !strcmp(buf, "MPG2=enabled");
-
-  vc_gencmd(buf, sizeof(buf), "codec_enabled VP8");
-  TRACE(TRACE_INFO, "VideoCore", "%s", buf);
-  omx_enable_vp8 = !strcmp(buf, "VP8=enabled");
-
-  vc_gencmd(buf, sizeof(buf), "codec_enabled VP6");
-  TRACE(TRACE_INFO, "VideoCore", "%s", buf);
-  omx_enable_vp6 = !strcmp(buf, "VP6=enabled");
-
-  vc_gencmd(buf, sizeof(buf), "codec_enabled MJPG");
-  TRACE(TRACE_INFO, "VideoCore", "%s", buf);
-  omx_enable_mjpeg = !strcmp(buf, "MJPG=enabled");
-
-
+  omx_enable_mpg2   = rpi_is_codec_enabled("MPG2");
+  omx_enable_vp6    = rpi_is_codec_enabled("VP6");
+  omx_enable_vp8    = rpi_is_codec_enabled("VP8");
+  omx_enable_mjpeg  = rpi_is_codec_enabled("MJPG");
+  omx_enable_wvc1   = rpi_is_codec_enabled("WVC1");
+  omx_enable_h263   = rpi_is_codec_enabled("H263");
+  omx_enable_h264   = rpi_is_codec_enabled("H264");
+  omx_enable_theora = rpi_is_codec_enabled("THRA");
+  omx_enable_mpeg4  = rpi_is_codec_enabled("MPG4");
 }
 
 

@@ -37,6 +37,7 @@
 #include "fileaccess.h"
 #include "fa_libav.h"
 #include "notifications.h"
+#include "metadata/playinfo.h"
 
 #if ENABLE_LIBGME
 #include <gme/gme.h>
@@ -175,15 +176,15 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
   }
 #endif
 
-  AVIOContext *avio = fa_libav_reopen(fh);
+  AVIOContext *avio = fa_libav_reopen(fh, 0);
 
   if(avio == NULL) {
     fa_close(fh);
     return NULL;
   }
 
-  if((fctx = fa_libav_open_format(avio, url, 
-				  errbuf, errlen, mimetype)) == NULL) {
+  if((fctx = fa_libav_open_format(avio, url, errbuf, errlen, mimetype,
+                                  0, -1, -1)) == NULL) {
     fa_libav_close(avio);
     return NULL;
   }
@@ -191,7 +192,7 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
   TRACE(TRACE_DEBUG, "Audio", "Starting playback of %s", url);
 
   mp_configure(mp, MP_PLAY_CAPS_SEEK | MP_PLAY_CAPS_PAUSE,
-	       MP_BUFFER_SHALLOW, fctx->duration);
+	       MP_BUFFER_SHALLOW, fctx->duration, "tracks");
 
   mp->mp_audio.mq_stream = -1;
   mp->mp_video.mq_stream = -1;
@@ -264,9 +265,7 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
 	continue;
       }
 
-
-
-      mb = media_buf_alloc_unlocked(mp, pkt.size);
+      mb = media_buf_from_avpkt_unlocked(mp, &pkt);
       mb->mb_data_type = MB_AUDIO;
 
       mb->mb_pts      = rescale(fctx, pkt.pts,      si);
@@ -274,12 +273,7 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
       mb->mb_duration = rescale(fctx, pkt.duration, si);
 
       mb->mb_cw = media_codec_ref(cw);
-
-      /* Move the data pointers from ffmpeg's packet */
-
       mb->mb_stream = pkt.stream_index;
-
-      memcpy(mb->mb_data, pkt.data, pkt.size);
 
       if(mb->mb_pts != AV_NOPTS_VALUE) {
         if(fctx->start_time != AV_NOPTS_VALUE)
@@ -320,9 +314,9 @@ be_file_playaudio(const char *url, media_pipe_t *mp,
       ets = (event_ts_t *)e;
 
       if(registered_play == 0) {
-	if(ets->ts > METADB_AUDIO_PLAY_THRESHOLD) {
+	if(ets->ts > PLAYINFO_AUDIO_PLAY_THRESHOLD) {
 	  registered_play = 1;
-	  metadb_register_play(url, 1, CONTENT_AUDIO);
+	  playinfo_register_play(url, 1);
 	}
       }
 

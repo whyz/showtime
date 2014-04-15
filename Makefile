@@ -78,7 +78,11 @@ SRCS += src/showtime.c \
 	src/prop/prop_concat.c \
 	src/prop/prop_reorder.c \
 	src/metadata/metadata.c \
+	src/metadata/metadata_str.c \
+	src/metadata/metadata_sources.c \
+	src/metadata/mlp.c \
 	src/metadata/metadb.c \
+	src/metadata/playinfo.c \
 	src/metadata/decoration.c \
 	src/metadata/browsemdb.c \
 
@@ -92,15 +96,22 @@ BUNDLES += resources/kvstore
 SRCS-$(CONFIG_WEBPOPUP) += src/ui/webpopup.c
 
 ##############################################################
+# Images
+##############################################################
+SRCS +=	src/image/image.c \
+	src/image/pixmap.c \
+	src/image/svg.c \
+	src/image/rasterizer_ft.c \
+	src/image/jpeg.c \
+	src/image/vector.c \
+	src/image/image_decoder_libav.c \
+
+##############################################################
 # Misc support
 ##############################################################
 SRCS +=	src/misc/ptrvec.c \
 	src/misc/callout.c \
 	src/misc/rstr.c \
-	src/misc/pixmap.c \
-	src/misc/svg.c \
-	src/misc/rasterizer_ft.c \
-	src/misc/jpeg.c \
 	src/misc/gz.c \
 	src/misc/str.c \
 	src/misc/time.c \
@@ -114,6 +125,8 @@ SRCS +=	src/misc/ptrvec.c \
 	src/misc/pool.c \
 	src/misc/buf.c \
 	src/misc/charset_detector.c \
+	src/misc/big5.c \
+	src/misc/cancellable.c \
 
 SRCS-${CONFIG_TREX} += ext/trex/trex.c
 
@@ -291,6 +304,8 @@ SRCS += src/text/fontstash.c
 ##############################################################
 SRCS-$(CONFIG_LIBAV) += src/audio2/audio.c
 
+SRCS-$(CONFIG_AUDIOTEST) += src/audio2/audio_test.c
+
 ##############################################################
 # DVD
 ##############################################################
@@ -308,6 +323,11 @@ SRCS  += src/backend/htsp/htsp.c \
 # TV
 ##############################################################
 SRCS  += src/backend/hls/hls.c \
+
+##############################################################
+# Icecast
+##############################################################
+SRCS  += src/backend/icecast/icecast.c \
 
 ##############################################################
 # Spotify

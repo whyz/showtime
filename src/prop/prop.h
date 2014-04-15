@@ -32,7 +32,9 @@
 
 #if ENABLE_BUGHUNT
 #define PROP_DEBUG
+#define PROP_SUB_RECORD_SOURCE
 #endif
+
 
 typedef struct prop_courier prop_courier_t;
 typedef struct prop prop_t;
@@ -166,14 +168,30 @@ enum {
   PROP_TAG_MUTEX,
   PROP_TAG_EXTERNAL_LOCK,
   PROP_TAG_NAMESTR,
+#ifdef PROP_SUB_RECORD_SOURCE
+  PROP_TAG_SOURCE,
+#endif
 };
 
 #define PROP_TAG_NAME(name...) \
  PROP_TAG_NAME_VECTOR, (const char *[]){name, NULL}
 
+#ifdef PROP_SUB_RECORD_SOURCE
+
+prop_sub_t *prop_subscribe_ex(const char *file, int line, int flags,
+                              ...) __attribute__((__sentinel__(0)));
+
+#define prop_subscribe(flags...) prop_subscribe_ex(__FILE__, __LINE__, flags)
+
+#else
+
 prop_sub_t *prop_subscribe(int flags, ...) __attribute__((__sentinel__(0)));
 
+#endif
+
 void prop_unsubscribe(prop_sub_t *s);
+
+void prop_sub_reemit(prop_sub_t *s);
 
 prop_t *prop_create_ex(prop_t *parent, const char *name,
 		       prop_sub_t *skipme, int noalloc, int incref)
@@ -278,7 +296,13 @@ void prop_set_link_ex(prop_t *p, prop_sub_t *skipme, const char *title,
 
 #define prop_set_cstring(p, cstr) prop_set_cstring_ex(p, NULL, cstr)
 
+void prop_copy_ex(prop_t *dst, prop_sub_t *skipme, prop_t *src);
+
+#define prop_copy(dst, src) prop_copy_ex(dst, NULL, src)
+
 rstr_t *prop_get_string(prop_t *p, ...) __attribute__((__sentinel__(0)));
+
+int prop_get_int(prop_t *p, ...) __attribute__((__sentinel__(0)));
 
 char **prop_get_name_of_childs(prop_t *p);
 
@@ -329,9 +353,10 @@ void prop_unparent_childs(prop_t *p);
 #define PROP_LINK_XREFED 1
 #define PROP_LINK_XREFED_IF_ORPHANED 2
 
-void prop_link_ex(prop_t *src, prop_t *dst, prop_sub_t *skipme, int how);
+void prop_link_ex(prop_t *src, prop_t *dst, prop_sub_t *skipme, int how,
+                  int debug);
 
-#define prop_link(src, dst) prop_link_ex(src, dst, NULL, PROP_LINK_NORMAL)
+#define prop_link(src, dst) prop_link_ex(src, dst, NULL, PROP_LINK_NORMAL, 0)
 
 void prop_unlink_ex(prop_t *p, prop_sub_t *skipme);
 
@@ -364,8 +389,11 @@ void prop_request_delete(prop_t *p);
 
 void prop_request_delete_multi(prop_vec_t *pv);
 
+#define PROP_COURIER_TRACE_TIMES 0x1
+
 prop_courier_t *prop_courier_create_thread(hts_mutex_t *entrymutex,
-					   const char *name);
+					   const char *name,
+                                           int flags);
 
 prop_courier_t *prop_courier_create_passive(void);
 
@@ -382,8 +410,6 @@ prop_courier_t *prop_courier_create_lockmgr(const char *name,
 int prop_courier_wait(prop_courier_t *pc, struct prop_notify_queue *q,
 		      int timeout);
 
-void prop_courier_wakeup(prop_courier_t *pc);
-
 void prop_courier_wait_and_dispatch(prop_courier_t *pc);
 
 void prop_courier_poll(prop_courier_t *pc);
@@ -396,7 +422,7 @@ int prop_courier_check(prop_courier_t *pc);
 
 void prop_courier_destroy(prop_courier_t *pc);
 
-void prop_notify_dispatch(struct prop_notify_queue *q);
+void prop_notify_dispatch(struct prop_notify_queue *q, const char *tracename);
 
 void prop_courier_stop(prop_courier_t *pc);
 

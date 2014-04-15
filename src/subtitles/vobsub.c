@@ -96,7 +96,11 @@ vobsub_probe(const char *url, const char *filename,
     return;
   }
 
-  b = fa_load(url, NULL, errbuf, sizeof(errbuf), DISABLE_CACHE, 0, NULL, NULL);
+  b = fa_load(url,
+               FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+               FA_LOAD_CACHE_CONTROL(DISABLE_CACHE),
+               NULL);
+
   if(b == NULL) {
     TRACE(TRACE_ERROR, "VOBSUB", "Unable to load %s -- %s", url, errbuf);
     return;
@@ -294,7 +298,7 @@ demux_pes(const vobsub_t *vs, media_pipe_t *mp,
       mb->mb_data_type = MB_CTRL_DVD_SPU2;
       mb->mb_dts = dts;
       mb->mb_pts = pts;
-      uint32_t *d = mb->mb_data;
+      uint32_t *d = (uint32_t *)mb->mb_data;
       d[16] = vs->vs_width;
       d[17] = vs->vs_height;
       memcpy(mb->mb_data, vs->vs_clut, 16 * 4);
@@ -558,13 +562,15 @@ vobsub_load(const char *json, char *errbuf, size_t errlen,
 
   buf_t *b;
 
-  if((b = fa_load(idxfile, NULL, errbuf, errlen,
-                  DISABLE_CACHE, 0, NULL, NULL)) == NULL)
+  if((b = fa_load(idxfile,
+                   FA_LOAD_ERRBUF(errbuf, errlen),
+                   FA_LOAD_CACHE_CONTROL(DISABLE_CACHE),
+                   NULL)) == NULL)
     return NULL;
 
   vobsub_t *vs = calloc(1, sizeof(vobsub_t));
 
-  vs->vs_parser = av_parser_init(CODEC_ID_DVD_SUBTITLE);
+  vs->vs_parser = av_parser_init(AV_CODEC_ID_DVD_SUBTITLE);
   vs->vs_ctx = avcodec_alloc_context3(NULL);
 
   if((vs->vs_sub = fa_open(subfile, errbuf, errlen)) == NULL) {

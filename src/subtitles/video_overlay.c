@@ -22,7 +22,7 @@
 #include "showtime.h"
 #include "media.h"
 #include "text/text.h"
-#include "misc/pixmap.h"
+#include "image/pixmap.h"
 #include "misc/str.h"
 #include "video_overlay.h"
 #include "dvdspu.h"
@@ -93,7 +93,7 @@ video_subtitles_lavc(media_pipe_t *mp, media_buf_t *mb,
 	const uint32_t *clut = (uint32_t *)r->pict.data[1];
       
 	for(y = 0; y < r->h; y++) {
-	  uint32_t *dst = (uint32_t *)(vo->vo_pixmap->pm_pixels + 
+	  uint32_t *dst = (uint32_t *)(vo->vo_pixmap->pm_data +
 				       y * vo->vo_pixmap->pm_linesize);
 	  for(x = 0; x < r->w; x++)
 	    *dst++ = clut[src[x]];
@@ -151,10 +151,7 @@ video_overlay_render_cleartext(const char *txt, int64_t start, int64_t stop,
       pfx[pfxlen++] = TR_CODE_FONT_FAMILY |
 	freetype_family_id(font_subs, fontdomain);
 
-    uc = text_parse(txt, &len, 
-		    tags ? (TEXT_PARSE_TAGS | TEXT_PARSE_HTML_ENTETIES | 
-			    TEXT_PARSE_SLOPPY_TAGS) : 0,
-		    pfx, pfxlen, fontdomain);
+    uc = text_parse(txt, &len, tags, pfx, pfxlen, fontdomain);
     if(uc == NULL)
       return NULL;
 
@@ -199,7 +196,7 @@ video_overlay_decode(media_pipe_t *mp, media_buf_t *mb)
     int offset = 0;
     char *str;
 
-    if(mb->mb_codecid == CODEC_ID_MOV_TEXT) {
+    if(mb->mb_codecid == AV_CODEC_ID_MOV_TEXT) {
       if(mb->mb_size < 2)
 	return;
       offset = 2;
@@ -213,7 +210,10 @@ video_overlay_decode(media_pipe_t *mp, media_buf_t *mb)
     vo = video_overlay_render_cleartext(str, mb->mb_pts,
 					mb->mb_duration ?
 					mb->mb_pts + mb->mb_duration :
-					PTS_UNSET, 1,
+					PTS_UNSET,
+                                        TEXT_PARSE_HTML_TAGS |
+                                        TEXT_PARSE_HTML_ENTITIES |
+                                        TEXT_PARSE_SLOPPY_TAGS,
 					mb->mb_font_context);
 
     if(vo != NULL)

@@ -26,7 +26,7 @@
 
 #include "networking/http_server.h"
 #include "event.h"
-#include "misc/pixmap.h"
+#include "image/image.h"
 #include "misc/str.h"
 #include "backend/backend.h"
 #include "notifications.h"
@@ -54,7 +54,7 @@ hc_open(http_connection_t *hc, const char *remain, void *opaque,
   const char *url = http_arg_get_req(hc, "url");
 
   if(url != NULL) {
-    event_dispatch(event_create_openurl(url, NULL, NULL, NULL, NULL));
+    event_dispatch(event_create_openurl(url, NULL, NULL, NULL, NULL, NULL));
     return http_redirect(hc, "/showtime/open");
   }
 
@@ -78,7 +78,7 @@ diag_html(http_connection_t *hc, htsbuf_queue_t *out)
 
   for(i = 0; i <= 5; i++) {
     struct stat st;
-    snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", gconf.cache_path,i);
+    snprintf(p1, sizeof(p1), "%s/log/showtime-%d.log", gconf.cache_path,i);
     if(stat(p1, &st)) 
       continue;
     char timestr[32];
@@ -107,7 +107,7 @@ hc_root_old(http_connection_t *hc)
   const char *url = http_arg_get_req(hc, "url");
 
   if(url != NULL) {
-    event_dispatch(event_create_openurl(url, NULL, NULL, NULL, NULL));
+    event_dispatch(event_create_openurl(url, NULL, NULL, NULL, NULL, NULL));
     return http_redirect(hc, "/");
   }
 
@@ -129,6 +129,8 @@ hc_root_old(http_connection_t *hc)
   htsbuf_qprintf(&out, "<h3>Diagnostics</h3>"); 
 
   diag_html(hc, &out);
+
+  htsbuf_qprintf(&out, "<p><a href=\"/showtime/translation\">Upload and test new translation (.lang) file</a></p>");
 
   htsbuf_qprintf(&out, "</body></html>");
 		 
@@ -153,7 +155,7 @@ hc_image(http_connection_t *hc, const char *remain, void *opaque,
 	http_cmd_t method)
 {
   htsbuf_queue_t out;
-  pixmap_t *pm;
+  image_t *img;
   char errbuf[200];
   const char *content;
   image_meta_t im = {0};
@@ -171,31 +173,33 @@ hc_image(http_connection_t *hc, const char *remain, void *opaque,
     url = rstr_alloc(remain);
   }
 
-  pm = backend_imageloader(url, &im, NULL, errbuf, sizeof(errbuf), NULL,
-			   NULL, NULL);
+  img = backend_imageloader(url, &im, NULL, errbuf, sizeof(errbuf), NULL,
+                            NULL);
   rstr_release(url);
-  if(pm == NULL)
+  if(img == NULL)
     return http_error(hc, 404, "Unable to load image %s : %s",
 		      remain, errbuf);
-  
-  if(!pixmap_is_coded(pm)) {
-    pixmap_release(pm);
-    return http_error(hc, 404, 
+
+  const image_component_t *ic = image_find_component(img, IMAGE_CODED);
+  if(ic == NULL) {
+    image_release(img);
+    return http_error(hc, 404,
 		      "Unable to load image %s : Original data not available",
 		      remain);
   }
+  const image_component_coded_t *icc = &ic->coded;
 
   htsbuf_queue_init(&out, 0);
-  htsbuf_append(&out, pm->pm_data, pm->pm_size);
+  htsbuf_append(&out, buf_cstr(icc->icc_buf), buf_len(icc->icc_buf));
 
-  switch(pm->pm_type) {
-  case PIXMAP_JPEG:
+  switch(icc->icc_type) {
+  case IMAGE_JPEG:
     content = "image/jpeg";
     break;
-  case PIXMAP_PNG:
+  case IMAGE_PNG:
     content = "image/png";
     break;
-  case PIXMAP_GIF:
+  case IMAGE_GIF:
     content = "image/gif";
     break;
   default:
@@ -203,7 +207,7 @@ hc_image(http_connection_t *hc, const char *remain, void *opaque,
     break;
   }
 
-  pixmap_release(pm);
+  image_release(img);
 
   return http_send_reply(hc, 0, content, NULL, NULL, 0, &out);
 }
@@ -440,8 +444,8 @@ hc_logfile(http_connection_t *hc, const char *remain, void *opaque,
   const char *mode = http_arg_get_req(hc, "mode");
 
   char p1[500];
-  snprintf(p1, sizeof(p1), "%s/log/showtime.log.%d", gconf.cache_path, n);
-  buf_t *buf = fa_load(p1, NULL, NULL, 0, NULL, 0, NULL, NULL);
+  snprintf(p1, sizeof(p1), "%s/log/showtime-%d.log", gconf.cache_path, n);
+  buf_t *buf = fa_load(p1, NULL);
 
   if(buf == NULL)
     return 404;
@@ -649,7 +653,7 @@ hc_serve_file(http_connection_t *hc, const char *file, const char *contenttype)
     }
   }
 
-  buf_t *b = fa_load(file, NULL, NULL, 0, NULL, 0, NULL, NULL);
+  buf_t *b = fa_load(file, NULL);
   if(b == NULL)
     return 404;
 

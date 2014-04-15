@@ -25,10 +25,12 @@
 #include "showtime.h"
 #include "audio.h"
 #include "media.h"
+#include "notifications.h"
 
 static pa_threaded_mainloop *mainloop;
 static pa_mainloop_api *api;
 static pa_context *ctx;
+static prop_t *user_errmsg;
 
 typedef struct decoder {
   audio_decoder_t ad;
@@ -106,13 +108,35 @@ static const struct {
 /**
  *
  */
+static void
+pulseaudio_error(const char *str)
+{
+  if(user_errmsg == NULL) {
+    user_errmsg =
+      notify_add(NULL, NOTIFY_ERROR, NULL, 0,
+		 _("Unable to initialize audio system %s -- %s"),
+		 "Pulseaudio", str);
+  }
+}
+
+/**
+ *
+ */
 static int
 pulseaudio_make_context_ready(void)
 {
   while(1) {
     switch(pa_context_get_state(ctx)) {
     case PA_CONTEXT_UNCONNECTED:
-      // do reconnect?
+      /* Connect the context */
+      if(pa_context_connect(ctx, NULL, 0, NULL) < 0) {
+	pulseaudio_error(pa_strerror(pa_context_errno(ctx)));
+	pa_threaded_mainloop_unlock(mainloop);
+	return -1;
+      }
+      pa_threaded_mainloop_wait(mainloop);
+      continue;
+      
     case PA_CONTEXT_CONNECTING:
     case PA_CONTEXT_AUTHORIZING:
     case PA_CONTEXT_SETTING_NAME:
@@ -128,6 +152,11 @@ pulseaudio_make_context_ready(void)
     }
     break;
   }
+  if(user_errmsg != NULL) {
+    prop_destroy(user_errmsg);
+    prop_ref_dec(user_errmsg);
+    user_errmsg = NULL;
+  }
   return 0;
 }
 
@@ -136,7 +165,8 @@ pulseaudio_make_context_ready(void)
  *
  */
 static int
-pulseaudio_check_passthru(audio_decoder_t *ad, int codec_id)
+pulseaudio_get_mode(audio_decoder_t *ad, int codec_id,
+		    const void *extradata, size_t extradata_size)
 {
   decoder_t *d = (decoder_t *)ad;
 
@@ -205,7 +235,7 @@ pulseaudio_check_passthru(audio_decoder_t *ad, int codec_id)
       pa_threaded_mainloop_unlock(mainloop);
       ad->ad_tile_size = 512;
       d->ss = *pa_stream_get_sample_spec(d->s);
-      return 1;
+      return AUDIO_MODE_SPDIF;
 
     case PA_STREAM_TERMINATED:
     case PA_STREAM_FAILED:
@@ -525,8 +555,8 @@ static audio_class_t pulseaudio_audio_class = {
   .ac_flush        = pulseaudio_audio_flush,
   .ac_reconfig     = pulseaudio_audio_reconfig,
   .ac_deliver_unlocked = pulseaudio_audio_deliver,
-  .ac_check_passthru = pulseaudio_check_passthru,
-  .ac_set_volume     = pulseaudio_set_volume,
+  .ac_get_mode     = pulseaudio_get_mode,
+  .ac_set_volume   = pulseaudio_set_volume,
 };
 
 
@@ -564,8 +594,7 @@ context_state_callback(pa_context *c, void *userdata)
     break;
 
   case PA_CONTEXT_FAILED:
-    TRACE(TRACE_ERROR, "PA",
-	  "Connection failure: %s", pa_strerror(pa_context_errno(c)));
+    pulseaudio_error(pa_strerror(pa_context_errno(c)));
     pa_threaded_mainloop_signal(mainloop, 0);
     break;
   }
@@ -576,7 +605,7 @@ context_state_callback(pa_context *c, void *userdata)
  *
  */
 audio_class_t *
-audio_driver_init(void)
+audio_driver_init(struct prop *asettings, struct htsmsg *store)
 {
   TRACE(TRACE_DEBUG, "PA", "Headerversion: %s, library: %s",
 	pa_get_headers_version(), pa_get_library_version());
@@ -601,14 +630,6 @@ audio_driver_init(void)
 #endif
 
   pa_context_set_state_callback(ctx, context_state_callback, NULL);
-
-  /* Connect the context */
-  if(pa_context_connect(ctx, NULL, 0, NULL) < 0) {
-    TRACE(TRACE_ERROR, "PA", "pa_context_connect() failed: %s",
-	  pa_strerror(pa_context_errno(ctx)));
-    pa_threaded_mainloop_unlock(mainloop);
-    return NULL;
-  }
 
   pa_threaded_mainloop_unlock(mainloop);
 

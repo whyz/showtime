@@ -83,7 +83,7 @@ struct prop;
 #define TR_ALIGN_RIGHT     3
 #define TR_ALIGN_JUSTIFIED 4
 
-struct pixmap *
+struct image *
 text_render(const uint32_t *uc, int len, int flags, int default_size,
 	    float scale, int alignment,
 	    int max_width, int max_lines, const char *font_family,
@@ -94,12 +94,14 @@ text_render(const uint32_t *uc, int len, int flags, int default_size,
 
 struct fa_handle;
 
-int freetype_init(void);
+void *freetype_load_dynamic_font_fh(struct fa_handle *fh, const char *url,
+				    int font_domain,
+				    char *errbuf, size_t errlen);
 
-void * freetype_load_font_from_fh(struct fa_handle *fh, int font_domain,
-				  char *errbuf, size_t errlen);
+void *freetype_load_dynamic_font(const char *url, int font_domain,
+				 char *errbuf, size_t errlen);
 
-void *freetype_load_font(const char *url, int context, const char **vpaths);
+void freetype_load_default_font(const char *url, int prio);
 
 void freetype_unload_font(void *ref);
 
@@ -113,8 +115,6 @@ struct rstr *freetype_get_identifier(void *handle);
 
 #endif
 
-void fontstash_init(void);
-
 void fontstash_props_from_title(struct prop *p, const char *url,
 				const char *title);
 
@@ -123,9 +123,11 @@ int fontconfig_resolve(int uc, uint8_t style, const char *family,
 		       char *urlbuf, size_t urllen);
 #endif
 
-#define TEXT_PARSE_TAGS          0x1
-#define TEXT_PARSE_HTML_ENTETIES 0x2
+#define TEXT_PARSE_HTML_TAGS     0x1
+#define TEXT_PARSE_HTML_ENTITIES 0x2
 #define TEXT_PARSE_SLOPPY_TAGS   0x4 // Unknown tags are parsed as normal text
+#define TEXT_PARSE_SUB_TAGS      0x8
+#define TEXT_PARSE_SLASH_PREFIX  0x10
 
 uint32_t *text_parse(const char *str, int *lenp, int flags,
 		     const uint32_t *prefix, int prefixlen,

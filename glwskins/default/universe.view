@@ -47,7 +47,6 @@ widget(container_z, {
 	alpha: iir(1 - $ui.screensaverActive, 8);
 
 	widget(playfield, {
-	  time: 0.1;
 	  effect: blend;
 	  noInitialTransform: true;
     
@@ -68,7 +67,9 @@ widget(container_z, {
 	    widget(loader, {
 	      hidden: !$clone.pageMenu;
 	      noInitialTransform: true;
-	      source: $clone.menu ?? "skin://cmdmenu/cmdmenu_dir.view";
+	      source: select($clone.pageMenu,
+			     $clone.menu ?? "skin://cmdmenu/cmdmenu_dir.view",
+			     "");
 	    });
 	  });
 	});
@@ -77,7 +78,10 @@ widget(container_z, {
 	  source: "popups/" + $self.type + ".view";
 	});
 
-        #import "log.view"
+	widget(loader, {
+          hidden: !$ui.logwindow;
+	  source: select($ui.logwindow, "log.view", "");
+	});
 
 	widget(loader, {
 	  hidden: !$ui.osk.show;

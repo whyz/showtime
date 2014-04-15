@@ -40,6 +40,8 @@
 #include "db/kvstore.h"
 #include "fa_indexer.h"
 #include "notifications.h"
+#include "metadata/playinfo.h"
+#include "metadata/metadata_str.h"
 
 #define SCAN_TRACE(x...) do {			\
     if(gconf.enable_fa_scanner_debug)           \
@@ -268,10 +270,12 @@ deep_probe(fa_dir_entry_t *fde, scanner_t *s)
 {
   fde->fde_probestatus = FDE_PROBED_CONTENTS;
 
+  SCAN_TRACE("Deep probing %s. Content_type:%s",
+             rstr_get(fde->fde_url), content2type(fde->fde_type));
+
   if(fde->fde_type != CONTENT_UNKNOWN) {
 
     prop_t *meta = prop_create_r(fde->fde_prop, "metadata");
-    
 
     if(!fde->fde_ignore_cache && !fa_dir_entry_stat(fde) &&
        (fde->fde_md == NULL || !fde->fde_md->md_cache_status)) {
@@ -281,6 +285,8 @@ deep_probe(fa_dir_entry_t *fde, scanner_t *s)
 
       fde->fde_md = metadb_metadata_get(getdb(s), rstr_get(fde->fde_url),
 					fde->fde_stat.fs_mtime);
+      SCAN_TRACE("%s: Metadata %sfound", rstr_get(fde->fde_url),
+                 fde->fde_md ? "" : "not ");
     }
 
     if(fde->fde_statdone && meta != NULL)
@@ -320,9 +326,14 @@ deep_probe(fa_dir_entry_t *fde, scanner_t *s)
           break;
         }
       }
+      SCAN_TRACE("%s: Cache status: %d",
+                 rstr_get(fde->fde_url), fde->fde_md->md_cache_status);
 
       switch(fde->fde_md->md_cache_status) {
       case METADATA_CACHE_STATUS_NO:
+        SCAN_TRACE("Storing item %s in DB parent:%s mtime:%d",
+                   rstr_get(fde->fde_url), s->s_url,
+                   (int)fde->fde_stat.fs_mtime);
 	metadb_metadata_write(getdb(s), rstr_get(fde->fde_url),
 			      fde->fde_stat.fs_mtime,
 			      fde->fde_md, s->s_url, s->s_mtime,
@@ -341,7 +352,7 @@ deep_probe(fa_dir_entry_t *fde, scanner_t *s)
 
     if(fde->fde_prop != NULL && !fde->fde_bound_to_metadb) {
       fde->fde_bound_to_metadb = 1;
-      metadb_bind_url_to_prop(getdb(s), rstr_get(fde->fde_url), fde->fde_prop);
+      playinfo_bind_url_to_prop(rstr_get(fde->fde_url), fde->fde_prop);
     }
   }
 
@@ -527,7 +538,7 @@ scanner_notification(void *opaque, fa_notify_op_t op, const char *filename,
 #endif
 
 /**
- * Very simple and O^2 diff
+ *
  */
 static int
 rescan(scanner_t *s)
@@ -535,9 +546,11 @@ rescan(scanner_t *s)
   fa_dir_t *fd;
   fa_dir_entry_t *a, *b, *n;
   int changed = 0;
-
-  if((fd = fa_scandir(s->s_url, NULL, 0)) == NULL)
+  char errbuf[512];
+  if((fd = fa_scandir(s->s_url, errbuf, sizeof(errbuf))) == NULL) {
+    SCAN_TRACE("%s: Rescanning failed: %s", s->s_url, errbuf);
     return -1; 
+  }
 
   if(s->s_fd->fd_count != fd->fd_count) {
     SCAN_TRACE("%s: Rescanning found %d items, previously %d",
@@ -604,6 +617,14 @@ doscan(scanner_t *s, int with_notify)
     if(s->s_fd != NULL) {
       SCAN_TRACE("%s: Found %d by directory scanning",
               s->s_url, s->s_fd->fd_count);
+
+      if(gconf.enable_fa_scanner_debug) {
+        RB_FOREACH(fde, &s->s_fd->fd_entries, fde_link) {
+          SCAN_TRACE("%s: File %s",
+                     s->s_url, rstr_get(fde->fde_url));
+        }
+      }
+
       err = 0;
     }
   } else {

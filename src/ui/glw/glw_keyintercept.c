@@ -36,6 +36,7 @@ typedef struct glw_keyintercept {
 
 } glw_keyintercept_t;
 
+#if 0
 
 /**
  *
@@ -86,6 +87,7 @@ ki_handle_event(glw_keyintercept_t *ki, event_t *e)
   }
   return 0;
 }
+#endif
 
 /**
  *
@@ -108,32 +110,39 @@ ki_unbind(glw_keyintercept_t *ki)
 /**
  *
  */
+static void
+glw_keyintercept_layout(glw_t *w, const glw_rctx_t *rc)
+{
+  glw_t *c = TAILQ_FIRST(&w->glw_childs);
+  if(c != NULL)
+    glw_layout0(c, rc);
+}
+
+
+/**
+ *
+ */
 static int
 glw_keyintercept_callback(glw_t *w, void *opaque, 
 			  glw_signal_t signal, void *extra)
 {
-  glw_t *c;
-
   switch(signal) {
   default:
     break;
   case GLW_SIGNAL_DESTROY:
     ki_unbind((glw_keyintercept_t *)w);
     break;
-  case GLW_SIGNAL_LAYOUT:
-    c = TAILQ_FIRST(&w->glw_childs);
-    if(c != NULL)
-      glw_layout0(c, extra);
-    break;
   case GLW_SIGNAL_CHILD_CONSTRAINTS_CHANGED:
     glw_copy_constraints(w, extra);
     return 1;
 
+#if 0
   case GLW_SIGNAL_EVENT_BUBBLE:
     if(w->glw_flags2 & GLW2_ENABLED)
       return ki_handle_event((glw_keyintercept_t *)w, extra);
     else
       return 0;
+#endif
   }
   return 0;
 }
@@ -220,6 +229,7 @@ bind_to_property(glw_t *w, prop_t *p, const char **pname,
 static glw_class_t glw_keyintercept = {
   .gc_name = "keyintercept",
   .gc_instance_size = sizeof(glw_keyintercept_t),
+  .gc_layout = glw_keyintercept_layout,
   .gc_render = glw_keyintercept_render,
   .gc_signal_handler = glw_keyintercept_callback,
   .gc_bind_to_property = bind_to_property,

@@ -32,6 +32,11 @@
 
 #include "unicode_casefolding.h"
 #include "charset_detector.h"
+#include "big5.h"
+
+#include <libavformat/avformat.h> // for av_url_split()
+
+const static charset_t charsets[];
 
 
 /**
@@ -534,9 +539,9 @@ html_enteties_escape(const char *src, char *dst)
 
 
 /**
- * based on url_split form ffmpeg, renamed to 
+ *
  */
-void 
+void
 url_split(char *proto, int proto_size,
 	  char *authorization, int authorization_size,
 	  char *hostname, int hostname_size,
@@ -544,54 +549,12 @@ url_split(char *proto, int proto_size,
 	  char *path, int path_size,
 	  const char *url)
 {
-  const char *p, *ls, *at, *col, *brk;
-
-  if (port_ptr)               *port_ptr = -1;
-  if (proto_size > 0)         proto[0] = 0;
-  if (authorization_size > 0) authorization[0] = 0;
-  if (hostname_size > 0)      hostname[0] = 0;
-  if (path_size > 0)          path[0] = 0;
-
-  /* parse protocol */
-  if ((p = strchr(url, ':'))) {
-    snprintf(proto, MIN(proto_size, p + 1 - url), "%s", url);
-    p++; /* skip ':' */
-    if (*p == '/') p++;
-    if (*p == '/') p++;
-  } else {
-    /* no protocol means plain filename */
-    snprintf(path, path_size, "%s", url);
-    return;
-  }
-
-  /* separate path from hostname */
-  ls = strchr(p, '/');
-  if(!ls)
-    ls = strchr(p, '?');
-  if(ls)
-    snprintf(path, path_size, "%s", ls);
-  else
-    ls = &p[strlen(p)]; // XXX
-
-  /* the rest is hostname, use that to parse auth/port */
-  if (ls != p) {
-    /* authorization (user[:pass]@hostname) */
-    if ((at = strchr(p, '@')) && at < ls) {
-      snprintf(authorization, MIN(authorization_size, at + 1 - p), "%s", p);
-      p = at + 1; /* skip '@' */
-    }
-
-    if (*p == '[' && (brk = strchr(p, ']')) && brk < ls) {
-      /* [host]:port */
-      snprintf(hostname, MIN(hostname_size, brk - p), "%s", p + 1);
-      if (brk[1] == ':' && port_ptr)
-	*port_ptr = atoi(brk + 2);
-    } else if ((col = strchr(p, ':')) && col < ls) {
-      snprintf(hostname, MIN(col + 1 - p, hostname_size), "%s", p);
-      if (port_ptr) *port_ptr = atoi(col + 1);
-    } else
-      snprintf(hostname, MIN(ls + 1 - p, hostname_size), "%s", p);
-  }
+  return av_url_split(proto, proto_size,
+                      authorization, authorization_size,
+                      hostname, hostname_size,
+                      port_ptr,
+                      path, path_size,
+                      url);
 }
 
 
@@ -783,11 +746,10 @@ utf8_cleanup(const char *str)
 /**
  *
  */
-char *
+buf_t *
 utf8_from_bytes(const char *str, int len, const charset_t *cs,
 		char *how, size_t howlen)
 {
-  char *r, *d;
   len = !len ? strlen(str) : len;
 
   if(cs == NULL) {
@@ -799,10 +761,15 @@ utf8_from_bytes(const char *str, int len, const charset_t *cs,
 	cs = charset_get(name);
 	if(cs != NULL)
 	  snprintf(how, howlen, "Decoded as %s (detected language: %s)",
-		   name, lang);
+		   name, lang ?: "<Unknown>");
 	else
 	  TRACE(TRACE_ERROR, "STR", "Language %s not found internally",
 		name);
+      } else {
+        cs = &charsets[0];
+        snprintf(how, howlen,
+                 "Unable to determine character encoding, decoding as %s",
+                 cs->title);
       }
     } else {
       snprintf(how, howlen, "Decoded as %s (specified by user)",
@@ -813,21 +780,41 @@ utf8_from_bytes(const char *str, int len, const charset_t *cs,
 	     cs->title);
   }
 
-  const uint16_t *cp = cs ? cs->ptr : NULL;
+  int olen = cs->convert(cs, NULL, str, len, 0);
+  buf_t *r = buf_create(olen);
+  cs->convert(cs, buf_str(r), str, len, 0);
+  return r;
+}
 
-  int i, olen = 0;
-  for(i = 0; i < len; i++) {
-    if(str[i] == 0)
-      break;
-    olen += utf8_put(NULL, cp ? cp[(uint8_t)str[i]] : str[i]);
+
+/**
+ *
+ */
+rstr_t *
+rstr_from_bytes(const char *str, char *how, size_t howlen)
+{
+  if(utf8_verify(str)) {
+    snprintf(how, howlen, "Decoding as UTF-8");
+    return rstr_alloc(str);
   }
-  d = r = malloc(olen + 1);
-  for(i = 0; i < len; i++) {
-    if(str[i] == 0)
-      break;
-    d += utf8_put(d, cp ? cp[(uint8_t)str[i]] : str[i]);
-  }
-  *d = 0;
+  buf_t *b = utf8_from_bytes(str, strlen(str), NULL, how, howlen);
+  rstr_t *r = rstr_alloc(buf_cstr(b));
+  buf_release(b);
+  return r;
+}
+
+
+/**
+ *
+ */
+struct rstr *
+rstr_from_bytes_len(const char *str, int len, char *how, size_t howlen)
+{
+  char *zstr = malloc(len + 1);
+  memcpy(zstr, str, len);
+  zstr[len] = 0;
+  rstr_t *r = rstr_from_bytes(zstr, how, howlen);
+  free(zstr);
   return r;
 }
 
@@ -1019,6 +1006,8 @@ strvec_split(const char *str, char ch)
 void
 strvec_free(char **s)
 {
+  if(s == NULL)
+    return;
   void *m = s;
   for(;*s != NULL; s++)
     free(*s);
@@ -1191,9 +1180,46 @@ hexnibble(char c)
   }
 }
 
-// ISO-8859-X  ->  UTF-8
+static int
+convert_table(const struct charset *cs, char *dst,
+              const char *src, int len, int strict)
+{
+  int olen = 0;
+  const uint16_t *cp = cs->table;
 
-#define ISO_8859_1 NULL
+  for(int i = 0; i < len; i++) {
+    if(src[i] == 0)
+      break;
+    int c = cp[(uint8_t)src[i]];
+    if(c == 0)
+      c = 0xfffd;
+    int l = utf8_put(dst, c);
+    if(dst)
+      dst += l;
+    olen += l;
+  }
+  return olen;
+}
+
+
+static int
+convert_iso_8859_1(const struct charset *cs, char *dst,
+                   const char *src, int len, int strict)
+{
+  int olen = 0;
+
+  for(int i = 0; i < len; i++) {
+    if(src[i] == 0)
+      break;
+    int l = utf8_put(dst, src[i]);
+    if(dst)
+      dst += l;
+    olen += l;
+  }
+  return olen;
+}
+
+
 extern const uint16_t ISO_8859_2[];
 extern const uint16_t ISO_8859_3[];
 extern const uint16_t ISO_8859_4[];
@@ -1222,7 +1248,7 @@ extern const uint16_t CP1258[];
 
 const static charset_t charsets[] = {
    // ISO-8869-1 must be first
-  {"ISO-8859-1", "ISO-8859-1 (Latin-1)", ISO_8859_1,
+  {"ISO-8859-1", "ISO-8859-1 (Latin-1)", NULL, convert_iso_8859_1,
    ALIAS("iso-ir-100",
          "ISO_8859-1",
          "latin1",
@@ -1230,37 +1256,37 @@ const static charset_t charsets[] = {
          "IBM819",
          "CP819",
          "csISOLatin1")},
-  {"ISO-8859-2", "ISO-8859-2 (Latin-2)", ISO_8859_2,
+  {"ISO-8859-2", "ISO-8859-2 (Latin-2)", ISO_8859_2, convert_table,
    ALIAS("iso-ir-101",
          "ISO_8859-2",
          "latin2",
          "l2",
          "csISOLatin2")},
-  {"ISO-8859-3", "ISO-8859-3 (Latin-3)", ISO_8859_3,
+  {"ISO-8859-3", "ISO-8859-3 (Latin-3)", ISO_8859_3, convert_table,
    ALIAS("iso-ir-109",
          "ISO_8859-3",
          "latin3",
          "l3",
          "csISOLatin3")},
-  {"ISO-8859-4", "ISO-8859-4 (Latin-4)", ISO_8859_4,
+  {"ISO-8859-4", "ISO-8859-4 (Latin-4)", ISO_8859_4, convert_table,
    ALIAS("iso-ir-110",
          "ISO_8859-4",
          "latin4",
          "l4",
          "csISOLatin4")},
-  {"ISO-8859-5", "ISO-8859-5 (Latin/Cyrillic)", ISO_8859_5,
+  {"ISO-8859-5", "ISO-8859-5 (Latin/Cyrillic)", ISO_8859_5, convert_table,
    ALIAS("iso-ir-144",
          "ISO_8859-5",
          "cyrillic",
          "csISOLatinCyrillic")},
-  {"ISO-8859-6", "ISO-8859-6 (Latin/Arabic)", ISO_8859_6,
+  {"ISO-8859-6", "ISO-8859-6 (Latin/Arabic)", ISO_8859_6, convert_table,
    ALIAS("iso-ir-127",
          "ISO_8859-6",
          "ECMA-114",
          "ASMO-708",
          "arabic",
          "csISOLatinArabic")},
-  {"ISO-8859-7", "ISO-8859-7 (Latin/Greek)", ISO_8859_7,
+  {"ISO-8859-7", "ISO-8859-7 (Latin/Greek)", ISO_8859_7, convert_table,
    ALIAS("iso-ir-126",
          "ISO_8859-7",
          "ELOT_928",
@@ -1268,37 +1294,47 @@ const static charset_t charsets[] = {
          "greek",
          "greek8",
          "csISOLatinGreek")},
-  {"ISO-8859-8", "ISO-8859-8 (Latin/Hebrew)", ISO_8859_8,
+  {"ISO-8859-8", "ISO-8859-8 (Latin/Hebrew)", ISO_8859_8, convert_table,
    ALIAS("iso-ir-138",
          "ISO_8859-8",
          "hebrew",
          "csISOLatinHebrew")},
-  {"ISO-8859-9", "ISO-8859-9 (Latin-5/Turkish)", ISO_8859_9,
+  {"ISO-8859-9", "ISO-8859-9 (Latin-5/Turkish)", ISO_8859_9, convert_table,
    ALIAS("iso-ir-148",
          "ISO_8859-9",
          "latin5",
          "l5",
          "csISOLatin5")},
-  {"ISO-8859-10", "ISO-8859-10 (Latin-6)", ISO_8859_10,
+  {"ISO-8859-10", "ISO-8859-10 (Latin-6)", ISO_8859_10, convert_table,
    ALIAS("iso-ir-157",
          "l6",
          "ISO_8859-10:1992",
          "csISOLatin6",
          "latin6")},
-  {"ISO-8859-11", "ISO-8859-11 (Latin/Thai)", ISO_8859_11},
-  {"ISO-8859-13", "ISO-8859-13 (Baltic Rim)", ISO_8859_13},
-  {"ISO-8859-14", "ISO-8859-14 (Celtic)", ISO_8859_14},
-  {"ISO-8859-15", "ISO-8859-15 (Latin-9)", ISO_8859_15},
-  {"ISO-8859-16", "ISO-8859-16 (Latin-10)", ISO_8859_16},
-  {"CP1250", "Windows 1250", CP1250, ALIAS("windows-1250", "cswindows1250")},
-  {"CP1251", "Windows 1251", CP1251, ALIAS("windows-1251", "cswindows1251")},
-  {"CP1252", "Windows 1252", CP1252, ALIAS("windows-1252", "cswindows1252")},
-  {"CP1253", "Windows 1253", CP1253, ALIAS("windows-1253", "cswindows1253")},
-  {"CP1254", "Windows 1254", CP1254, ALIAS("windows-1254", "cswindows1254")},
-  {"CP1255", "Windows 1255", CP1255, ALIAS("windows-1255", "cswindows1255")},
-  {"CP1256", "Windows 1256", CP1256, ALIAS("windows-1256", "cswindows1256")},
-  {"CP1257", "Windows 1257", CP1257, ALIAS("windows-1257", "cswindows1257")},
-  {"CP1258", "Windows 1258", CP1258, ALIAS("windows-1258", "cswindows1258")},
+  {"ISO-8859-11", "ISO-8859-11 (Latin/Thai)", ISO_8859_11, convert_table,},
+  {"ISO-8859-13", "ISO-8859-13 (Baltic Rim)", ISO_8859_13, convert_table,},
+  {"ISO-8859-14", "ISO-8859-14 (Celtic)", ISO_8859_14, convert_table,},
+  {"ISO-8859-15", "ISO-8859-15 (Latin-9)", ISO_8859_15, convert_table,},
+  {"ISO-8859-16", "ISO-8859-16 (Latin-10)", ISO_8859_16, convert_table,},
+  {"CP1250", "Windows 1250", CP1250, convert_table,
+   ALIAS("windows-1250", "cswindows1250")},
+  {"CP1251", "Windows 1251", CP1251, convert_table,
+   ALIAS("windows-1251", "cswindows1251")},
+  {"CP1252", "Windows 1252", CP1252, convert_table,
+   ALIAS("windows-1252", "cswindows1252")},
+  {"CP1253", "Windows 1253", CP1253, convert_table,
+   ALIAS("windows-1253", "cswindows1253")},
+  {"CP1254", "Windows 1254", CP1254, convert_table,
+   ALIAS("windows-1254", "cswindows1254")},
+  {"CP1255", "Windows 1255", CP1255, convert_table,
+   ALIAS("windows-1255", "cswindows1255")},
+  {"CP1256", "Windows 1256", CP1256, convert_table,
+   ALIAS("windows-1256", "cswindows1256")},
+  {"CP1257", "Windows 1257", CP1257, convert_table,
+   ALIAS("windows-1257", "cswindows1257")},
+  {"CP1258", "Windows 1258", CP1258, convert_table,
+   ALIAS("windows-1258", "cswindows1258")},
+  {"BIG5", "BIG5", NULL, big5_convert},
 };
 
 #undef ALIAS
@@ -1343,7 +1379,7 @@ charset_get_name(const void *p)
 {
   int i;
   for(i = 0; i < sizeof(charsets) / sizeof(charsets[0]); i++)
-    if(p == charsets[i].ptr)
+    if(p == charsets[i].table)
       return charsets[i].title;
   return "???";
 }
@@ -1550,3 +1586,68 @@ lp_get(char **lp)
   return r;
 }
 
+
+
+
+/**
+ *
+ */
+char *
+find_str(char *s, int len, const char *needle)
+{
+  int nlen = strlen(needle);
+  if(len < nlen)
+    return NULL;
+
+  len -= nlen;
+  for(int i = 0; i <= len; i++) {
+    int j;
+    for(j = 0; j < nlen; j++) {
+      if(s[i+j] != needle[j]) {
+        break;
+      }
+    }
+    if(j == nlen)
+      return s + i;
+  }
+  return NULL;
+}
+
+
+
+/**
+ *
+ */
+void
+mystrlower(char *s)
+{
+  for(;*s; s++) {
+    if(*s >= 'A' && *s <= 'Z')
+      *s = *s + 32;
+  }
+}
+
+
+/**
+ *
+ */
+void
+deescape_cstyle(char *src)
+{
+  char *dst = src;
+  while(*src) {
+    if(*src == '\\') {
+      src++;
+      if(*src == 0)
+	break;
+      if(*src == 'n')
+	*dst++ = '\n';
+      if(*src == '\\')
+	*dst++ = '\\';
+      src++;
+    } else {
+      *dst++ = *src++;
+    }
+  }
+  *dst = 0;
+}

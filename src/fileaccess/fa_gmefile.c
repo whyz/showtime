@@ -42,6 +42,7 @@
 #include "fa_libav.h"
 #include "misc/str.h"
 #include "media.h"
+#include "metadata/playinfo.h"
 
 /**
  *
@@ -68,8 +69,7 @@ gmefile_scandir(fa_protocol_t *fap, fa_dir_t *fd, const char *url,
   *p = 0;
 
   buf_t *b;
-  if((b = fa_load(fpath,  NULL, errbuf, errlen, NULL,
-		  0, NULL, NULL)) == NULL)
+  if((b = fa_load(fpath, FA_LOAD_ERRBUF(errbuf, errlen), NULL)) == NULL)
     return -1;
 
   err = gme_open_data(b->b_ptr, b->b_size, &emu, gme_info_only);
@@ -195,7 +195,7 @@ fa_gme_playfile_internal(media_pipe_t *mp, const void *buf, size_t size,
 
   mp->mp_audio.mq_stream = 0;
   mp_configure(mp, MP_PLAY_CAPS_PAUSE | MP_PLAY_CAPS_SEEK,
-	       MP_BUFFER_SHALLOW, 0);
+	       MP_BUFFER_SHALLOW, 0, "tracks");
   mp_become_primary(mp);
   
 
@@ -213,12 +213,12 @@ fa_gme_playfile_internal(media_pipe_t *mp, const void *buf, size_t size,
 	mb->mb_pts = gme_tell(emu) * 1000;
 	mb->mb_drive_clock = 1;
 
-	if(!registered_play && mb->mb_pts > METADB_AUDIO_PLAY_THRESHOLD) {
+	if(!registered_play && mb->mb_pts > PLAYINFO_AUDIO_PLAY_THRESHOLD) {
 	  registered_play = 1;
-	  metadb_register_play(url, 1, CONTENT_AUDIO);
+	  playinfo_register_play(url, 1);
 	}
 
-	gme_play(emu, CHUNK_SIZE * mb->mb_channels, mb->mb_data);
+	gme_play(emu, CHUNK_SIZE * mb->mb_channels, (void *)mb->mb_data);
       }
     }
 
@@ -308,7 +308,7 @@ be_gmeplayer_play(const char *url0, media_pipe_t *mp,
   *p++= 0;
   track = atoi(p) - 1;
   buf_t *b;
-  if((b = fa_load(url, NULL, errbuf, errlen, NULL, 0, NULL, NULL)) == NULL)
+  if((b = fa_load(url, FA_LOAD_ERRBUF(errbuf, errlen), NULL)) == NULL)
     return NULL;
 
   e = fa_gme_playfile_internal(mp, b->b_ptr, b->b_size,

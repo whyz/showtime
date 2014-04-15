@@ -38,6 +38,7 @@
 #include "misc/str.h"
 #include "settings.h"
 #include "notifications.h"
+#include "backend/backend.h"
 
 #if CONFIG_BSPATCH
 #include "ext/bspatch/bspatch.h"
@@ -105,6 +106,108 @@ static htsmsg_t *stos_artifacts;
 
 
 /**
+ * 
+ */
+static buf_t *
+patched_config_file(buf_t *upd, char *upd_begin, char *upd_end,
+		    const char *fname)
+{
+  char *cur_data = NULL;
+  int   cur_len = 0;
+
+  // Load currently installed file
+
+  int fd = open(fname, O_RDONLY);
+  if(fd == -1) {
+    TRACE(TRACE_DEBUG, "upgrade",
+	  "Partial update ignored, unable to open %s -- %s",
+	  fname, strerror(errno));
+    return upd;
+  }
+  struct stat st;
+  if(fstat(fd, &st)) {
+    close(fd);
+    return upd;
+  }
+
+  cur_len  = st.st_size;
+  cur_data = malloc(cur_len);
+
+  if(read(fd, cur_data, cur_len) != cur_len) {
+    TRACE(TRACE_DEBUG, "upgrade",
+	  "Partial update ignored, read failed from %s -- %s",
+	  fname, strerror(errno));
+    free(cur_data);
+    close(fd);
+    return upd;
+  }
+  close(fd);
+
+
+  // Search for markers in currently installed file
+
+  char *cur_begin =
+    find_str(cur_data, cur_len, "# BEGIN SHOWTIME CONFIG\n");
+
+  if(cur_begin == NULL) {
+    TRACE(TRACE_DEBUG, "upgrade",
+	  "Partial update ignored, no BEGIN marker");
+    goto fail;
+  }
+
+  char *cur_end =
+    find_str(cur_data, cur_len, "# END SHOWTIME CONFIG\n");
+
+  if(cur_end == NULL) {
+    TRACE(TRACE_DEBUG, "upgrade",
+	  "Partial update ignored, no END marker");
+    goto fail;
+  }
+
+ 
+  if(cur_end < cur_begin) {
+    TRACE(TRACE_DEBUG, "upgrade",
+	  "Partial update ignored, END marker before BEGIN marker");
+    goto fail;
+  }
+
+  char *cur_eof = cur_data + cur_len;
+
+  /**
+   * Ok, so new file will consist of
+   *   seg1 cur_data  -> cur_begin
+   *   seg2 upd_begin -> upd_end
+   *   seg3 cur_end   -> cur_eof
+   */
+
+  const int seg1 = (cur_begin - cur_data);
+  const int seg2 = (upd_end   - upd_begin);
+  const int seg3 = (cur_eof   - cur_end);
+
+  assert(seg1 >= 0);
+  assert(seg2 >= 0);
+  assert(seg3 >= 0);
+
+  int new_size = seg1 + seg2 + seg3;
+  buf_t *n = buf_create(new_size);
+
+  char *out = buf_str(n);
+  memcpy(out,               cur_data,  seg1);
+  memcpy(out + seg1,        upd_begin, seg2);
+  memcpy(out + seg1 + seg2, cur_end,   seg3);
+  
+  free(cur_data);
+
+  buf_release(upd);
+  return n;
+
+ fail:
+  free(cur_data);
+  return upd;
+}
+
+
+/**
  *
  */
 static void
@@ -141,7 +244,8 @@ download_callback(void *opaque, int loaded, int total)
  */
 static int
 upgrade_file(int accept_patch, const char *fname, const char *url,
-	     int size, const uint8_t *expected_digest, const char *task)
+	     int size, const uint8_t *expected_digest, const char *task,
+	     int check_partial_update)
 {
   uint8_t digest[20];
   char digeststr[41];
@@ -286,6 +390,21 @@ upgrade_file(int accept_patch, const char *fname, const char *url,
   prop_set(upgrade_root, "size", PROP_SET_INT, b->b_size);
   prop_set_float(upgrade_progress, 0);
 
+  if(check_partial_update) {
+    char *new_begin =
+      find_str(buf_str(b), buf_len(b), "# BEGIN SHOWTIME CONFIG\n");
+
+    char *new_end =
+      find_str(buf_str(b), buf_len(b), "# END SHOWTIME CONFIG\n");
+
+    if(new_begin && new_end > new_begin) {
+      TRACE(TRACE_DEBUG, "upgrade",
+	    "Attempting partial rewrite of %s", fname);
+      b = patched_config_file(b, new_begin, new_end, fname);
+    }
+  }
+
+
   const char *instpath;
 
   int overwrite = 1;
@@ -392,8 +511,10 @@ stos_check_upgrade(void)
   buf_t *b;
   snprintf(url, sizeof(url), "%s/master-%s.json", ctrlbase_stos, archname);
 
-  b = fa_load(url, NULL, errbuf, sizeof(errbuf),
-              NULL, FA_DISABLE_AUTH, NULL, NULL);
+  b = fa_load(url,
+               FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+               FA_LOAD_FLAGS(FA_DISABLE_AUTH),
+               NULL);
   if(b == NULL) {
     TRACE(TRACE_ERROR, "STOS", "Unable to query for STOS manifest -- %s",
 	  errbuf);
@@ -503,8 +624,11 @@ check_upgrade(int set_news)
   snprintf(url, sizeof(url), "%s/%s-%s.json", ctrlbase, upgrade_track,
 	   archname);
 
-  b = fa_load(url, NULL, errbuf, sizeof(errbuf),
-              NULL, FA_DISABLE_AUTH, NULL, NULL);
+  b = fa_load(url,
+               FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+               FA_LOAD_FLAGS(FA_DISABLE_AUTH),
+               NULL);
+
   if(b == NULL) {
     check_upgrade_err(errbuf);
     return 1;
@@ -619,7 +743,7 @@ check_upgrade(int set_news)
     rstr_t *s = _("Open download page");
     char buf[128];
     snprintf(buf, sizeof(buf), rstr_get(r), ver);
-    news_ref = add_news(buf, buf, "page:upgrade", rstr_get(s));
+    news_ref = add_news(buf, buf, "showtime:upgrade", rstr_get(s));
     rstr_release(r);
     rstr_release(s);
   }
@@ -671,7 +795,7 @@ stos_perform_upgrade(int accept_patch)
       continue;
 
     const char *type = htsmsg_get_str(a, "type");
-    if(strcmp(type, "sqfs") && strcmp(type, "bin"))
+    if(strcmp(type, "sqfs") && strcmp(type, "bin") && strcmp(type, "txt"))
       continue;
 
     const char *dlurl = htsmsg_get_str(a, "url");
@@ -697,7 +821,10 @@ stos_perform_upgrade(int accept_patch)
     TRACE(TRACE_DEBUG, "STOS", "Downloading %s (%s) to %s",
 	  dlurl, name, localfile);
 
-    if(upgrade_file(accept_patch, localfile, dlurl, dlsize, digest, n)) {
+    int check_partial_update = !strcmp(type, "txt");
+
+    if(upgrade_file(accept_patch, localfile, dlurl, dlsize, digest, n,
+		    check_partial_update)) {
       rval = 1;
       break;
     }
@@ -730,7 +857,7 @@ attempt_upgrade(int accept_patch)
 		  showtime_download_url,
 		  showtime_download_size,
 		  showtime_download_digest,
-		  "Showtime"))
+		  "Showtime", 0))
     return 1;
 
   TRACE(TRACE_INFO, "upgrade", "All done, restarting");
@@ -756,6 +883,9 @@ attempt_upgrade(int accept_patch)
 static void *
 install_thread(void *aux)
 {
+  if(showtime_download_url == NULL)
+    return NULL;
+
 #if CONFIG_BSPATCH
   int r = attempt_upgrade(1);
   if(r != -1)
@@ -874,6 +1004,10 @@ upgrade_init(void)
   upgrade_error    = prop_create(upgrade_root, "error");
   upgrade_task     = prop_create(upgrade_root, "task");
 
+  // Set status to "upToDate" until we know better
+
+  prop_set_string(upgrade_status, "upToDate");
+
 
   htsmsg_t *store;
 
@@ -887,9 +1021,7 @@ upgrade_init(void)
                  SETTINGS_INITIAL_UPDATE,
                  SETTING_TITLE(_p("Upgrade to releases from")),
                  SETTING_HTSMSG("track", store, "upgrade"),
-#if defined(PS3)
                  SETTING_OPTION("stable",  _p("Stable")),
-#endif
                  SETTING_OPTION("testing", _p("Testing")),
                  SETTING_OPTION_CSTR("master", "Bleeding Edge (Very unstable)"),
                  SETTING_CALLBACK(set_upgrade_track, NULL),
@@ -907,7 +1039,7 @@ upgrade_init(void)
   prop_link(_p("Check for updates now"),
 	    prop_create(prop_create(p, "metadata"), "title"));
   prop_set_string(prop_create(p, "type"), "load");
-  prop_set_string(prop_create(p, "url"), "page:upgrade");
+  prop_set_string(prop_create(p, "url"), "showtime:upgrade");
 
   if(prop_set_parent(p, prop_create(gconf.settings_general, "nodes")))
      abort();
@@ -929,3 +1061,41 @@ upgrade_refresh(void)
 {
   return check_upgrade(notify_upgrades);
 }
+
+
+/**
+ *
+ */
+static int
+upgrade_canhandle(const char *url)
+{
+  return !strcmp(url, "showtime:upgrade");
+}
+
+
+/**
+ *
+ */
+static int
+upgrade_open_url(prop_t *page, const char *url, int sync)
+{
+  if(!strcmp(url, "showtime:upgrade")) {
+    backend_page_open(page, "page:upgrade", sync);
+    upgrade_refresh();
+    prop_set(page, "directClose", PROP_SET_INT, 1);
+  } else {
+    nav_open_error(page, "Invalid URI");
+  }
+  return 0;
+}
+
+
+/**
+ *
+ */
+static backend_t be_upgrade = {
+  .be_canhandle = upgrade_canhandle,
+  .be_open = upgrade_open_url,
+};
+
+BE_REGISTER(upgrade);

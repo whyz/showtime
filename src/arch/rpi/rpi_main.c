@@ -47,6 +47,7 @@
 #include "omx.h"
 #include "backend/backend.h"
 #include "notifications.h"
+#include "misc/callout.h"
 
 #if ENABLE_CONNMAN
 #include <gio/gio.h>
@@ -145,15 +146,23 @@ set_bg_image(rstr_t *url, const char **vpaths, glw_root_t *gr)
   im.im_req_width  = w;
   im.im_req_height = h;
 
-  pixmap_t *pm;
-  pm = backend_imageloader(url, &im, vpaths, errbuf, sizeof(errbuf),
-			   NULL, NULL, NULL);
+  image_t *img;
+  img = backend_imageloader(url, &im, vpaths, errbuf, sizeof(errbuf),
+			   NULL, NULL);
   glw_lock(gr);
 
-  if(pm == NULL) {
+  if(img == NULL) {
     TRACE(TRACE_ERROR, "BG", "Unable to load %s -- %s", rstr_get(url), errbuf);
     return;
   }
+
+  image_component_t *ic = image_find_component(img, IMAGE_PIXMAP);
+  if(ic == NULL) {
+    image_release(img);
+    return;
+  }
+
+  const pixmap_t *pm = ic->pm;
 
   uint32_t ip;
   VC_IMAGE_TYPE_T it;
@@ -167,7 +176,7 @@ set_bg_image(rstr_t *url, const char **vpaths, glw_root_t *gr)
     break;
   default:
     TRACE(TRACE_ERROR, "BG", "Can't handle format %d", pm->pm_type);
-    pixmap_release(pm);
+    image_release(img);
     return;
   }
 
@@ -185,9 +194,9 @@ set_bg_image(rstr_t *url, const char **vpaths, glw_root_t *gr)
 		       pm->pm_width, pm->pm_height);
 
   vc_dispmanx_resource_write_data(bg_resource, it, pm->pm_linesize,
-				  pm->pm_pixels, &bg_dst_rect);
+				  pm->pm_data, &bg_dst_rect);
 
-  pixmap_release(pm);
+  image_release(img);
 
   bg_refresh_element(1);
 }
@@ -540,24 +549,36 @@ ui_run(glw_root_t *gr, EGLDisplay dpy)
 
     glw_lock(gr);
 
-    glViewport(0, 0, gr->gr_width, gr->gr_height);
-    glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-
-    gr->gr_can_externalize = 1;
-    gr->gr_externalize_cnt = 0;
-
     glw_prepare_frame(gr, 0);
 
-    glw_rctx_t rc;
-    glw_rctx_init(&rc, gr->gr_width, gr->gr_height, 1);
-    glw_layout0(gr->gr_universe, &rc);
-    glw_render0(gr->gr_universe, &rc);
+    if(gr->gr_need_refresh) {
 
-    pick_backdrop(gr);
+      glw_rctx_t rc;
+
+      gr->gr_can_externalize = 1;
+      gr->gr_externalize_cnt = 0;
+
+      gr->gr_need_refresh &= ~GLW_REFRESH_FLAG_LAYOUT;
+      glw_rctx_init(&rc, gr->gr_width, gr->gr_height, 1);
+      glw_layout0(gr->gr_universe, &rc);
+
+      if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+	glViewport(0, 0, gr->gr_width, gr->gr_height);
+	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+	glw_render0(gr->gr_universe, &rc);
+      }
+
+      pick_backdrop(gr);
+    }
 
     glw_unlock(gr);
-    glw_post_scene(gr);
-    eglSwapBuffers(dpy, surface);
+    if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+      glw_post_scene(gr);
+      eglSwapBuffers(dpy, surface);
+      gr->gr_need_refresh &= ~GLW_REFRESH_FLAG_RENDER;
+    } else {
+      usleep(16666);
+    }
   }
   glw_reap(gr);
   glw_reap(gr);
@@ -613,6 +634,140 @@ rpi_mainloop(void)
   }
 }
 
+
+/**
+ * Stop STOS splash screen
+ */
+static void
+stos_stop_splash(void)
+{
+  const char *runfile = "/var/run/stos-splash.pid";
+  int val;
+  FILE *fp = fopen(runfile, "r");
+  if(fp == NULL)
+    return;
+  int r = fscanf(fp, "%d", &val);
+  fclose(fp);
+  if(r != 1)
+    return;
+  TRACE(TRACE_DEBUG, "STOS", "Asking stos-splash (pid: %d) to stop", val);
+  kill(val, SIGINT);
+
+  for(int i = 0; i < 100; i++) {
+    struct stat st;
+    if(stat(runfile, &st)) {
+      TRACE(TRACE_DEBUG, "STOS", "stos-splash is gone");
+      return;
+    }
+    usleep(10000);
+  }
+  TRACE(TRACE_ERROR, "STOS", "stos-splash fails to terminate");
+}
+
+
+/**
+ *
+ */
+static void
+kill_framebuffer(void)
+{
+  struct stat st;
+  if(stat("/dev/fb0", &st))
+    return; // No frame buffer
+
+  // Turning off TV output seems to kill framebuffer
+  vc_tv_power_off();
+  vc_tv_hdmi_power_on_preferred();
+}
+
+
+
+/**
+ *
+ */
+static void
+tv_update_state(void)
+{
+  TV_DISPLAY_STATE_T state = {};
+  if(vc_tv_get_display_state(&state)) {
+    printf("failed to get state\n");
+    return;
+  }
+  printf("state.state=0x%x\n", state.state);
+
+}
+
+
+/**
+ *
+ */
+static void
+tv_service_callback(void *callback_data, uint32_t reason,
+		    uint32_t param1, uint32_t param2)
+{
+  TRACE(TRACE_DEBUG, "TV", "State change 0x%08x 0x%08x 0x%08x",
+	reason, param1, param2);
+#if 0
+  if(reason & 1) {
+    display_status = DISPLAY_STATUS_OFF;
+    TRACE(TRACE_INFO, "TV", "Display status = off");
+  } else {
+    display_status = DISPLAY_STATUS_ON;
+    TRACE(TRACE_INFO, "TV", "Display status = on");
+  }
+#endif
+  tv_update_state();
+}
+
+
+/**
+ *
+ */
+static void
+tv_init(void)
+{
+  vc_tv_register_callback(tv_service_callback, NULL);
+  tv_update_state();
+#if 0
+  int x;
+
+  x = vc_tv_hdmi_audio_supported(EDID_AudioFormat_ePCM, 8,
+				 EDID_AudioSampleRate_e48KHz,
+				 EDID_AudioSampleSize_16bit);
+  printf("8ch 48khz=0x%x\n", x);
+
+  x = vc_tv_hdmi_audio_supported(EDID_AudioFormat_ePCM, 2,
+				 EDID_AudioSampleRate_e48KHz,
+				 EDID_AudioSampleSize_16bit);
+  printf("2ch 44khz=0x%x\n", x);
+
+  x = vc_tv_hdmi_audio_supported(EDID_AudioFormat_eDTS, 2,
+				 EDID_AudioSampleRate_e48KHz,
+				 EDID_AudioSampleSize_16bit);
+  printf("DTS 48khz=0x%x\n", x);
+#endif
+}
+
+
+/**
+ *
+ */
+static void
+my_vcos_log(const VCOS_LOG_CAT_T *cat, VCOS_LOG_LEVEL_T _level,
+	    const char *fmt, va_list args)
+{
+  int stlevel;
+  switch(_level) {
+  case  VCOS_LOG_ERROR:   stlevel = TRACE_ERROR; break;
+  case VCOS_LOG_WARN:     stlevel = TRACE_ERROR; break;
+  default:
+    stlevel = TRACE_DEBUG; break;
+  }
+  tracev(0, stlevel, cat->name, fmt, args);
+}
+
+
+
 /**
  * Linux main
  */
@@ -632,9 +787,11 @@ main(int argc, char **argv)
 
   bcm_host_init();
 
-  vc_tv_power_off();
-  vc_tv_hdmi_power_on_preferred();
 
+
+  vcos_set_vlog_impl(my_vcos_log);
+
+  kill_framebuffer();
 
   omx_init();
 
@@ -649,6 +806,8 @@ main(int argc, char **argv)
   trap_init();
 
   showtime_init();
+
+  tv_init();
 
   rpi_cec_init();
 
@@ -672,6 +831,8 @@ main(int argc, char **argv)
   g_type_init();
   connman_init();
 #endif
+
+  stos_stop_splash();
 
   rpi_mainloop();
   shutdown_hook_run(1);
@@ -700,3 +861,53 @@ arch_stop_req(void)
   return 0;
 }
 
+
+/**
+ *
+ */
+int
+rpi_is_codec_enabled(const char *id)
+{
+  char query[64];
+  char buf[64];
+  snprintf(query, sizeof(query), "codec_enabled %s", id);
+  vc_gencmd(buf, sizeof(buf), query);
+  TRACE(TRACE_INFO, "VideoCore", "%s", buf);
+  return !!strstr(buf, "=enabled");
+}
+
+
+static callout_t timer;
+
+/**
+ *
+ */
+static void
+rpi_monitor_timercb(callout_t *c, void *aux)
+{
+  callout_arm(&timer, rpi_monitor_timercb, aux, 10);
+
+  prop_t *tempprop = prop_create(aux, "temp");
+
+  char buf[64];
+
+  buf[0] = 0;
+  vc_gencmd(buf, sizeof(buf), "measure_temp");
+  const char *x = mystrbegins(buf, "temp=");
+  if(x != NULL)
+    prop_set(tempprop, "cpu", PROP_SET_INT, atoi(x));
+}
+
+
+
+/**
+ *
+ */
+static void
+rpi_monitor_init(void)
+{
+  prop_t *p = prop_create(prop_get_global(), "system");
+  rpi_monitor_timercb(NULL, p);
+}
+
+INITME(INIT_GROUP_API, rpi_monitor_init);

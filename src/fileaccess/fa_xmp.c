@@ -59,7 +59,7 @@ fa_xmp_playfile(media_pipe_t *mp, FILE *f, char *errbuf, size_t errlen,
 
   mp->mp_audio.mq_stream = 0;
   mp_configure(mp, MP_PLAY_CAPS_PAUSE | MP_PLAY_CAPS_SEEK,
-	       MP_BUFFER_SHALLOW, 0);
+	       MP_BUFFER_SHALLOW, 0, "tracks");
   mp_become_primary(mp);
 
   if(xmp_load_modulef(ctx, f, u, size) >= 0) {
@@ -77,6 +77,10 @@ fa_xmp_playfile(media_pipe_t *mp, FILE *f, char *errbuf, size_t errlen,
             break;
           }
           xmp_get_frame_info(ctx, &fi);
+          if(fi.loop_count > 0) {
+            e = event_create_type(EVENT_EOF);
+            break;
+          }
 
           mb = media_buf_alloc_unlocked(mp, fi.buffer_size);
           mb->mb_data_type = MB_AUDIO;

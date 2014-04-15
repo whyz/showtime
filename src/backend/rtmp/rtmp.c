@@ -35,7 +35,7 @@
 #include "video/video_playback.h"
 #include "video/video_settings.h"
 #include "subtitles/subtitles.h"
-#include "metadata/metadata.h"
+#include "metadata/playinfo.h"
 
 typedef struct {
 
@@ -211,7 +211,7 @@ rtmp_process_event(rtmp_t *r, event_t *e, media_buf_t **mbp)
 
     if(sec != r->restartpos_last && r->can_seek) {
       r->restartpos_last = sec;
-      metadb_set_video_restartpos(r->canonical_url, mp->mp_seek_base / 1000);
+      playinfo_set_restartpos(r->canonical_url, mp->mp_seek_base / 1000, 1);
     }
 
   } else if(r->can_seek && event_is_type(e, EVENT_SEEK)) {
@@ -285,7 +285,7 @@ get_packet_v(rtmp_t *r, uint8_t *data, int size, int64_t dts,
 {
   uint8_t flags;
   uint8_t type = 0;
-  enum CodecID id;
+  enum AVCodecID id;
   int d = 0;
   event_t *e;
 
@@ -303,7 +303,7 @@ get_packet_v(rtmp_t *r, uint8_t *data, int size, int64_t dts,
   case 7:
     type = *data++;
     size--;
-    id = CODEC_ID_H264;
+    id = AV_CODEC_ID_H264;
 
     if(size < 3)
       return NULL;
@@ -316,7 +316,7 @@ get_packet_v(rtmp_t *r, uint8_t *data, int size, int64_t dts,
   case 4:
     type = *data++;
     size--;
-    id = CODEC_ID_VP6F;
+    id = AV_CODEC_ID_VP6F;
     break;
   default:
     return NULL;
@@ -326,7 +326,7 @@ get_packet_v(rtmp_t *r, uint8_t *data, int size, int64_t dts,
     media_codec_params_t mcp = {0};
 
     switch(id) {
-    case CODEC_ID_H264:
+    case AV_CODEC_ID_H264:
       if(type != 0 || size < 0)
 	return NULL;
 
@@ -334,7 +334,7 @@ get_packet_v(rtmp_t *r, uint8_t *data, int size, int64_t dts,
       mcp.extradata_size = size;
       break;
 
-    case CODEC_ID_VP6F:
+    case AV_CODEC_ID_VP6F:
       if(size < 1)
 	return NULL;
       mcp.extradata      = data;
@@ -383,7 +383,7 @@ get_packet_a(rtmp_t *r, uint8_t *data, int size, int64_t dts,
 {
   uint8_t flags;
   uint8_t type = 0;
-  enum CodecID id;
+  enum AVCodecID id;
 
   if(r->r->m_read.flags & RTMP_READ_SEEKING)
     return NULL; 
@@ -395,13 +395,13 @@ get_packet_a(rtmp_t *r, uint8_t *data, int size, int64_t dts,
   size--;
 
   switch(flags & 0xf0) {
-  case 0xa0:   id = CODEC_ID_AAC;
+  case 0xa0:   id = AV_CODEC_ID_AAC;
     type = *data++;
     size--;
     break;
 
   case 0x20:
-    id = CODEC_ID_MP3;
+    id = AV_CODEC_ID_MP3;
     break;
 
   default: 
@@ -415,7 +415,7 @@ get_packet_a(rtmp_t *r, uint8_t *data, int size, int64_t dts,
 
     switch(id) {
       
-    case CODEC_ID_AAC:
+    case AV_CODEC_ID_AAC:
       if(type != 0 || size < 0)
 	return NULL;
 	
@@ -424,7 +424,7 @@ get_packet_a(rtmp_t *r, uint8_t *data, int size, int64_t dts,
       fmt = "AAC";
       break;
 
-    case CODEC_ID_MP3:
+    case AV_CODEC_ID_MP3:
       parse = 1;
       fmt = "MP3";
       break;
@@ -669,10 +669,9 @@ rtmp_playvideo(const char *url0, media_pipe_t *mp,
   char *url = mystrdupa(url0);
 
   prop_set(mp->mp_prop_metadata, "format", PROP_SET_STRING, "RTMP");
+  prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 1);
 
   va.flags |= BACKEND_VIDEO_NO_FS_SCAN;
-
-  prop_set_string(mp->mp_prop_type, "video");
 
   rtmp_log_level = RTMP_LOGINFO;
   RTMP_LogSetLevel(rtmp_log_level);
@@ -685,7 +684,7 @@ rtmp_playvideo(const char *url0, media_pipe_t *mp,
   if(va.flags & BACKEND_VIDEO_RESUME ||
      (video_settings.resume_mode == VIDEO_RESUME_YES &&
       !(va.flags & BACKEND_VIDEO_START_FROM_BEGINNING)))
-    start = video_get_restartpos(va.canonical_url);
+    start = playinfo_get_restartpos(va.canonical_url);
 
   if(!RTMP_SetupURL(r.r, url)) {
     snprintf(errbuf, errlen, "Unable to setup RTMP-session");
@@ -729,12 +728,12 @@ rtmp_playvideo(const char *url0, media_pipe_t *mp,
     r.seekpos_video = AV_NOPTS_VALUE;
   }
 
-  mp_configure(mp, MP_PLAY_CAPS_PAUSE, MP_BUFFER_DEEP, 0);
+  mp_configure(mp, MP_PLAY_CAPS_PAUSE, MP_BUFFER_DEEP, 0, "video");
   mp->mp_max_realtime_delay = (r.r->Link.timeout - 1) * 1000000;
 
   mp_become_primary(mp);
 
-  metadb_register_play(va.canonical_url, 0, CONTENT_VIDEO);
+  playinfo_register_play(va.canonical_url, 0);
 
   r.canonical_url = va.canonical_url;
   r.restartpos_last = -1;
@@ -742,6 +741,7 @@ rtmp_playvideo(const char *url0, media_pipe_t *mp,
   sub_scanner_t *ss =
     sub_scanner_create(url, mp->mp_prop_subtitle_tracks, &va, 0);
 
+  prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
   e = rtmp_loop(&r, mp, url, errbuf, errlen);
 
   sub_scanner_destroy(ss);
@@ -751,8 +751,10 @@ rtmp_playvideo(const char *url0, media_pipe_t *mp,
     if(p >= video_settings.played_threshold) {
       TRACE(TRACE_DEBUG, "RTMP", "Playback reached %d%%, counting as played",
 	    p);
-      metadb_register_play(va.canonical_url, 1, CONTENT_VIDEO);
-      metadb_set_video_restartpos(va.canonical_url, -1);
+      playinfo_register_play(va.canonical_url, 1);
+      playinfo_set_restartpos(va.canonical_url, -1, 0);
+    } else {
+      playinfo_set_restartpos(va.canonical_url, mp->mp_seek_base / 1000, 0);
     }
   }
 

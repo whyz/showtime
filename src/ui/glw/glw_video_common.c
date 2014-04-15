@@ -21,6 +21,8 @@
 
 #include <assert.h>
 
+#include <libavutil/pixdesc.h>
+
 #include "showtime.h"
 #include "media.h"
 #include "video/video_playback.h"
@@ -32,8 +34,9 @@
 #include "glw_renderer.h"
 #include "glw_texture.h"
 
-static void glw_video_input(const frame_info_t *info, void *opaque);
-static int glw_set_video_codec(uint32_t type, media_codec_t *mc, void *opaque);
+static int glw_video_input(const frame_info_t *info, void *opaque);
+static int glw_set_video_codec(uint32_t type, media_codec_t *mc, void *opaque,
+			       const frame_info_t *fi);
 
 
 /**
@@ -110,8 +113,9 @@ glw_video_rctx_adjust(glw_rctx_t *rc, const glw_video_t *gv)
  *
  */
 static int
-glw_video_widget_event(event_t *e, glw_video_t *gv)
+glw_video_widget_event(glw_t *w, event_t *e)
 {
+  glw_video_t *gv = (glw_video_t *)w;
   media_pipe_t *mp = gv->gv_mp;
   event_int_t *eu = (event_int_t *)e;
 
@@ -123,8 +127,10 @@ glw_video_widget_event(event_t *e, glw_video_t *gv)
     return 1;
   }
 
-  if(event_is_type(e, EVENT_UNICODE) && eu->val == 32) {
-    // Convert [space] into playpause
+  if((event_is_type(e, EVENT_UNICODE) && eu->val == 32) ||
+     ((event_is_action(e, ACTION_ACTIVATE) && !gv->gv_spu_in_menu &&
+       gv->gv_flags & GLW_VIDEO_DPAD_SEEK))) {
+    // Convert event into playpause
     e = event_create_action(ACTION_PLAYPAUSE);
     mp_enqueue_event(mp, e);
     event_release(e);
@@ -134,7 +140,8 @@ glw_video_widget_event(event_t *e, glw_video_t *gv)
   if(event_is_action(e, ACTION_UP) ||
      event_is_action(e, ACTION_DOWN) ||
      event_is_action(e, ACTION_LEFT) ||
-     event_is_action(e, ACTION_RIGHT)) {
+     event_is_action(e, ACTION_RIGHT) ||
+     event_is_action(e, ACTION_ACTIVATE)) {
     if(gv->gv_spu_in_menu) {
       mp_enqueue_event(mp, e);
       return 1;
@@ -273,8 +280,9 @@ glw_video_compute_avdiff(glw_root_t *gr, media_pipe_t *mp,
   if(gconf.enable_detailed_avdiff) {
     static int64_t lastpts, lastaclock, lastclock;
 
-    TRACE(TRACE_DEBUG, "AVDIFF", "E:%3d %10f %10d %15"PRId64":a:%-8"PRId64" %15"PRId64":v:%-8"PRId64" %15"PRId64" %15"PRId64" %s %lld", 
+    TRACE(TRACE_DEBUG, "AVDIFF", "VE:%d AE:%d %10f %10d %15"PRId64":a:%-8"PRId64" %15"PRId64":v:%-8"PRId64" %15"PRId64" %15"PRId64" %s %lld", 
 	  epoch,
+	  mp->mp_audio_clock_epoch,
 	  gv->gv_avdiff_x,
 	  gv->gv_avdiff,
 	  aclock,
@@ -400,7 +408,7 @@ glw_video_newframe_blend(glw_video_t *gv, video_decoder_t *vd, int flags,
 	  return pts;
 	}
 
-	if(code == AVDIFF_CATCH_UP) {
+	if(code == AVDIFF_CATCH_UP && sb != NULL) {
 	  gv->gv_sa = NULL;
 	  release(gv, sa, &gv->gv_decoded_queue);
 	  kalman_init(&gv->gv_avfilter);
@@ -453,7 +461,8 @@ glw_video_play(glw_video_t *gv)
 			   !!(gv->gv_flags & GLW_VIDEO_NO_AUDIO),
 			   gv->gv_model,
 			   gv->gv_how,
-			   gv->gv_origin);
+			   gv->gv_origin,
+                           rstr_get(gv->gv_parent_url_x));
   mp_enqueue_event(gv->gv_mp, e);
   event_release(e);
 }
@@ -482,6 +491,7 @@ glw_video_dtor(glw_t *w)
   free(gv->gv_current_url);
   free(gv->gv_pending_url);
   free(gv->gv_how);
+  rstr_release(gv->gv_parent_url_x);
 
   glw_video_overlay_deinit(gv);
   
@@ -539,26 +549,44 @@ glw_video_newframe(glw_t *w, int flags)
 /**
  *
  */
+static void
+glw_video_layout(glw_t *w, const glw_rctx_t *rc)
+{
+  glw_video_t *gv = (glw_video_t *)w;
+  glw_rctx_t rc0;
+
+  w->glw_root->gr_can_externalize = 0;
+
+  rc0 = *rc;
+  glw_video_rctx_adjust(&rc0, gv);
+  glw_video_overlay_layout(gv, rc, &rc0);
+}
+
+
+/**
+ *
+ */
+static int
+glw_video_pointer_event(glw_t *w, const glw_pointer_event_t *gpe)
+{
+  glw_video_t *gv = (glw_video_t *)w;
+  video_decoder_t *vd = gv->gv_vd;
+  return glw_video_overlay_pointer_event(vd, gv->gv_width, gv->gv_height,
+					 gpe, gv->gv_mp);
+
+}
+
+/**
+ *
+ */
 static int 
 glw_video_widget_callback(glw_t *w, void *opaque, glw_signal_t signal, 
 			  void *extra)
 {
   glw_video_t *gv = (glw_video_t *)w;
   video_decoder_t *vd = gv->gv_vd;
-  glw_rctx_t *rc, rc0;
 
   switch(signal) {
-  case GLW_SIGNAL_LAYOUT:
-    w->glw_root->gr_can_externalize = 0;
-
-    rc = extra;
-    rc0 = *rc;
-    glw_video_rctx_adjust(&rc0, gv);
-    glw_video_overlay_layout(gv, rc, &rc0);
-    return 0;
-
-  case GLW_SIGNAL_EVENT:
-    return glw_video_widget_event(extra, gv);
 
   case GLW_SIGNAL_DESTROY:
     hts_mutex_lock(&gv->gv_surface_mutex);
@@ -568,10 +596,6 @@ glw_video_widget_callback(glw_t *w, void *opaque, glw_signal_t signal,
     video_playback_destroy(gv->gv_mp);
     video_decoder_stop(vd);
     return 0;
-
-  case GLW_SIGNAL_POINTER_EVENT:
-    return glw_video_overlay_pointer_event(vd, gv->gv_width, gv->gv_height,
-					   extra, gv->gv_mp);
 
   default:
     return 0;
@@ -604,7 +628,7 @@ glw_video_ctor(glw_t *w)
   hts_cond_init(&gv->gv_avail_queue_cond, &gv->gv_surface_mutex);
   hts_cond_init(&gv->gv_init_cond, &gv->gv_surface_mutex);
 
-  gv->gv_mp = mp_create("Video decoder", MP_VIDEO | MP_PRIMABLE, NULL);
+  gv->gv_mp = mp_create("Video decoder", MP_VIDEO | MP_PRIMABLE);
 #if CONFIG_GLW_BACKEND_OPENGL
   if(video_settings.vdpau)
     gv->gv_mp->mp_vdpau_dev = gr->gr_be.gbr_vdpau_dev;
@@ -705,6 +729,8 @@ set_how(glw_t *w, const char *how)
   glw_video_play(gv);
 }
 
+
+
 /**
  *
  */
@@ -765,60 +791,102 @@ set_audio_volume(glw_video_t *gv, float v)
 /**
  *
  */
-static void
-glw_video_set(glw_t *w, va_list ap)
+static int
+glw_video_set_float(glw_t *w, glw_attribute_t attrib, float value)
 {
   glw_video_t *gv = (glw_video_t *)w;
-  glw_attribute_t attrib;
-  prop_t *p, *p2;
+
+  switch(attrib) {
+  case GLW_ATTRIB_AUDIO_VOLUME:
+    set_audio_volume(gv, value);
+    return 0; // Setting audio volume does not need to repaint UI
+  default:
+    return -1;
+  }
+  return 1;
+}
+
+
+/**
+ *
+ */
+static int
+glw_video_set_int(glw_t *w, glw_attribute_t attrib, int value)
+{
+  glw_video_t *gv = (glw_video_t *)w;
   event_t *e;
 
-  do {
-    attrib = va_arg(ap, int);
-    switch(attrib) {
+  switch(attrib) {
+  case GLW_ATTRIB_PRIORITY:
+    gv->gv_priority = value;
 
-    case GLW_ATTRIB_PROPROOTS3:
-      p = va_arg(ap, void *);
-      assert(p != NULL);
-      p2 = prop_create(p, "media");
-      
-      prop_link(gv->gv_mp->mp_prop_root, p2);
-      
-      (void)va_arg(ap, void *); // Parent, just throw it away
-      (void)va_arg(ap, void *); // Clone, just throw it away
-      break;
+    e = event_create_int(EVENT_PLAYBACK_PRIORITY, value);
+    mp_enqueue_event(gv->gv_mp, e);
+    event_release(e);
+    return 0;
 
-    case GLW_ATTRIB_PRIORITY:
-      gv->gv_priority = va_arg(ap, int);
+  default:
+    return -1;
+  }
+  return 1;
+}
 
-      e = event_create_int(EVENT_PLAYBACK_PRIORITY, gv->gv_priority);
-      mp_enqueue_event(gv->gv_mp, e);
-      event_release(e);
-      break;
 
-    case GLW_ATTRIB_PROP_MODEL:
-      if(gv->gv_model)
-	prop_ref_dec(gv->gv_model);
+/**
+ *
+ */
+static void
+glw_video_set_roots(glw_t *w, prop_t *self, prop_t *parent, prop_t *clone)
+{
+  glw_video_t *gv = (glw_video_t *)w;
+  prop_link(gv->gv_mp->mp_prop_root, prop_create(self, "media"));
+}
 
-      gv->gv_model = prop_ref_inc(va_arg(ap, prop_t *));
-      break;
 
-    case GLW_ATTRIB_PROP_ORIGIN:
-      if(gv->gv_origin)
-	prop_ref_dec(gv->gv_origin);
 
-      gv->gv_origin = prop_ref_inc(va_arg(ap, prop_t *));
-      break;
+/**
+ *
+ */
+static int
+glw_video_set_prop(glw_t *w, glw_attribute_t attrib, prop_t *p)
+{
+  glw_video_t *gv = (glw_video_t *)w;
 
-    case GLW_ATTRIB_AUDIO_VOLUME:
-      set_audio_volume(gv, va_arg(ap, double));
-      break;
+  switch(attrib) {
+  case GLW_ATTRIB_PROP_MODEL:
+    prop_ref_dec(gv->gv_model);
+    gv->gv_model = prop_ref_inc(p);
+    return 0;
 
-    default:
-      GLW_ATTRIB_CHEW(attrib, ap);
-      break;
-    }
-  } while(attrib);
+  case GLW_ATTRIB_PROP_ORIGIN:
+    prop_ref_dec(gv->gv_origin);
+    gv->gv_origin = prop_ref_inc(p);
+    return 0;
+
+  default:
+    return -1;
+  }
+  return 1;
+}
+
+
+/**
+ *
+ */
+static int
+glw_video_set_rstr(glw_t *w, glw_attribute_t attrib, rstr_t *rstr)
+{
+  glw_video_t *gv = (glw_video_t *)w;
+
+  switch(attrib) {
+  case GLW_ATTRIB_PARENT_URL:
+    rstr_set(&gv->gv_parent_url_x, rstr);
+    return 0;
+
+  default:
+    return -1;
+  }
+  return 1;
 }
 
 
@@ -883,9 +951,14 @@ glw_video_render(glw_t *w, const glw_rctx_t *rc)
 static glw_class_t glw_video = {
   .gc_name = "video",
   .gc_instance_size = sizeof(glw_video_t),
-  .gc_set = glw_video_set,
+  .gc_set_int = glw_video_set_int,
+  .gc_set_float = glw_video_set_float,
+  .gc_set_roots = glw_video_set_roots,
+  .gc_set_prop = glw_video_set_prop,
+  .gc_set_rstr = glw_video_set_rstr,
   .gc_ctor = glw_video_ctor,
   .gc_dtor = glw_video_dtor,
+  .gc_layout = glw_video_layout,
   .gc_render = glw_video_render,
   .gc_newframe = glw_video_newframe,
   .gc_signal_handler = glw_video_widget_callback,
@@ -894,6 +967,8 @@ static glw_class_t glw_video = {
   .gc_set_how = set_how,
   .gc_freeze = freeze,
   .gc_thaw = thaw,
+  .gc_send_event = glw_video_widget_event,
+  .gc_pointer_event = glw_video_pointer_event,
 };
 
 GLW_REGISTER_CLASS(glw_video);
@@ -912,7 +987,15 @@ glw_video_configure(glw_video_t *gv, const glw_video_engine_t *engine)
     if(gv->gv_engine != NULL)
       gv->gv_engine->gve_reset(gv);
     
+    TAILQ_INIT(&gv->gv_avail_queue);
+    TAILQ_INIT(&gv->gv_parked_queue);
+    TAILQ_INIT(&gv->gv_displaying_queue);
+    TAILQ_INIT(&gv->gv_decoded_queue);
+
     gv->gv_engine = engine;
+
+    if(engine == NULL)
+      return 0;
 
     if(engine->gve_init_on_ui_thread) {
       gv->gv_need_init = 1;
@@ -1022,31 +1105,40 @@ glw_register_video_engine(glw_video_engine_t *gve)
 /**
  * Frame delivery from video decoder
  */
-static void 
+static int
 glw_video_input(const frame_info_t *fi, void *opaque)
 {
   glw_video_t *gv = opaque;
   glw_video_engine_t *gve;
+  int rval;
 
   hts_mutex_lock(&gv->gv_surface_mutex);
 
   if(fi == NULL) {
+
+    rval = 0;
 
     if(gv->gv_engine != NULL && gv->gv_engine->gve_blackout != NULL)
       gv->gv_engine->gve_blackout(gv);
 
   } else {
 
+    rval = 1;
+
     gv->gv_dar_num = fi->fi_dar_num;
     gv->gv_dar_den = fi->fi_dar_den;
     gv->gv_vheight = fi->fi_height;
-  
-    LIST_FOREACH(gve, &engines, gve_link)
-      if(gve->gve_type == fi->fi_type)
-	gve->gve_deliver(fi, gv);
+
+    LIST_FOREACH(gve, &engines, gve_link) {
+      if(gve->gve_type == fi->fi_type) {
+	rval = gve->gve_deliver(fi, gv, gve);
+        break;
+      }
+    }
   }
 
   hts_mutex_unlock(&gv->gv_surface_mutex);
+  return rval;
 }
 
 
@@ -1054,16 +1146,21 @@ glw_video_input(const frame_info_t *fi, void *opaque)
  *
  */
 static int
-glw_set_video_codec(uint32_t type, media_codec_t *mc, void *opaque)
+glw_set_video_codec(uint32_t type, media_codec_t *mc, void *opaque,
+		    const frame_info_t *fi)
 {
   glw_video_t *gv = opaque;
   glw_video_engine_t *gve;
   int r = -1;
   hts_mutex_lock(&gv->gv_surface_mutex);
   
+  gv->gv_dar_num = fi->fi_dar_num;
+  gv->gv_dar_den = fi->fi_dar_den;
+  gv->gv_vheight = fi->fi_height;
+
   LIST_FOREACH(gve, &engines, gve_link) {
     if(gve->gve_type == type) {
-      r = gve->gve_set_codec(mc, gv);
+      r = gve->gve_set_codec(mc, gv, fi);
       break;
     }
   }
@@ -1118,8 +1215,9 @@ glw_video_reset(glw_root_t *gr)
 #if ENABLE_LIBAV
 
 
-static void
-video_deliver_lavc(const frame_info_t *fi, glw_video_t *gv)
+static int
+video_deliver_lavc(const frame_info_t *fi, glw_video_t *gv,
+                   glw_video_engine_t *e)
 {
   frame_info_t nfi = *fi;
 
@@ -1134,29 +1232,34 @@ video_deliver_lavc(const frame_info_t *fi, glw_video_t *gv)
   case PIX_FMT_YUVJ422P:
   case PIX_FMT_YUVJ444P:
   case PIX_FMT_YUVJ440P:
-    avcodec_get_chroma_sub_sample(nfi.fi_pix_fmt, &nfi.fi_hshift,
-				  &nfi.fi_vshift);
+    av_pix_fmt_get_chroma_sub_sample(nfi.fi_pix_fmt, &nfi.fi_hshift,
+                                     &nfi.fi_vshift);
     
     nfi.fi_type = 'YUVP';
     break;
-    
-  case PIX_FMT_VDPAU_H264:
-  case PIX_FMT_VDPAU_MPEG1:
-  case PIX_FMT_VDPAU_MPEG2:
-  case PIX_FMT_VDPAU_WMV3:
-  case PIX_FMT_VDPAU_VC1:
-  case PIX_FMT_VDPAU_MPEG4:
+
+  case AV_PIX_FMT_VDPAU:
     nfi.fi_type = 'VDPA';
     break;
-    
+
+  case AV_PIX_FMT_BGR24:
+    nfi.fi_type = 'BGR';
+    break;
+
+  case AV_PIX_FMT_YUV420P10LE:
+    nfi.fi_type = 'YUVp';
+    break;
+
   default:
-    return;
+    return 1;
   }
   glw_video_engine_t *gve;
 
   LIST_FOREACH(gve, &engines, gve_link)
     if(gve->gve_type == nfi.fi_type)
-      gve->gve_deliver(&nfi, gv);
+      return gve->gve_deliver(&nfi, gv, gve);
+
+  return 1;
 }
 
 

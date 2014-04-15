@@ -28,6 +28,7 @@
 #include "audio.h"
 #include "libav.h"
 #include "htsmsg/htsmsg_store.h"
+#include "settings.h"
 
 #include <libavutil/avutil.h>
 #include <libavcodec/avcodec.h>
@@ -89,11 +90,49 @@ audio_mastervol_init(void)
 /**
  *
  */
-void 
+void
 audio_init(void)
 {
+  htsmsg_t *store = htsmsg_store_load("audio2");
+  if(store == NULL)
+    store = htsmsg_create_map();
+
+  prop_t *asettings =
+    settings_add_dir(NULL, _p("Audio settings"), NULL, NULL,
+                     _p("Setup audio output"),
+                     "settings:audio");
+
   audio_mastervol_init();
-  audio_class = audio_driver_init();
+  audio_class = audio_driver_init(asettings, store);
+
+  settings_create_separator(asettings,
+			    _p("Audio settings during video playback"));
+
+  gconf.setting_av_volume =
+    setting_create(SETTING_INT, asettings,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Audio gain adjustment during video playback")),
+                   SETTING_RANGE(-12, 12),
+                   SETTING_UNIT_CSTR("dB"),
+                   SETTING_HTSMSG("videovolume", store, "audio2"),
+                   SETTING_VALUE_ORIGIN("global"),
+                   NULL);
+
+  gconf.setting_av_sync =
+    setting_create(SETTING_INT, asettings,
+                   SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Audio delay")),
+                   SETTING_RANGE(-5000, 5000),
+                   SETTING_STEP(50),
+                   SETTING_UNIT_CSTR("ms"),
+                   SETTING_HTSMSG("avdelta", store, "audio2"),
+                   SETTING_VALUE_ORIGIN("global"),
+                   NULL);
+
+
+#if CONFIG_AUDIOTEST
+  audio_test_init(asettings);
+#endif
 }
 
 
@@ -120,7 +159,7 @@ audio_decoder_create(struct media_pipe *mp)
   ad->ad_ac = ac;
 
   ad->ad_tile_size = 1024;
-  ad->ad_frame = avcodec_alloc_frame();
+  ad->ad_frame = av_frame_alloc();
   ad->ad_pts = AV_NOPTS_VALUE;
   ad->ad_epoch = 0;
   ad->ad_vol_scale = 1.0f;
@@ -159,7 +198,7 @@ audio_decoder_destroy(struct audio_decoder *ad)
   mp_send_cmd(ad->ad_mp, &ad->ad_mp->mp_audio, MB_CTRL_EXIT);
   hts_thread_join(&ad->ad_tid);
   mq_flush(ad->ad_mp, &ad->ad_mp->mp_audio, 1);
-  avcodec_free_frame(&ad->ad_frame);
+  av_frame_free(&ad->ad_frame);
 
   if(ad->ad_avr != NULL) {
     avresample_close(ad->ad_avr);
@@ -264,13 +303,11 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
   media_queue_t *mq = &mp->mp_audio;
   int r;
   int got_frame;
-  AVPacket avpkt;
-  int offset = 0;
 
   if(mb->mb_skip || mb->mb_stream != mq->mq_stream) 
     return;
 
-  while(offset < mb->mb_size) {
+  while(mb->mb_size) {
 
     if(mb->mb_cw == NULL) {
       frame->sample_rate = mb->mb_rate;
@@ -300,30 +337,51 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 
       if(mc->codec_id != ad->ad_in_codec_id) {
 	AVCodec *codec = avcodec_find_decoder(mc->codec_id);
-	TRACE(TRACE_DEBUG, "audio", "Codec changed to %s",
-	      codec ? codec->name : "???");
+	TRACE(TRACE_DEBUG, "audio", "Codec changed to %s (0x%x)",
+	      codec ? codec->name : "???", mc->codec_id);
 	ad->ad_in_codec_id = mc->codec_id;
+	ad->ad_in_sample_rate = 0;
 
 	audio_cleanup_spdif_muxer(ad);
-  
-	if(ac->ac_check_passthru != NULL && codec != NULL &&
-	   ac->ac_check_passthru(ad, mc->codec_id)) {
 
+	ad->ad_mode = ac->ac_get_mode != NULL ?
+	  ac->ac_get_mode(ad, mc->codec_id,
+			  ctx ? ctx->extradata : NULL,
+			  ctx ? ctx->extradata_size : 0) : AUDIO_MODE_PCM;
+
+	if(ad->ad_mode == AUDIO_MODE_SPDIF) {
 	  audio_setup_spdif_muxer(ad, codec, mq);
+	} else if(ad->ad_mode == AUDIO_MODE_CODED) {
+	  
+	  hts_mutex_lock(&mp->mp_mutex);
+	  
+	  ac->ac_deliver_coded_locked(ad, mb->mb_data, mb->mb_size,
+				      mb->mb_pts, mb->mb_epoch);
+	  hts_mutex_unlock(&mp->mp_mutex);
+	  return;
 	}
       }
 
-      av_init_packet(&avpkt);
-      avpkt.data = mb->mb_data + offset;
-      avpkt.size = mb->mb_size - offset;
-
       if(ad->ad_spdif_muxer != NULL) {
-	av_write_frame(ad->ad_spdif_muxer, &avpkt);
-	avio_flush(ad->ad_spdif_muxer->pb);
+	mb->mb_pkt.stream_index = 0;
 	ad->ad_pts = mb->mb_pts;
 	ad->ad_epoch = mb->mb_epoch;
+
+	mb->mb_pts = AV_NOPTS_VALUE;
+	mb->mb_dts = AV_NOPTS_VALUE;
+	av_write_frame(ad->ad_spdif_muxer, &mb->mb_pkt);
+	avio_flush(ad->ad_spdif_muxer->pb);
 	return;
       }
+
+
+      if(ad->ad_mode == AUDIO_MODE_CODED) {
+	ad->ad_pts = mb->mb_pts;
+	ad->ad_epoch = mb->mb_epoch;
+	
+
+      }
+
 
       if(ctx == NULL) {
 
@@ -333,7 +391,7 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 	ctx = mc->ctx = avcodec_alloc_context3(codec);
 
 	if(ad->ad_stereo_downmix)
-	  ctx->request_channels = 2;
+          ctx->request_channel_layout = AV_CH_LAYOUT_STEREO;
 
 	if(avcodec_open2(mc->ctx, codec, NULL) < 0) {
 	  av_freep(&mc->ctx);
@@ -341,7 +399,7 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 	}
       }
 
-      r = avcodec_decode_audio4(ctx, frame, &got_frame, &avpkt);
+      r = avcodec_decode_audio4(ctx, frame, &got_frame, &mb->mb_pkt);
       if(r < 0)
 	return;
 
@@ -350,20 +408,27 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 
 	if(frame->sample_rate == 0 && mb->mb_cw->fmt_ctx)
 	  frame->sample_rate = mb->mb_cw->fmt_ctx->sample_rate;
-    
-	if(frame->sample_rate == 0)
+
+	if(frame->sample_rate == 0) {
+
+          if(!ad->ad_sample_rate_fail) {
+            ad->ad_sample_rate_fail = 1;
+            TRACE(TRACE_ERROR, "Audio",
+                  "Unable to determine sample rate");
+          }
 	  return;
+        }
       }
 
       if(frame->channel_layout == 0) {
-	switch(ctx->channels) {
-	case 1:
-	  frame->channel_layout = AV_CH_LAYOUT_MONO;
-	  break;
-	case 2:
-	  frame->channel_layout = AV_CH_LAYOUT_STEREO;
-	  break;
-	default:
+        frame->channel_layout = av_get_default_channel_layout(ctx->channels);
+        if(frame->channel_layout == 0) {
+
+          if(!ad->ad_channel_layout_fail) {
+            ad->ad_channel_layout_fail = 1;
+              TRACE(TRACE_ERROR, "Audio",
+                    "Unable to map %d channels to channel layout");
+          }
 	  return;
 	}
       }
@@ -373,10 +438,10 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 
     }
 
-    if(offset == 0 && mb->mb_pts != AV_NOPTS_VALUE) {
-        
+    if(mb->mb_pts != PTS_UNSET) {
+
       int od = 0, id = 0;
-          
+
       if(ad->ad_avr != NULL) {
 	od = avresample_available(ad->ad_avr) *
 	  1000000LL / ad->ad_out_sample_rate;
@@ -385,22 +450,25 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
       }
       ad->ad_pts = mb->mb_pts - od - id;
       ad->ad_epoch = mb->mb_epoch;
-      //        printf("od=%-20d id=%-20d PTS=%-20ld oPTS=%-20ld\n",
-      // od, id, mb->mb_pts, pts);
-        
+
       if(mb->mb_drive_clock)
 	mp_set_current_time(mp, mb->mb_pts - ad->ad_delay,
 			    mb->mb_epoch, mb->mb_delta);
+      mb->mb_pts = PTS_UNSET; // No longer valid
     }
 
-    offset += r;
+
+    mb->mb_data += r;
+    mb->mb_size -= r;
 
     if(got_frame) {
 
       if(frame->sample_rate    != ad->ad_in_sample_rate ||
 	 frame->format         != ad->ad_in_sample_format ||
-	 frame->channel_layout != ad->ad_in_channel_layout) {
-          
+	 frame->channel_layout != ad->ad_in_channel_layout ||
+	 ad->ad_want_reconfig) {
+
+	ad->ad_want_reconfig = 0;
 	ad->ad_in_sample_rate    = frame->sample_rate;
 	ad->ad_in_sample_format  = frame->format;
 	ad->ad_in_channel_layout = frame->channel_layout;
@@ -411,7 +479,7 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 	  ad->ad_avr = avresample_alloc_context();
 	else
 	  avresample_close(ad->ad_avr);
-          
+
 	av_opt_set_int(ad->ad_avr, "in_sample_fmt",
 		       ad->ad_in_sample_format, 0);
 	av_opt_set_int(ad->ad_avr, "in_sample_rate", 
@@ -425,7 +493,7 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 		       ad->ad_out_sample_rate, 0);
 	av_opt_set_int(ad->ad_avr, "out_channel_layout",
 		       ad->ad_out_channel_layout, 0);
-          
+
 	char buf1[128];
 	char buf2[128];
 
@@ -442,7 +510,7 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 	      av_get_sample_fmt_name(ad->ad_out_sample_format));
 
 	if(avresample_open(ad->ad_avr)) {
-	  TRACE(TRACE_ERROR, "AudioQueue", "Unable to open resampler");
+	  TRACE(TRACE_ERROR, "Audio", "Unable to open resampler");
 	  avresample_free(&ad->ad_avr);
 	}
 
@@ -451,10 +519,14 @@ audio_process_audio(audio_decoder_t *ad, media_buf_t *mb)
 	  ac->ac_set_volume(ad, ad->ad_vol_scale);
 	}
       }
-      if(ad->ad_avr != NULL)
+      if(ad->ad_avr != NULL) {
 	avresample_convert(ad->ad_avr, NULL, 0, 0,
 			   frame->data, frame->linesize[0],
 			   frame->nb_samples);
+      } else {
+	int delay = 1000000LL * frame->nb_samples / frame->sample_rate;
+	usleep(delay);
+      }
     }
   }
 }
@@ -538,6 +610,13 @@ audio_decode_thread(void *aux)
     if(mb->mb_data_type == MB_CTRL_UNBLOCK) {
       assert(blocked);
       blocked = 0;
+    } else if(ad->ad_mode == AUDIO_MODE_CODED && 
+	      ac->ac_deliver_coded_locked != NULL &&
+	      mb->mb_data_type == MB_AUDIO) {
+
+      ac->ac_deliver_coded_locked(ad, mb->mb_data, mb->mb_size,
+				  mb->mb_pts, mb->mb_epoch);
+
     } else {
 
       hts_mutex_unlock(&mp->mp_mutex);
@@ -545,6 +624,10 @@ audio_decode_thread(void *aux)
       switch(mb->mb_data_type) {
       case MB_AUDIO:
 	audio_process_audio(ad, mb);
+	break;
+
+      case MB_SET_PROP_STRING:
+        prop_set_string(mb->mb_prop, (void *)mb->mb_data);
 	break;
 
       case MB_CTRL_SET_VOLUME_MULTIPLIER:
@@ -566,6 +649,10 @@ audio_decode_thread(void *aux)
 	break;
 
       case MB_CTRL_FLUSH:
+        // Reset some error reporting filters
+        ad->ad_channel_layout_fail = 0;
+        ad->ad_sample_rate_fail = 0;
+
 	if(ac->ac_flush)
 	  ac->ac_flush(ad);
 	ad->ad_pts = AV_NOPTS_VALUE;

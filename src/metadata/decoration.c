@@ -24,7 +24,9 @@
 
 #include "showtime.h"
 #include "metadata.h"
+#include "metadata_str.h"
 #include "prop/prop.h"
+#include "playinfo.h"
 #include "prop/prop_nodefilter.h"
 #include "db/db_support.h"
 #include "db/kvstore.h"
@@ -1055,7 +1057,7 @@ mark_content_as(deco_browse_t *db, int content_type, int seen)
   LIST_FOREACH(di, &db->db_items_per_ct[content_type], di_type_link)
     urls[i++] = rstr_get(di->di_url);
 
-  metadb_mark_urls_as(urls, num_videos, seen, content_type);
+  playinfo_mark_urls_as(urls, num_videos, seen);
   free(urls);
 }
 
@@ -1207,7 +1209,7 @@ deco_thread(void *aux)
     r = prop_courier_wait(deco_courier, &q, do_timo);
     hts_mutex_lock(&deco_mutex);
 
-    prop_notify_dispatch(&q);
+    prop_notify_dispatch(&q, 0);
 
     if(r && deco_pendings) {
       deco_pendings = 0;
@@ -1252,7 +1254,7 @@ decoration_init(void)
 static void
 load_nfo(deco_item_t *di)
 {
-  buf_t *b = fa_load(rstr_get(di->di_url), NULL, NULL, 0, NULL, 0, NULL, NULL);
+  buf_t *b = fa_load(rstr_get(di->di_url), NULL);
   if(b == NULL)
     return;
 

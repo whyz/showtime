@@ -36,7 +36,7 @@
 #include "misc/queue.h"
 #include "video/video_playback.h"
 #include "video/video_settings.h"
-#include "metadata/metadata.h"
+#include "metadata/playinfo.h"
 #include "fileaccess/fileaccess.h"
 #include "fileaccess/fa_libav.h"
 #include "hls.h"
@@ -403,8 +403,10 @@ variant_update(hls_variant_t *hv, hls_t *h)
 
   HLS_TRACE(h, "Updating variant %d", hv->hv_bitrate);
 
-  buf_t *b = fa_load(hv->hv_url, NULL, errbuf, sizeof(errbuf), NULL, 
-		     FA_COMPRESSION, NULL, NULL);
+  buf_t *b = fa_load(hv->hv_url,
+                      FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+                      FA_LOAD_FLAGS(FA_COMPRESSION),
+                      NULL);
 
   if(b == NULL) {
     TRACE(TRACE_ERROR, "HLS", "Unable to open %s -- %s", hv->hv_url, errbuf);
@@ -613,9 +615,6 @@ segment_open(hls_t *h, hls_segment_t *hs, int fast_fail)
 
   int flags = FA_STREAMING;
 
-  if(fast_fail)
-    flags |= FA_FAST_FAIL;
-
   if(hs->hs_byte_size != -1 && hs->hs_byte_offset != -1)
     flags |= FA_BUFFERED_SMALL;
 
@@ -625,7 +624,12 @@ segment_open(hls_t *h, hls_segment_t *hs, int fast_fail)
   HLS_TRACE(h, "Open segment %d in %d bps @ %s",
 	    hs->hs_seq, hs->hs_variant->hv_bitrate, hs->hs_url);
 
-  fh = fa_open_ex(hs->hs_url, errbuf, sizeof(errbuf), flags, NULL);
+  fa_open_extra_t foe = {0};
+
+  if(fast_fail)
+    foe.foe_open_timeout = 2000;
+
+  fh = fa_open_ex(hs->hs_url, errbuf, sizeof(errbuf), flags, &foe);
   if(fh == NULL) {
     TRACE(TRACE_INFO, "HLS", "Unable to open segment %s -- %s",
 	  hs->hs_url, errbuf);
@@ -643,8 +647,9 @@ segment_open(hls_t *h, hls_segment_t *hs, int fast_fail)
 
     if(!rstr_eq(hs->hs_key_url, hv->hv_key_url)) {
       buf_release(hv->hv_key);
-      hv->hv_key = fa_load(rstr_get(hs->hs_key_url), NULL,
-			   errbuf, sizeof(errbuf), NULL, 0, NULL, NULL);
+      hv->hv_key = fa_load(rstr_get(hs->hs_key_url),
+                            FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+                            NULL);
       if(hv->hv_key == NULL) {
 	TRACE(TRACE_ERROR, "HLS", "Unable to load key file %s",
 	      rstr_get(hs->hs_key_url));
@@ -658,7 +663,7 @@ segment_open(hls_t *h, hls_segment_t *hs, int fast_fail)
     fh = fa_aescbc_open(fh, hs->hs_iv, buf_c8(hv->hv_key));
   }
 
-  AVIOContext *avio = fa_libav_reopen(fh);
+  AVIOContext *avio = fa_libav_reopen(fh, 0);
   hs->hs_fctx = avformat_alloc_context();
   hs->hs_fctx->pb = avio;
 
@@ -681,12 +686,12 @@ segment_open(hls_t *h, hls_segment_t *hs, int fast_fail)
 
     switch(ctx->codec_type) {
     case AVMEDIA_TYPE_VIDEO:
-      if(hs->hs_vstream == -1 && ctx->codec_id == CODEC_ID_H264)
+      if(hs->hs_vstream == -1 && ctx->codec_id == AV_CODEC_ID_H264)
 	hs->hs_vstream = j;
       break;
 
     case AVMEDIA_TYPE_AUDIO:
-      if(hs->hs_astream == -1 && ctx->codec_id == CODEC_ID_AAC)
+      if(hs->hs_astream == -1 && ctx->codec_id == AV_CODEC_ID_AAC)
 	hs->hs_astream = j;
       break;
 	
@@ -1085,6 +1090,8 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
   sub_scanner_t *ss = NULL;
   int sub_scanning_done = 0;
 
+  int enqueued_something = 0;
+
   h->h_playback_priority = va->priority;
 
   mp->mp_video.mq_stream = 0;
@@ -1093,11 +1100,10 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
   if(!(va->flags & BACKEND_VIDEO_NO_AUDIO))
     mp_become_primary(mp);
 
-  prop_set_string(mp->mp_prop_type, "video");
-
   mp_set_playstatus_by_hold(mp, 0, NULL);
 
-  mp_configure(mp, MP_PLAY_CAPS_SEEK | MP_PLAY_CAPS_PAUSE, MP_BUFFER_DEEP, 0);
+  mp_configure(mp, MP_PLAY_CAPS_SEEK | MP_PLAY_CAPS_PAUSE, MP_BUFFER_DEEP, 0,
+               "video");
 
   hls_demuxer_t *hd = &h->h_primary;
 
@@ -1110,7 +1116,7 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
   if(va->flags & BACKEND_VIDEO_RESUME ||
      (video_settings.resume_mode == VIDEO_RESUME_YES &&
       !(va->flags & BACKEND_VIDEO_START_FROM_BEGINNING))) {
-    int64_t start = video_get_restartpos(canonical_url) * 1000;
+    int64_t start = playinfo_get_restartpos(canonical_url) * 1000;
     if(start) {
       mp->mp_seek_base = start;
       hls_seek(h, start, start, 1);
@@ -1212,6 +1218,8 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
       }
 
       mb->mb_keyframe = !!(pkt.flags & AV_PKT_FLAG_KEY);
+      av_free_packet(&pkt);
+
     }
 
     if(mb == MB_NYA || mb == NULL) {
@@ -1231,6 +1239,11 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
     } else if((e = mb_enqueue_with_events_ex(mp, mq, mb,
 					     &h->h_blocked)) == NULL) {
       mb = NULL; /* Enqueue succeeded */
+
+      if(!enqueued_something) {
+	prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
+	enqueued_something = 1;
+      }
       continue;
     }
 
@@ -1246,7 +1259,7 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
 	if(!h->h_live &&
            (sec < restartpos_last || sec >= restartpos_last + 5)) {
 	  restartpos_last = sec;
-	  metadb_set_video_restartpos(canonical_url, ets->ts / 1000);
+	  playinfo_set_restartpos(canonical_url, ets->ts / 1000, 1);
 	}
       }
 
@@ -1290,14 +1303,14 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
     int spp = mp->mp_duration ? mp->mp_seek_base * 100 / mp->mp_duration : 0;
 
     if(spp >= video_settings.played_threshold || event_is_type(e, EVENT_EOF)) {
-      metadb_set_video_restartpos(canonical_url, -1);
-      metadb_register_play(canonical_url, 1, CONTENT_VIDEO);
+      playinfo_set_restartpos(canonical_url, -1, 0);
+      playinfo_register_play(canonical_url, 1);
       TRACE(TRACE_DEBUG, "Video",
 	    "Playback reached %d%%, counting as played (%s)",
 	    spp, canonical_url);
     } else if(last_timestamp_presented != PTS_UNSET) {
-      metadb_set_video_restartpos(canonical_url,
-				  last_timestamp_presented / 1000);
+      playinfo_set_restartpos(canonical_url, last_timestamp_presented / 1000,
+			      0);
     }
   }
   // Shutdown
@@ -1460,14 +1473,16 @@ hls_play_extm3u(char *buf, const char *url, media_pipe_t *mp,
     return NULL;
   }
 
+  prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 1);
+
   hls_t h;
   memset(&h, 0, sizeof(h));
   hls_demuxer_init(&h.h_primary);
   h.h_mp = mp;
   h.h_baseurl = url;
   h.h_fmt = av_find_input_format("mpegts");
-  h.h_codec_h264 = media_codec_create(CODEC_ID_H264, 0, NULL, NULL, NULL, mp);
-  h.h_codec_aac  = media_codec_create(CODEC_ID_AAC,  0, NULL, NULL, NULL, mp);
+  h.h_codec_h264 = media_codec_create(AV_CODEC_ID_H264, 0, NULL, NULL, NULL, mp);
+  h.h_codec_aac  = media_codec_create(AV_CODEC_ID_AAC,  0, NULL, NULL, NULL, mp);
   h.h_debug = gconf.enable_hls_debug;
 
   hls_variant_t *hv = NULL;
@@ -1513,12 +1528,18 @@ hls_playvideo(const char *url, media_pipe_t *mp,
               const video_args_t *va0)
 {
   buf_t *buf;
+
+  prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 1);
+
   url += strlen("hls:");
   if(!strcmp(url, "test"))
     url = TESTURL;
   if(!strcmp(url, "test2"))
     url = TESTURL2;
-  buf = fa_load(url, NULL, errbuf, errlen, NULL, FA_COMPRESSION, NULL, NULL);
+  buf = fa_load(url,
+                 FA_LOAD_ERRBUF(errbuf, errlen),
+                 FA_LOAD_FLAGS(FA_COMPRESSION),
+                 NULL);
 
   if(buf == NULL)
     return NULL;

@@ -3,7 +3,6 @@ native: Русский
 maintainer: pvc1 <pvc1@yandex.ru> 
 #
 # ./ext/miner/miner.c
-#
 id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
 msg: Нравится Showtime? Вы можете пожертвовать деньги на проект через майнинг Litecoins на вашей PS3
 
@@ -387,12 +386,6 @@ id: Playback status
 msg: Статус воспроизведения
 
 #
-# ./glwskins/default/pages/wideinfo/video.view
-#
-id: Seen:
-msg: Воспроизведено:
-
-#
 # ./glwskins/default/playdecks/dvd.view
 #
 id: Chapter: %d
@@ -437,8 +430,14 @@ msg: Медиа-файл не загружен
 id: CPU Temp
 msg: Температура CPU
 
+id: Fragmentation
+msg: Фрагментация
+
 id: GPU Temp
 msg: Температура GPU
+
+id: Inactive mem
+msg: Неактивная память
 
 id: Memory usage
 msg: Использование памяти
@@ -698,8 +697,11 @@ msg: Вы уверены, что хотите удалить:
 id: Enable file deletion from item menu
 msg: Включить удаление файла из пункта меню
 
-id: File access
-msg: Доступ к файлу
+id: File browsing
+msg: Просмотр файлов
+
+id: Show filename extensions
+msg: Отображать расширения у файлов
 
 id: %d archive parts
 msg[0]: частей архива: %d

@@ -23,16 +23,17 @@
 #define BACKEND_H__
 
 #include "prop/prop.h"
+#include "misc/cancellable.h"
 
-struct pixmap;
+struct image;
+struct image_meta;
 struct media_pipe;
 struct navigator;
 struct event;
-struct image_meta;
 struct vsource_list;
 typedef struct video_queue video_queue_t;
 
-typedef int (be_load_cb_t)(void *opaque, int loaded, int total);
+typedef void (be_load_cb_t)(void *opaque, int loaded, int total);
 
 /**
  * Kept in sync with service_status_t
@@ -75,6 +76,8 @@ typedef struct video_args {
   int64_t filesize;
   uint64_t opensubhash;
   uint8_t subdbhash[16]; // md5sum of first 64k + last 64k
+  const char *parent_url;
+  const char *parent_title;
 
 } video_args_t;
 
@@ -108,11 +111,11 @@ typedef struct backend {
 				 char *errbuf, size_t errlen, int paused,
 				 const char *mimetype);
 
-  struct pixmap *(*be_imageloader)(const char *url, const struct image_meta *im,
-				   const char **vpaths,
-				   char *errbuf, size_t errlen,
-				   int *cache_control,
-				   be_load_cb_t *cb, void *opaque);
+  struct image *(*be_imageloader)(const char *url, const struct image_meta *im,
+                                  const char **vpaths,
+                                  char *errbuf, size_t errlen,
+                                  int *cache_control,
+                                  cancellable_t *c);
 
   int (*be_normalize)(const char *url, char *dst, size_t dstlen);
 
@@ -150,11 +153,11 @@ struct event *backend_play_audio(const char *url, struct media_pipe *mp,
   __attribute__ ((warn_unused_result));
 
 
-struct pixmap *backend_imageloader(rstr_t *url, const struct image_meta *im,
-				   const char **vpaths,
-				   char *errbuf, size_t errlen,
-				   int *cache_control,
-				   be_load_cb_t *cb, void *opaque)
+struct image *backend_imageloader(rstr_t *url, const struct image_meta *im,
+                                  const char **vpaths,
+                                  char *errbuf, size_t errlen,
+                                  int *cache_control,
+                                  cancellable_t *c)
      __attribute__ ((warn_unused_result));
 
 backend_t *backend_canhandle(const char *url)
@@ -172,8 +175,11 @@ int backend_open_video(prop_t *page, const char *url, int sync);
 int backend_resolve_item(const char *url, prop_t *item)
      __attribute__ ((warn_unused_result));
 
+rstr_t *backend_normalize(rstr_t *url);
 
 void backend_search(prop_t *model, const char *url);
+
+int backend_page_open(prop_t *root, const char *url0, int sync);
 
 #define BE_REGISTER(name) \
   static void  __attribute__((constructor)) backend_init_ ## name(void) {\

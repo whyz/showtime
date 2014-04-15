@@ -22,7 +22,8 @@
 #ifndef GLW_TEXTURE_H
 #define GLW_TEXTURE_H
 
-#include "misc/pixmap.h"
+#include "image/pixmap.h"
+#include "misc/cancellable.h"
 
 #define GLW_TEX_CORNER_TOPLEFT        GLW_IMAGE_CORNER_TOPLEFT
 #define GLW_TEX_CORNER_TOPRIGHT       GLW_IMAGE_CORNER_TOPRIGHT
@@ -62,6 +63,8 @@ typedef struct glw_loadable_texture {
 
   pixmap_t *glt_pixmap;
 
+  cancellable_t glt_cancellable;
+
   int16_t glt_req_xs;
   int16_t glt_req_ys;
 
@@ -70,7 +73,7 @@ typedef struct glw_loadable_texture {
 
   uint8_t glt_orientation;
   uint8_t glt_stash;
-  uint8_t glt_original_type;
+  uint8_t glt_origin_type;
 
   int glt_format;
 

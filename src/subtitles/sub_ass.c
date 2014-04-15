@@ -23,13 +23,15 @@
 #include "showtime.h"
 #include "video_overlay.h"
 #include "text/text.h"
-#include "misc/pixmap.h"
+#include "image/pixmap.h"
 #include "misc/str.h"
 #include "sub.h"
 #include "video/video_settings.h"
 #include "ext_subtitles.h"
 #include "subtitles.h"
 #include "misc/charset_detector.h"
+
+// #define ASS_DEBUG
 
 /**
  *
@@ -262,9 +264,11 @@ ass_parse_v4style(ass_decoder_ctx_t *adc, const char *str)
 
     if(!strcasecmp(key, "name"))
       mystrset(&as->as_name, val);
-    else if(!strcasecmp(key, "alignment"))
+    else if(!strcasecmp(key, "alignment")) {
       as->as_alignment = atoi(val);
-    else if(!strcasecmp(key, "marginl"))
+      if(as->as_alignment < 1 || as->as_alignment > 9)
+	as->as_alignment = 1;
+    } else if(!strcasecmp(key, "marginl"))
       as->as_margin_left = atoi(val);
     else if(!strcasecmp(key, "marginr"))
       as->as_margin_right = atoi(val);
@@ -397,7 +401,9 @@ ass_decode_lines(ass_decoder_ctx_t *adc, char *s)
 
   for(; l = strcspn(s, "\r\n"), *s; s += l+1+strspn(s+l+1, "\r\n")) {
     s[l] = 0;
-    //    printf("%s\n", s);
+#ifdef ASS_DEBUG
+    printf("ass/line: %s\n", s);
+#endif
     if(ass_decode_line(adc, s))
       break;
   }
@@ -429,8 +435,12 @@ typedef struct ass_dialogue {
 
   int ad_fadein;
   int ad_fadeout;
+  
+  int16_t ad_x;
+  int16_t ad_y;
 
-  int ad_alignment;
+  int8_t ad_alignment;
+  int8_t ad_absolute_pos;
 
 } ass_dialoge_t;
 
@@ -442,11 +452,17 @@ ad_txt_append(ass_dialoge_t *ad, int v)
 }
 
 
+static inline int isd(char c)
+{
+  return c >= '0' && c <= '9';
+}
+
 /**
  *
  */
 static void
-ass_handle_override(ass_dialoge_t *ad, const char *src, int len)
+ass_handle_override(ass_dialoge_t *ad, const char *src, int len,
+		    int fontdomain)
 {
   char *str, *cmd;
   int v1, v2;
@@ -458,36 +474,55 @@ ass_handle_override(ass_dialoge_t *ad, const char *src, int len)
   str[len] = 0;
   
   while((cmd = strchr(str, '\\')) != NULL) {
+  next:
     str = ++cmd;
-    if(str[0] == 'i') {
+    if(str[0] == 'i' && isd(str[1])) {
       ad_txt_append(ad, str[1] == '1' ? TR_CODE_ITALIC_ON : TR_CODE_ITALIC_OFF);
-    } else if(str[0] == 'b') {
+    } else if(str[0] == 'b' && isd(str[1])) {
       ad_txt_append(ad, str[1] == '1' ? TR_CODE_BOLD_ON : TR_CODE_BOLD_OFF);
     } else if(sscanf(str, "fad(%d,%d)", &v1, &v2) == 2) {
       ad->ad_fadein = v1 * 1000;
       ad->ad_fadeout = v2 * 1000;
-    } else if(str[0] == 'c') {
-      str++;
-      int code = TR_CODE_COLOR;
-      if(*str != '&') {
-        switch(*str) {
-        default:  code = TR_CODE_COLOR;         break;
-        case '2': /* Not supported by us */     break;
-        case '3': code = TR_CODE_OUTLINE_COLOR; break;
-        case '4': code = TR_CODE_SHADOW_COLOR;  break;
-        }
-        str++;
-      }
-      uint32_t col = ass_parse_color(str);
-      ad_txt_append(ad, code | col);
-      break;
+    } else if(sscanf(str, "pos(%d,%d)", &v1, &v2) == 2) {
+      ad->ad_x = v1;
+      ad->ad_y = v2;
+      ad->ad_absolute_pos = 1;
+    } else if(!memcmp(str, "fscx", 4)) {
+      v1 = atoi(str + 4);
+      if(v1 > 0)
+	ad_txt_append(ad, TR_CODE_SIZE_PX + (v1 & 0xff));
+    } else if(str[0] == 'f' && str[1] == 's' && isd(str[2])) {
+      v1 = atoi(str + 2);
+      if(v1 > 3)
+	ad_txt_append(ad, TR_CODE_SIZE_PX + (v1 & 0xff));
 
-      // Alignment
+    } else if(str[0] == 'c' || (str[0] == '1' && str[1] == 'c')) {
+       ad_txt_append(ad, TR_CODE_COLOR | ass_parse_color(str+2));
+    } else if((str[0] == '3' && str[1] == 'c')) {
+       ad_txt_append(ad, TR_CODE_OUTLINE_COLOR | ass_parse_color(str+2));
+    } else if((str[0] == '4' && str[1] == 'c')) {
+       ad_txt_append(ad, TR_CODE_SHADOW_COLOR | ass_parse_color(str+2));
+    } else if(str[0] == 'f' && str[1] == 'n') {
+      str += 2;
+      cmd = strchr(str, '\\');
+      if(cmd != NULL)
+	*cmd = 0;
+
+      ad_txt_append(ad, TR_CODE_FONT_FAMILY |
+		    freetype_family_id(str, fontdomain));
+
+      if(cmd == NULL)
+	break;
+
+      goto next;
+
     } else if(str[0] == 'a' && str[1] == 'n') {
       // Alignment
       ad->ad_alignment = atoi(str+2);
     } else {
-      TRACE(TRACE_DEBUG, "ASS", "Can't handle override: %s", str);
+#ifdef ASS_DEBUG
+      printf("ass: Can't handle override: %s\n", str);
+#endif
     }
   }
 }
@@ -515,6 +550,10 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
 
   if(fmt == NULL)
     return NULL;
+
+#ifdef ASS_DEBUG
+  printf("ass/dialogue: %s\n", line);
+#endif
 
   while(*fmt && *line && *line != '\n' && *line != '\r') {
     gettoken(key, sizeof(key), &fmt);
@@ -606,7 +645,7 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
       if(end == NULL)
 	break;
 
-      ass_handle_override(&ad, str, end - str);
+      ass_handle_override(&ad, str, end - str, fontdomain);
 
       str = end + 1;
       continue;
@@ -629,6 +668,11 @@ ad_dialogue_decode(const ass_decoder_ctx_t *adc, const char *line,
   vo->vo_stop = end;
   vo->vo_fadein = ad.ad_fadein;
   vo->vo_fadeout = ad.ad_fadeout;
+
+  vo->vo_x = ad.ad_x;
+  vo->vo_y = ad.ad_y;
+  vo->vo_abspos = ad.ad_absolute_pos;
+
   vo->vo_alignment = ad.ad_alignment ?: as->as_alignment;
 
   vo->vo_padding_left  =  as->as_margin_left;
@@ -727,26 +771,8 @@ load_ssa(const char *url, char *buf, size_t len)
 {
   ext_subtitles_t *es = calloc(1, sizeof(ext_subtitles_t));
   ass_decoder_ctx_t adc;
+
   adc_init(&adc);
-
-  es->es_utf8_clean = utf8_verify(buf);
-  if(!es->es_utf8_clean) {
-    const char *lang = NULL;
-    const char *name = charset_detector(buf, len, &lang);
-
-    if(name != NULL) {
-      TRACE(TRACE_DEBUG, "SSA",
-	    "%s is not UTF-8 clean, detected encoding %s, language %s",
-	    url, name, lang);
-      es->es_detected_charset = charset_get(name);
-    } else {
-      TRACE(TRACE_DEBUG, "SSA",
-	    "%s is not UTF-8 clean, unable to figure encoding", url);
-    }
-  } else {
-    TRACE(TRACE_DEBUG, "SSA", "%s is UTF-8 clean", url);
-  }
-
   TAILQ_INIT(&es->es_entries);
 
   adc.adc_dialogue_handler = load_ssa_dialogue;

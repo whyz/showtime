@@ -32,7 +32,7 @@
 #include "upnp.h"
 #include "fileaccess/fileaccess.h"
 #include "db/kvstore.h"
-
+#include "metadata/playinfo.h"
 
 /**
  * UPNP browse request
@@ -204,7 +204,7 @@ make_imageItem(prop_t *c, prop_t *m, htsmsg_t *item)
  */
 static void
 add_item(htsmsg_t *item, prop_t *root, const char *trackid, prop_t **trackptr,
-	 prop_sub_t *skip, const char *baseurl, void *db)
+	 prop_sub_t *skip, const char *baseurl)
 {
   const char *cls, *id, *url;
 
@@ -222,9 +222,10 @@ add_item(htsmsg_t *item, prop_t *root, const char *trackid, prop_t **trackptr,
     return;
 
   url = htsmsg_get_str_multi(item, "res", "cdata", NULL);
+  if(url == NULL)
+    return;
 
   prop_t *c = prop_create_root(NULL);
-		  
 
   prop_t *m = prop_create(c, "metadata");
   item_set_duration(m, item);
@@ -233,16 +234,14 @@ add_item(htsmsg_t *item, prop_t *root, const char *trackid, prop_t **trackptr,
 	      strlen("object.item.audioItem"))) {
     prop_set_string(prop_create(c, "url"), url);
     make_audioItem(c, m, item);
-    if(db != NULL)
-      metadb_bind_url_to_prop(db, url, c);
+    playinfo_bind_url_to_prop(url, c);
   } else if(!strncmp(cls, "object.item.videoItem",
 		     strlen("object.item.videoItem"))) {
 
     char vurl[URL_MAX];
     snprintf(vurl, sizeof(vurl), "%s:%s", baseurl, id);
     make_videoItem(c, m, item, vurl);
-    if(db != NULL)
-      metadb_bind_url_to_prop(db, url, c);
+    playinfo_bind_url_to_prop(url, c);
   } else if(!strncmp(cls, "object.item.imageItem",
 		     strlen("object.item.imageItem"))) {
     prop_set_string(prop_create(c, "url"), url);
@@ -311,20 +310,17 @@ nodes_from_meta(htsmsg_t *meta, prop_t *root, const char *trackid,
   if(items == NULL)
     return;
 
-  void *db = metadb_get();
-
   HTSMSG_FOREACH(f, items) {
     if(!strcmp(f->hmf_name, "item")) {
       htsmsg_t *item = htsmsg_get_map_by_field(f);
       if(item != NULL)
-	add_item(item, root, trackid, trackptr, skip, baseurl, db);
+	add_item(item, root, trackid, trackptr, skip, baseurl);
     } else if(baseurl != NULL && !strcmp(f->hmf_name, "container")) {
       htsmsg_t *container = htsmsg_get_map_by_field(f);
       if(container != NULL)
 	add_container(container, root, baseurl, skip);
     }
   }
-  metadb_close(db);
 }
 
 
@@ -1006,30 +1002,6 @@ browse_self(upnp_browse_t *ub, int sync)
   htsmsg_destroy(out);
 }
 
-
-
-/**
- *
- */
-static void *
-upnp_browse_thread(void *aux)
-{
-  upnp_browse_t *ub = aux;
-
-  if(upnp_browse_resolve(ub)) {
-    ub_destroy(ub);
-    return NULL;
-  }
-
-  // Check what we are browsing
-  browse_self(ub, 0);
-
-
-  ub_destroy(ub);
-  return NULL;
-}
-
-
 /**
  *
  */
@@ -1062,15 +1034,9 @@ be_upnp_browse(prop_t *page, const char *url, int sync)
 
   ub->ub_title = prop_create_r(metadata, "title");
 
-  if(sync) {
-
-    if(!upnp_browse_resolve(ub))
-      browse_self(ub, 1);
-    ub_destroy(ub);
-
-  } else {
-    hts_thread_create_detached("upnpbrowse", upnp_browse_thread, ub,
-                               THREAD_PRIO_MODEL);
-  }
+  if(!upnp_browse_resolve(ub))
+    browse_self(ub, sync);
+  
+  ub_destroy(ub);
   return 0;
 }

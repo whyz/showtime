@@ -32,7 +32,8 @@
 #include "navigator.h"
 #include "event.h"
 #include "notifications.h"
-#include "misc/pixmap.h"
+#include "image/image.h"
+#include "image/pixmap.h"
 #include "htsmsg/htsmsg_json.h"
 #include "media.h"
 
@@ -42,6 +43,10 @@ prop_t *global_sources; // Move someplace else
 LIST_HEAD(backend_list, backend);
 
 static struct backend_list backends;
+
+static hts_mutex_t imageloader_mutex;
+static hts_cond_t imageloader_cond;
+
 
 /**
  *
@@ -60,6 +65,9 @@ void
 backend_init(void)
 {
   backend_t *be;
+
+  hts_mutex_init(&imageloader_mutex);
+  hts_cond_init(&imageloader_cond, &imageloader_mutex);
 
   LIST_FOREACH(be, &backends, be_global_link)
     if(be->be_init != NULL)
@@ -97,7 +105,7 @@ backend_play_video(const char *url, struct media_pipe *mp,
     return NULL;
   }
 
-  mp_set_url(mp, va->canonical_url);
+  mp_set_url(mp, va->canonical_url, va->parent_url, va->parent_title);
 
   return nb->be_play_video(url, mp, errbuf, errlen, vq, vsl, va);
 }
@@ -134,8 +142,8 @@ be_page_canhandle(const char *url)
 /**
  *
  */
-static int
-be_page_open(prop_t *root, const char *url0, int sync)
+int
+backend_page_open(prop_t *root, const char *url0, int sync)
 {
   prop_t *src = prop_create(root, "model");
   prop_t *metadata = prop_create(src, "metadata");
@@ -153,32 +161,31 @@ be_page_open(prop_t *root, const char *url0, int sync)
  */
 static backend_t be_page = {
   .be_canhandle = be_page_canhandle,
-  .be_open = be_page_open,
+  .be_open = backend_page_open,
 };
 
 BE_REGISTER(page);
 
 
+typedef struct loading_image {
+  LIST_ENTRY(loading_image) li_link;
+  int li_refcount;
+  int li_done;
+  char li_url[0];
+} loading_image_t;
 
 
-typedef struct cached_image {
-  LIST_ENTRY(cached_image) ci_link;
-  
-  rstr_t *ci_url;
-  pixmap_t *ci_pixmap;
+LIST_HEAD(loading_image_list, loading_image);
 
-} cached_image_t;
-
-
-
+static struct loading_image_list loading_images;
 
 /**
  *
  */
-struct pixmap *
+image_t *
 backend_imageloader(rstr_t *url0, const image_meta_t *im0,
 		    const char **vpaths, char *errbuf, size_t errlen,
-		    int *cache_control, be_load_cb_t *cb, void *opaque)
+		    int *cache_control, cancellable_t *c)
 {
   const char *url = rstr_get(url0);
   htsmsg_t *m = NULL;
@@ -256,44 +263,71 @@ backend_imageloader(rstr_t *url0, const image_meta_t *im0,
   }
 
 
+  image_t *img = NULL;
+
   im.im_margin = MAX(im.im_shadow * 2, im.im_margin);
   backend_t *nb = backend_canhandle(url);
-  pixmap_t *pm = NULL;
   if(nb == NULL || nb->be_imageloader == NULL) {
     snprintf(errbuf, errlen, "No backend for URL");
+    goto out;
+  }
+
+  hts_mutex_lock(&imageloader_mutex);
+
+  loading_image_t *li;
+  LIST_FOREACH(li, &loading_images, li_link)
+    if(!strcmp(li->li_url, url))
+      break;
+
+  if(li == NULL) {
+    li = malloc(sizeof(loading_image_t) + strlen(url) + 1);
+    LIST_INSERT_HEAD(&loading_images, li, li_link);
+    li->li_done = 0;
+    li->li_refcount = 1;
+    strcpy(li->li_url, url);
   } else {
-    pm = nb->be_imageloader(url, &im, vpaths, errbuf, errlen, cache_control,
-			    cb, opaque);
+    li->li_refcount++;
 
-    if(pm != NULL && pm != NOT_MODIFIED && !im.im_no_decoding) {
+    while(li->li_done == 0)
+      hts_cond_wait(&imageloader_cond, &imageloader_mutex);
 
-      if(cb != NULL && cb(opaque, pm->pm_size, pm->pm_size)) {
-	snprintf(errbuf, errlen, "Aborted");
-	pixmap_release(pm);
-	return NULL;
-      }
+    li->li_done = 0;
+  }
 
-      uint8_t original_type = pm->pm_original_type ?: pm->pm_type;
+  hts_mutex_unlock(&imageloader_mutex);
 
-      pm = pixmap_decode(pm, &im, errbuf, errlen);
+  img = nb->be_imageloader(url, &im, vpaths, errbuf, errlen, cache_control, c);
 
-      if(pm != NULL && pm->pm_type == PIXMAP_VECTOR)
-        pm = pixmap_rasterize_ft(pm);
+  if(img != NULL && img != NOT_MODIFIED && !im.im_no_decoding) {
 
-      if(pm != NULL && im.im_shadow)
-        pixmap_drop_shadow(pm, im.im_shadow, im.im_shadow);
+    if(c != NULL && c->cancelled) {
+      snprintf(errbuf, errlen, "Cancelled");
+      image_release(img);
+      img = NULL;
+    } else {
 
-      if(pm != NULL && im.im_corner_radius)
-	pm = pixmap_rounded_corners(pm, im.im_corner_radius,
-				    im.im_corner_selection);
+      img = image_decode(img, &im, errbuf, errlen);
 
-      if(pm != NULL)
-        pm->pm_original_type = original_type;
     }
   }
+
+  hts_mutex_lock(&imageloader_mutex);
+  li->li_refcount--;
+
+  if(li->li_refcount == 0) {
+    LIST_REMOVE(li, li_link);
+    free(li);
+  } else {
+    li->li_done = 1;
+    hts_cond_broadcast(&imageloader_cond);
+  }
+
+  hts_mutex_unlock(&imageloader_mutex);
+
+ out:
   if(m)
     htsmsg_destroy(m);
-  return pm;
+  return img;
 }
 
 
@@ -403,6 +437,28 @@ backend_open(prop_t *page, const char *url, int sync)
 
   be->be_open(page, url, sync);
   return 0;
+}
+
+
+/**
+ *
+ */
+rstr_t *
+backend_normalize(rstr_t *url)
+{
+  if(url == NULL)
+    return NULL;
+
+  backend_t *be = backend_canhandle(rstr_get(url));
+  char tmp[1024];
+  if(be == NULL || be->be_normalize == NULL)
+    return url;
+
+  if(!be->be_normalize(rstr_get(url), tmp, sizeof(tmp))) {
+    rstr_release(url);
+    return rstr_alloc(tmp);
+  }
+  return url;
 }
 
 

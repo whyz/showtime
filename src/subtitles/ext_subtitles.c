@@ -174,6 +174,12 @@ is_srt(const char *buf, size_t len)
   int n;
   int64_t start, stop;
 
+  // Skip over any initial control characters (Issue #1885)
+  while(len && *buf && *buf < 32) {
+    len--;
+    buf++;
+  }
+
   linereader_init(&lr, buf, len);
 
   if(linereader_next(&lr) < 0)
@@ -210,27 +216,27 @@ is_ass(const char *buf, size_t len)
  *
  */
 static ext_subtitles_t *
-load_srt(const char *url, const char *buf, size_t len, int force_utf8)
+load_srt(const char *url, const char *buf, size_t len)
 {
   int n;
   size_t tlen = 0;
   int64_t start, stop, pstart = -1, pstop = -1;
   linereader_t lr;
   ext_subtitles_t *es = calloc(1, sizeof(ext_subtitles_t));
-  char *txt = NULL, *tmp = NULL;
+  char *txt = NULL;
   size_t txtoff = 0;
-  
-  TAILQ_INIT(&es->es_entries);
 
-  if(force_utf8 || utf8_verify(buf)) {
-    linereader_init(&lr, buf, len);
-  } else {
-    char how[256];
-    tmp = utf8_from_bytes(buf, len, NULL, how, sizeof(how));
-    TRACE(TRACE_INFO, "Subtitles", "%s is not valid UTF-8. %s", url, how);
-    linereader_init(&lr, tmp, strlen(tmp));
+  const int tag_flags = TEXT_PARSE_HTML_TAGS | TEXT_PARSE_HTML_ENTITIES |
+    TEXT_PARSE_SLOPPY_TAGS | TEXT_PARSE_SUB_TAGS;
+
+  // Skip over any initial control characters (Issue #1885)
+  while(len && *buf && *buf < 32) {
+    len--;
+    buf++;
   }
 
+  TAILQ_INIT(&es->es_entries);
+  linereader_init(&lr, buf, len);
   while(1) {
     if((n = linereader_next(&lr)) < 0)
       break;
@@ -238,7 +244,7 @@ load_srt(const char *url, const char *buf, size_t len, int force_utf8)
     if(get_srt_timestamp(&lr, &start, &stop) == 0) {
       if(txt != NULL && pstart != -1 && pstop != -1) {
 	txt[txtoff] = 0;
-	es_insert_text(es, txt, pstart, pstop, 1);
+	es_insert_text(es, txt, pstart, pstop, tag_flags);
 	free(txt);
 	txt = NULL;
 	tlen = 0;
@@ -261,10 +267,9 @@ load_srt(const char *url, const char *buf, size_t len, int force_utf8)
 
   if(txt != NULL && pstart != -1 && pstop != -1) {
     txt[txtoff] = 0;
-    es_insert_text(es, txt, pstart, pstop, 1);
+    es_insert_text(es, txt, pstart, pstop, tag_flags);
   }
   free(txt);
-  free(tmp);
   return es;
 }
 
@@ -366,16 +371,17 @@ load_ttml(const char *url, buf_t *buf)
  *
  */
 static int
-get_sub_timestamp(const char *buf, int *start, int *stop)
+get_sub_mpl_timestamp(const char *buf, int *start, int *stop,
+                      char left, char right)
 {
   const char *b = buf;
-  if(*b != '{')
+  if(*b != left)
     return -1;
   *start = strtol(b + 1, (char **)&b, 10);
-  if(b[0] != '}' || b[1] != '{')
+  if(b[0] != right || b[1] != left)
     return -1;
   *stop = strtol(b + 2, (char **)&b, 10);
-  if(b[0] != '}')
+  if(b[0] != right)
     return -1;
 
   return b + 1 - buf;
@@ -389,7 +395,18 @@ static int
 is_sub(const char *buf, size_t len)
 {
   int start, stop;
-  return get_sub_timestamp(buf, &start, &stop) != -1;
+  return get_sub_mpl_timestamp(buf, &start, &stop, '{', '}') != -1;
+}
+
+
+/**
+ *
+ */
+static int
+is_mpl(const char *buf, size_t len)
+{
+  int start, stop;
+  return get_sub_mpl_timestamp(buf, &start, &stop, '[', ']') != -1;
 }
 
 
@@ -397,152 +414,211 @@ is_sub(const char *buf, size_t len)
  *
  */
 static ext_subtitles_t *
-load_sub(const char *url, char *buf, size_t len, int force_utf8,
-         AVRational *fr)
+load_sub_variant(const char *url, char *buf, size_t len, AVRational *fr,
+                 int mpl)
 {
   ext_subtitles_t *es = calloc(1, sizeof(ext_subtitles_t));
-  char *tmp = NULL;
-  AVRational fr0 = {25, 1};
+  AVRational sub_default = {25, 1};
+  AVRational mpl_default = {10, 1};
+  AVRational fr0;
+
+  const char left  = "{["[mpl];
+  const char right = "}]"[mpl];
 
   if(fr == NULL || fr->num == 0 || fr->den == 0)
-    fr = &fr0;
+    fr = mpl ? &mpl_default : &sub_default;
 
   TAILQ_INIT(&es->es_entries);
 
-  if(force_utf8 || utf8_verify(buf)) {
-  } else {
-    char how[256];
-    tmp = utf8_from_bytes(buf, len, NULL, how, sizeof(how));
-    TRACE(TRACE_INFO, "Subtitles", "%s is not valid UTF-8. %s", url, how);
-    buf = tmp;
-  }
+  int tagflags = TEXT_PARSE_SUB_TAGS;
 
+  if(mpl)
+    tagflags |= TEXT_PARSE_SLASH_PREFIX;
 
   LINEPARSE(s, buf) {
     int start, stop;
-    int x = get_sub_timestamp(s, &start, &stop);
+    int x = get_sub_mpl_timestamp(s, &start, &stop, left, right);
     if(x <= 0)
       continue;
 
     s += x;
 
-    if(start == 1 && stop == 1) {
+    if(!mpl && start == 1 && stop == 1) {
       // Set framerate
       fr0.num = my_str2double(s, NULL) * 1000000.0;
       fr0.den = 1000000;
       fr = &fr0;
+      continue;
     }
 
-    int reset_color    = 0;
-    int reset_bold     = 0;
-    int reset_italic   = 0;
-    int reset_font     = 0;
-    uint32_t outbuf[1024];
-
-    outbuf[0] = TR_CODE_COLOR         | subtitle_settings.color;
-    outbuf[1] = TR_CODE_SHADOW        | subtitle_settings.shadow_displacement;
-    outbuf[2] = TR_CODE_SHADOW_COLOR  | subtitle_settings.shadow_color;
-    outbuf[3] = TR_CODE_OUTLINE       | subtitle_settings.outline_size;
-    outbuf[4] = TR_CODE_OUTLINE_COLOR | subtitle_settings.outline_color;
-    int outptr = 5;
-
-    while(outptr <= 1000) {
-
-      int c = utf8_get((const char **)&s);
-      if(c == 0)
-        break;
-
-      if(c == '{') {
-
-        int doreset = 0;
-
-        switch(*s) {
-        default:
-          break;
-
-        case 'y':
-          doreset = 1;
-          // FALLTHRU
-        case 'Y':
-          s++;
-          while(*s != '}' && *s) {
-            if(*s == 'b') {
-              outbuf[outptr++] = TR_CODE_BOLD_ON;
-              reset_bold = doreset;
-            } else if(*s == 'i') {
-              outbuf[outptr++] = TR_CODE_ITALIC_ON;
-              reset_italic = doreset;
-            }
-            s++;
-          }
-          break;
-
-        case 'c':
-          reset_color = 1;
-          // FALLTHRU
-        case 'C':
-          if(strlen(s) < 9)
-            break;
-          s+= 3;
-          outbuf[outptr++] = TR_CODE_COLOR |
-            (hexnibble(s[0]) << 20) |
-            (hexnibble(s[1]) << 16) |
-            (hexnibble(s[2]) << 12) |
-            (hexnibble(s[3]) <<  8) |
-            (hexnibble(s[4]) <<  4) |
-            (hexnibble(s[5])      );
-          break;
-        }
-
-        while(*s != '}' && *s)
-          s++;
-
-        if(*s)
-          s++;
-
-      } else if(c == '|') {
-        outbuf[outptr++] = '\n';
-
-        if(reset_color) {
-          outbuf[outptr++] = TR_CODE_COLOR | subtitle_settings.color;;
-          reset_color = 0;
-        }
-
-        if(reset_bold) {
-          outbuf[outptr++] = TR_CODE_BOLD_OFF;
-          reset_bold = 0;
-        }
-
-        if(reset_italic) {
-          outbuf[outptr++] = TR_CODE_ITALIC_OFF;
-          reset_italic = 0;
-        }
-
-        if(reset_font) {
-          outbuf[outptr++] = TR_CODE_FONT_RESET;
-          reset_italic = 0;
-        }
-
-      } else {
-        outbuf[outptr++] = c;
-      }
+    for(int i = 0, len = strlen(s); i < len; i++) {
+      if(s[i] == '|')
+        s[i] = '\n';
     }
 
-
-    video_overlay_t *vo = calloc(1, sizeof(video_overlay_t));
-    vo->vo_type = VO_TEXT;
-    vo->vo_text = malloc(outptr * sizeof(uint32_t));
-    memcpy(vo->vo_text, outbuf, outptr * sizeof(uint32_t));
-    vo->vo_text_length = outptr;
-    vo->vo_padding_left = -1;  // auto padding
-    vo->vo_start = 1000000LL * start * fr->den / fr->num;
-    vo->vo_stop =  1000000LL * stop  * fr->den / fr->num;
-    TAILQ_INSERT_TAIL(&es->es_entries, vo, vo_link);
-
+    es_insert_text(es, s,
+                   1000000LL * start * fr->den / fr->num,
+                   1000000LL * stop  * fr->den / fr->num,
+                   tagflags);
   }
-  free(tmp);
   return es;
 }
+
+
+/**
+ *
+ */
+static int
+is_txt(const char *buf, size_t len)
+{
+  int x;
+  return sscanf(buf, "%02d:%2d:%02d:%02d %02d:%02d:%02d:%02d ",
+                &x, &x, &x, &x, &x, &x, &x, &x) == 8;
+}
+
+
+/**
+ *
+ */
+static void
+load_txt_line(ext_subtitles_t *es, const char *src, int len,
+              unsigned int start, unsigned int stop)
+{
+  if(len < 24)
+    return;
+
+  src += 24;
+  len -= 24;
+
+  char *dst = alloca(len + 1);
+  const char *txt = dst;
+
+  while(len) {
+    if(src[0] < 32)
+      break;
+
+    if(src[0] == '/' && src[1] == '/') {
+      *dst++ = '\n';
+      src += 2;
+      len -= 2;
+    } else {
+      *dst++ = *src++;
+      len--;
+    }
+  }
+  *dst = 0;
+  es_insert_text(es, txt, start * 10000LL , stop * 10000LL, 0);
+}
+
+
+/**
+ *
+ */
+static ext_subtitles_t *
+load_txt(const char *url, char *buf, size_t len)
+{
+  ext_subtitles_t *es = calloc(1, sizeof(ext_subtitles_t));
+  linereader_t lr;
+  int n;
+
+  TAILQ_INIT(&es->es_entries);
+  linereader_init(&lr, buf, len);
+
+  while(1) {
+    if((n = linereader_next(&lr)) < 0)
+      break;
+
+    int s[8];
+
+    if(sscanf(lr.buf, "%02d:%2d:%02d:%02d %02d:%02d:%02d:%02d ",
+              &s[0], &s[1], &s[2], &s[3], &s[4], &s[5], &s[6], &s[7]) != 8)
+      continue;
+
+    unsigned int start = s[0] * 360000 + s[1] * 6000 + s[2] * 100 + s[3];
+    unsigned int stop  = s[4] * 360000 + s[5] * 6000 + s[6] * 100 + s[7];
+    load_txt_line(es, lr.buf, lr.ll, start, stop);
+  }
+  return es;
+}
+
+
+/**
+ *
+ */
+static int
+is_tmp(const char *buf, size_t len)
+{
+  int x;
+  return sscanf(buf, "%02d:%2d:%02d:", &x, &x, &x) == 3;
+}
+
+
+/**
+ *
+ */
+static void
+load_tmp_line(ext_subtitles_t *es, const char *src, int len,
+              unsigned int start)
+{
+  if(len < 9)
+    return;
+
+  src += 9;
+  len -= 9;
+
+  char *dst = alloca(len + 1);
+  const char *txt = dst;
+
+  int delay = len / 14.7f;
+
+  while(len) {
+    if(src[0] < 32)
+      break;
+
+    if(src[0] == '|') {
+      *dst++ = '\n';
+      src += 1;
+    } else {
+      *dst++ = *src++;
+    }
+    len--;
+  }
+  if(delay < 2)
+    delay = 2;
+  *dst = 0;
+  es_insert_text(es, txt, start * 1000000LL, (start + delay) * 1000000LL,
+                 TEXT_PARSE_SLASH_PREFIX);
+}
+
+
+/**
+ *
+ */
+static ext_subtitles_t *
+load_tmp(const char *url, char *buf, size_t len)
+{
+  ext_subtitles_t *es = calloc(1, sizeof(ext_subtitles_t));
+  linereader_t lr;
+  int n;
+
+  TAILQ_INIT(&es->es_entries);
+  linereader_init(&lr, buf, len);
+
+  while(1) {
+    if((n = linereader_next(&lr)) < 0)
+      break;
+
+    int s[3];
+
+    if(sscanf(lr.buf, "%02d:%2d:%02d:", &s[0], &s[1], &s[2]) != 3)
+      continue;
+
+    unsigned int start = s[0] * 3600 + s[1] * 60 + s[2];
+    load_tmp_line(es, lr.buf, lr.ll, start);
+  }
+  return es;
+}
+
 
 
 /**
@@ -569,7 +645,7 @@ vocmp(const void *A, const void *B)
  *
  */
 static void
-es_sort(ext_subtitles_t *es)
+es_sort(ext_subtitles_t *es, int trim_stop)
 {
   video_overlay_t *vo, **vec;
   int cnt = 0, i;
@@ -585,6 +661,12 @@ es_sort(ext_subtitles_t *es)
   
   qsort(vec, cnt, sizeof(video_overlay_t *), vocmp);
 
+  if(trim_stop) {
+    // Trim so no stop time is higher than next items start time
+    for(i = 0; i < cnt - 1; i++)
+      vec[i]->vo_stop = MIN(vec[i]->vo_stop, vec[i + 1]->vo_start);
+  }
+
   TAILQ_INIT(&es->es_entries);
   for(i = 0; i < cnt; i++)
     TAILQ_INSERT_TAIL(&es->es_entries, vec[i], vo_link);
@@ -595,15 +677,30 @@ es_sort(ext_subtitles_t *es)
 /**
  *
  */
+static buf_t *
+convert_to_utf8(buf_t *src, const char *url)
+{
+  char how[256];
+  buf_t *b = utf8_from_bytes(buf_cstr(src), buf_len(src), NULL,
+                             how, sizeof(how));
+  TRACE(TRACE_INFO, "Subtitles", "%s is not valid UTF-8. %s", url, how);
+  buf_release(src);
+  return b;
+}
+
+
+/**
+ *
+ */
 static ext_subtitles_t *
 subtitles_create(const char *path, buf_t *buf, AVRational *fr)
 {
+  int trim_stop = 0;
   ext_subtitles_t *s = NULL;
   if(is_ttml(buf)) {
     s = load_ttml(path, buf);
   } else {
 
-    int force_utf8 = 0;
     const uint8_t *u8 = buf_c8(buf);
     int off = 0;
 
@@ -611,31 +708,39 @@ subtitles_create(const char *path, buf_t *buf, AVRational *fr)
                             (u8[0] == 0xfe && u8[1] == 0xff))) {
       // UTF-16 BOM
       buf = utf16_to_utf8(buf);
-      force_utf8 = 1;
     } else if(buf_len(buf) > 3 &&
               u8[0] == 0xef && u8[1] == 0xbb && u8[2] == 0xbf) {
       // UTF-8 BOM
-      force_utf8 = 1;
       off = 3;
+    } else if(utf8_verify(buf_cstr(buf))) {
+      // It's UTF-8 clean
+    } else {
+      buf = convert_to_utf8(buf, path);
     }
 
     buf = buf_make_writable(buf);
-
     char *b0 = buf_str(buf) + off;
     int len  = buf_len(buf) - off;
 
     if(is_srt(b0, len))
-      s = load_srt(path, b0, len, force_utf8);
-    if(is_ass(b0, len))
+      s = load_srt(path, b0, len);
+    else if(is_ass(b0, len))
       s = load_ssa(path, b0, len);
-    if(is_sub(b0, len))
-      s = load_sub(path, b0, len, force_utf8, fr);
-
+    else if(is_sub(b0, len))
+      s = load_sub_variant(path, b0, len, fr, 0);
+    else if(is_mpl(b0, len))
+      s = load_sub_variant(path, b0, len, NULL, 1);
+    else if(is_txt(b0, len))
+      s = load_txt(path, b0, len);
+    else if(is_tmp(b0, len)) {
+      s = load_tmp(path, b0, len);
+      trim_stop = 1;
+    }
     buf_release(buf);
   }
 
   if(s)
-    es_sort(s);
+    es_sort(s, trim_stop);
   return s;
 }
 
@@ -759,8 +864,9 @@ subtitles_load(media_pipe_t *mp, const char *url, AVRational *fr)
 
   TRACE(TRACE_DEBUG, "Subtitles", "Trying to load %s", url);
 
-  buf_t *b = fa_load(url, NULL, errbuf, sizeof(errbuf),
-                     DISABLE_CACHE, 0, NULL, NULL);
+  buf_t *b = fa_load(url,
+                     FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+                     NULL);
 
   if(b == NULL) {
     TRACE(TRACE_ERROR, "Subtitles", "Unable to load %s -- %s", 
@@ -797,4 +903,30 @@ subtitles_load(media_pipe_t *mp, const char *url, AVRational *fr)
     TRACE(TRACE_DEBUG, "Subtitles", "Loaded %s OK", url);
   }
   return sub;
+}
+
+
+
+/**
+ *
+ */
+const char *
+subtitles_probe(const char *url)
+{
+  const char *ret;
+  buf_t *b = fa_load(url, NULL);
+
+  if(is_txt(buf_cstr(b), buf_len(b)))
+    ret = "TXT";
+  else if(is_mpl(buf_cstr(b), buf_len(b)))
+    ret = "MPL";
+  else if(is_sub(buf_cstr(b), buf_len(b)))
+    ret = "SUB";
+  else if(is_tmp(buf_cstr(b), buf_len(b)))
+    ret = "TMP";
+  else
+    ret = NULL;
+
+  buf_release(b);
+  return ret;
 }

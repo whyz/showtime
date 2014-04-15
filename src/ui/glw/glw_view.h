@@ -39,6 +39,7 @@ typedef enum {
   TOKEN_HASH,                  // #
   TOKEN_ASSIGNMENT,            // =
   TOKEN_COND_ASSIGNMENT,       // ?=
+  TOKEN_DEBUG_ASSIGNMENT,      // _=_
   TOKEN_END_OF_EXPR,           // ; (end of expression)
   TOKEN_SEPARATOR,             // ,
   TOKEN_BLOCK_OPEN,            // {
@@ -109,9 +110,11 @@ typedef struct token {
 
   token_type_t type;
   int16_t t_num_args;
-  uint16_t t_flags;
+  uint8_t t_flags;
 #define TOKEN_F_SELECTED 0x1 // The 'selected' in a vector
 #define TOKEN_F_CANONICAL_PATH 0x2 // Do not follow paths when resolving prop
+
+  uint8_t t_dynamic_eval;
 
   union {
     int elements;
@@ -214,15 +217,9 @@ typedef struct glw_view_eval_context {
   struct glw *w;
   struct prop *prop, *prop_parent, *prop_viewx, *prop_args, *prop_clone;
   struct glw_root *gr;
-  struct glw_rctx *rc;
+  const struct glw_rctx *rc;
 
   int dynamic_eval;
-#define GLW_VIEW_DYNAMIC_EVAL_PROP                 0x1
-#define GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME          0x2
-#define GLW_VIEW_DYNAMIC_EVAL_FOCUSED_CHILD_CHANGE 0x4
-#define GLW_VIEW_DYNAMIC_EVAL_FHP_CHANGE           0x8
-#define GLW_VIEW_DYNAMIC_KEEP                      0x10
-#define GLW_VIEW_DYNAMIC_EVAL_WIDGET_META          0x20
 
   token_t *rpn; 
 

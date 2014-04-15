@@ -27,7 +27,6 @@
 #include "arch/threads.h"
 #include "media.h"
 
-struct media_pipe;
 struct audio_decoder;
 
 typedef struct audio_class {
@@ -44,8 +43,19 @@ typedef struct audio_class {
   void (*ac_pause)(struct audio_decoder *ad);
   void (*ac_play)(struct audio_decoder *ad);
   void (*ac_flush)(struct audio_decoder *ad);
-  int (*ac_check_passthru)(struct audio_decoder *ad, int codec);
+  int (*ac_get_mode)(struct audio_decoder *ad, int codec,
+		     const void *extradata, size_t extradata_size);
+
+#define AUDIO_MODE_PCM    0
+#define AUDIO_MODE_SPDIF  1
+#define AUDIO_MODE_CODED  2
+
   void (*ac_set_volume)(struct audio_decoder *ad, float scale);
+
+  void (*ac_deliver_coded_locked)(struct audio_decoder *ad,
+				  const void *data, size_t len,
+				  int64_t pts, int epoch);
+
 } audio_class_t;
 
 
@@ -53,6 +63,8 @@ typedef struct audio_decoder {
   const audio_class_t *ad_ac;
   struct media_pipe *ad_mp;
   hts_thread_t ad_tid;
+
+  int ad_mode;
 
   struct AVFrame *ad_frame;
   int64_t ad_pts;
@@ -62,6 +74,9 @@ typedef struct audio_decoder {
 
   int ad_tile_size;   // Number of samples to be delivered per round
   int ad_delay;       // Audio output delay in us
+
+  char ad_sample_rate_fail;
+  char ad_channel_layout_fail;
 
   int ad_paused;
 
@@ -88,8 +103,11 @@ typedef struct audio_decoder {
   int ad_spdif_frame_alloc;
 
   float ad_vol_scale;
+  int ad_want_reconfig;
+
 } audio_decoder_t;
 
-audio_class_t *audio_driver_init(void);
+audio_class_t *audio_driver_init(struct prop *asettings, struct htsmsg *store);
 
+void audio_test_init(struct prop *asettings);
 

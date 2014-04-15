@@ -107,6 +107,7 @@ typedef struct cifs_connection {
   struct nbt_req_list cc_pending_nbt_requests;
 
   char cc_broken;
+  char cc_wait_for_ping;
   uint16_t cc_uid;
   uint16_t cc_max_buffer_size;
   uint16_t cc_max_mpx_count;
@@ -656,6 +657,7 @@ typedef struct {
 #define TRANS2_FIND_FIRST2	    1
 #define TRANS2_FIND_NEXT2	    2
 #define TRANS2_QUERY_PATH_INFORMATION 5
+#define TRANS2_SET_PATH_INFORMATION   6
 
 
 #if defined(__BIG_ENDIAN__)
@@ -878,6 +880,7 @@ smb_init_t2_header(cifs_connection_t *cc, TRANS2_req_t *t2, int cmd,
 
   t2->data_offset       = htole_16(68 + param_count);
   t2->data_count        = htole_16(data_count);
+  t2->total_data_count  = htole_16(data_count);
 
   t2->byte_count        = htole_16(3 + param_count + data_count);
 }
@@ -1301,7 +1304,14 @@ smb_dispatch(void *aux)
     h = buf;
     mid = letoh_16(h->mid);
 
-    if(h->pid == htole_16(1)) {
+    if(h->pid == htole_16(3)) {
+      SMBTRACE("%s:%d got echo reply", cc->cc_hostname, cc->cc_port);
+      // SMB_ECHO is always transfered on PID 3
+      cc->cc_wait_for_ping = 0;
+    }
+
+    // We run all requests on PID 2, so if it's not 2, free data
+    if(h->pid != htole_16(2)) {
       free(buf);
       continue;
     }
@@ -1325,13 +1335,19 @@ smb_dispatch(void *aux)
         const TRANS2_reply_t *tr = (const TRANS2_reply_t *)buf;
 
         int total_count = letoh_16(tr->total_data_count);
-        int count = letoh_16(tr->param_count) + letoh_16(tr->data_count);
+        int seg_count = letoh_16(tr->param_count) + letoh_16(tr->data_count);
+        SMBTRACE("trans2 segment: "
+                 "total=%d param_count=%d data_count=%d poff=%d", 
+                 total_count,
+                 letoh_16(tr->param_count),
+                 letoh_16(tr->data_count),
+                 letoh_16(tr->param_offset));
 
-        if(count > len - sizeof(TRANS2_reply_t)) {
+        if(seg_count > len - sizeof(TRANS2_reply_t)) {
           TRACE(TRACE_ERROR, "SMB",
                 "%s:%d malformed trans2, %d > %d",
                 cc->cc_hostname, cc->cc_port,
-                count, len - sizeof(TRANS2_reply_t));
+                seg_count, len - sizeof(TRANS2_reply_t));
           goto bad_trans2;
         }
 
@@ -1361,22 +1377,22 @@ smb_dispatch(void *aux)
 
 
           nr->nr_response = buf;
-          nr->nr_response_len = count + sizeof(TRANS2_reply_t);
+          nr->nr_response_len = len;
         } else {
-          void *payload = buf + sizeof(TRANS2_reply_t);
-          if(count < 0) {
+          void *payload = buf + letoh_16(tr->param_offset);
+          if(seg_count < 0) {
             TRACE(TRACE_ERROR, "SMB",
-                  "%s:%d Unable to reassemble trans2, total_count=%d",
-                  cc->cc_hostname, cc->cc_port, count);
+                  "%s:%d Unable to reassemble trans2, seg_count=%d",
+                  cc->cc_hostname, cc->cc_port, seg_count);
             goto bad_trans2;
           }
 
           nr->nr_response = realloc(nr->nr_response,
-                                    nr->nr_response_len + count);
+                                    nr->nr_response_len + seg_count);
 
           memcpy(nr->nr_response + nr->nr_response_len,
-                 payload, count);
-          nr->nr_response_len += count;
+                 payload, seg_count);
+          nr->nr_response_len += seg_count;
           free(buf);
         }
 
@@ -1444,10 +1460,12 @@ get_tree_no_create(const char *hostname, int port, const char *share)
     if(!strcmp(ct->ct_share, share))
       break;
   
-  if(ct != NULL)
+  if(ct != NULL) {
+    assert(ct->ct_cc == cc);
     ct->ct_refcount++;
-  else
+  } else {
     hts_mutex_unlock(&smb_global_mutex);
+  }
   return ct;
 }
 
@@ -1488,7 +1506,8 @@ cifs_get_connection(const char *hostname, int port, char *errbuf, size_t errlen,
     hts_mutex_unlock(&smb_global_mutex);
 
     cc->cc_tc = tcp_connect(hostname, port,
-			    cc->cc_errbuf, sizeof(cc->cc_errbuf), 3000, 0);
+			    cc->cc_errbuf, sizeof(cc->cc_errbuf), 3000, 0,
+                            NULL);
 
     hts_mutex_lock(&smb_global_mutex);
 
@@ -1887,8 +1906,10 @@ cifs_resolve(const char *url, char *filename, size_t filenamesize,
     assert(cc != SAMBA_NEED_AUTH); /* Should not happen if we just try to
 				      login as guest */
 
+    int security_mode = cc->cc_security_mode;
+
     ct = smb_tree_connect_andX(cc, p, errbuf, errlen, non_interactive);
-    if(!(cc->cc_security_mode & SECURITY_USER_LEVEL) || ct != NULL) {
+    if(!(security_mode & SECURITY_USER_LEVEL) || ct != NULL) {
       *p_ct = ct;
       return CIFS_RESOLVE_TREE;
     }
@@ -1907,6 +1928,7 @@ cifs_resolve(const char *url, char *filename, size_t filenamesize,
     return CIFS_RESOLVE_ERROR;
   
   *p_ct = ct;
+  assert(ct->ct_cc == cc);
   return CIFS_RESOLVE_TREE;
 }
 
@@ -2359,7 +2381,7 @@ typedef struct smb_file {
  */
 static fa_handle_t *
 smb_open(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
-	 int flags, struct prop *stats)
+	 int flags, struct fa_open_extra *foe)
 {
   char filename[512];
   cifs_tree_t *ct;
@@ -2623,16 +2645,16 @@ smb_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
   
   switch(r) {
   default:
-    return FAP_STAT_ERR;
+    return FAP_ERROR;
 
   case CIFS_RESOLVE_NEED_AUTH:
-    return FAP_STAT_NEED_AUTH;
+    return FAP_NEED_AUTH;
 
   case CIFS_RESOLVE_TREE:
     if(cifs_stat(ct, filename, fs, errbuf, errlen))
-      return FAP_STAT_ERR;
+      return FAP_ERROR;
     cifs_release_tree(ct, 0);
-    return FAP_STAT_OK;
+    return FAP_OK;
 
   case CIFS_RESOLVE_CONNECTION:
     memset(fs, 0, sizeof(struct fa_stat));
@@ -2641,7 +2663,7 @@ smb_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
     fs->fs_type = CONTENT_DIR;
     cc->cc_refcount--;
     hts_mutex_unlock(&smb_global_mutex);
-    return FAP_STAT_OK;
+    return FAP_OK;
   }
 }
 
@@ -2666,6 +2688,164 @@ smb_rmdir(const fa_protocol_t *fap, const char *url,
   return cifs_delete(url, errbuf, errlen, 1);
 }
 
+/**
+ * Simple helper for setting one one EA
+ */
+typedef struct eahdr {
+  uint32_t list_len;
+  uint8_t ea_flags;
+  uint8_t name_len;
+  uint16_t data_len;
+  char data[0];
+
+} __attribute__((packed)) eahdr_t;
+
+/**
+ * Set extended attribute
+ */
+static fa_err_code_t
+smb_set_xattr(struct fa_protocol *fap, const char *url,
+              const char *name,
+              const void *data, size_t data_len)
+{
+  char filename[512];
+  int r;
+  cifs_tree_t *ct;
+  cifs_connection_t *cc;
+  const int name_len = strlen(name);
+
+  if(data == NULL)
+    data_len = 0;
+
+  r = cifs_resolve(url, filename, sizeof(filename), NULL, 0, 0, &ct, &cc);
+
+  if(r != CIFS_RESOLVE_TREE)
+    return -1;
+
+  backslashify(filename);
+
+  int plen = utf8_to_smb(ct->ct_cc, NULL, filename);
+  int dlen = sizeof(eahdr_t) + name_len + 1 + data_len;
+  int tlen = sizeof(SMB_TRANS2_PATH_QUERY_req_t) + plen + dlen;
+  void *rbuf;
+  int rlen;
+  SMB_TRANS2_PATH_QUERY_req_t *req = alloca(tlen);
+
+  memset(req, 0, tlen);
+  smb_init_t2_header(ct->ct_cc, &req->t2, TRANS2_SET_PATH_INFORMATION,
+                     6 + plen, dlen, ct->ct_tid);
+
+  req->level_of_interest = htole_16(2); // SMB_SET_FILE_EA
+  utf8_to_smb(ct->ct_cc, req->data, filename);
+  eahdr_t *ea = (void *)(req->data + plen);
+  ea->list_len = htole_32(dlen);
+  ea->name_len = name_len;
+  ea->data_len = htole_16(data_len);
+  memcpy(ea->data, name, name_len + 1);
+  if(data != NULL)
+    memcpy(ea->data + name_len + 1, data, data_len);
+
+  if(nbt_async_req_reply(ct->ct_cc, req, tlen, &rbuf, &rlen, 1))
+    return release_tree_io_error(ct, NULL, 0);
+
+  const SMB_t *reply = rbuf;
+  uint32_t errcode = letoh_32(reply->errorcode);
+  free(rbuf);
+  cifs_release_tree(ct, 0);
+
+  if(errcode)
+    return FAP_NOT_SUPPORTED;
+
+  return FAP_OK;
+}
+
+/**
+ * Simple helper for getting one one EA
+ */
+typedef struct get_eahdr {
+  uint32_t list_len;
+  uint8_t name_len;
+  char data[0];
+} __attribute__((packed)) get_eahdr_t;
+
+/**
+ * Get extended attribute
+ */
+static fa_err_code_t
+smb_get_xattr(struct fa_protocol *fap, const char *url,
+              const char *name,
+              void **datap, size_t *lenp)
+{
+  char filename[512];
+  int r;
+  cifs_tree_t *ct;
+  cifs_connection_t *cc;
+  const int name_len = strlen(name);
+
+  r = cifs_resolve(url, filename, sizeof(filename), NULL, 0, 0, &ct, &cc);
+
+  if(r != CIFS_RESOLVE_TREE)
+    return -1;
+
+  backslashify(filename);
+  cc = ct->ct_cc;
+  int plen = utf8_to_smb(ct->ct_cc, NULL, filename);
+  int dlen = sizeof(get_eahdr_t) + name_len + 1;
+  int tlen = sizeof(SMB_TRANS2_PATH_QUERY_req_t) + plen + dlen;
+  void *rbuf;
+  int rlen;
+  SMB_TRANS2_PATH_QUERY_req_t *req = alloca(tlen);
+
+  memset(req, 0, tlen);
+  smb_init_t2_header(ct->ct_cc, &req->t2, TRANS2_QUERY_PATH_INFORMATION,
+                     6 + plen, dlen, ct->ct_tid);
+
+  req->level_of_interest = htole_16(3); // SMB_INFO_QUERY_EAS_FROM_LIST
+  utf8_to_smb(ct->ct_cc, req->data, filename);
+
+  get_eahdr_t *ea = (void *)(req->data + plen);
+  ea->list_len = htole_32(dlen);
+  ea->name_len = name_len;
+  memcpy(ea->data, name, name_len + 1);
+
+  if(nbt_async_req_reply(ct->ct_cc, req, tlen, &rbuf, &rlen, 1))
+    return release_tree_io_error(ct, NULL, 0);
+
+  const TRANS2_reply_t *t2resp = rbuf;
+
+  uint32_t errcode = letoh_32(t2resp->hdr.errorcode);
+  int retcode;
+
+  if(errcode) {
+    retcode = FAP_ERROR;
+  } else {
+
+    int offset = letoh_16(t2resp->data_offset);
+    int len    = letoh_16(t2resp->data_count);
+
+
+    if(len < sizeof(eahdr_t)) {
+      retcode = FAP_ERROR;
+    } else {
+      retcode = FAP_OK;
+      const eahdr_t *ea = (void *)(rbuf + offset);
+      const int dlen = letoh_16(ea->data_len);
+      if(dlen > 0) {
+        *datap = malloc(dlen);
+        memcpy(*datap, ea->data + ea->name_len + 1, dlen);
+        *lenp = dlen;
+      } else {
+        *datap = NULL;
+        *lenp = 0;
+      }
+    }
+  }
+  free(rbuf);
+  cifs_release_tree(ct, 0);
+  return retcode;
+}
+
+
 
 /**
  *
@@ -2674,8 +2854,6 @@ static void
 cifs_periodic(struct callout *c, void *opaque)
 {
   cifs_connection_t *cc = opaque;
-  void *rbuf;
-  int rlen;
 
   EchoRequest_t *req = alloca(sizeof(EchoRequest_t) + 2);
   memset(req, 0, sizeof(EchoRequest_t) + 2);
@@ -2688,13 +2866,16 @@ cifs_periodic(struct callout *c, void *opaque)
   req->byte_count = htole_16(2);
   req->data[0] = 0x13;
   req->data[1] = 0x37;
-  
-  if(!nbt_async_req_reply(cc, req, sizeof(EchoRequest_t) + 2,
-                          &rbuf, &rlen, 0)) {
-    //  EchoReply_t *resp = rbuf;
-    //uint32_t errcode = letoh_32(resp->hdr.errorcode);
-    free(rbuf);
+
+  req->hdr.pid = htole_16(3); // PING
+  nbt_write(cc, req, sizeof(EchoRequest_t) + 2);
+
+  if(cc->cc_wait_for_ping) {
+    cc->cc_broken = 1;
+    SMBTRACE("%s:%d no ping response", cc->cc_hostname, cc->cc_port);
   }
+
+  cc->cc_wait_for_ping = 1;
 
   callout_arm(&cc->cc_timer, cifs_periodic, cc, SMB_ECHO_INTERVAL);
   cc->cc_auto_close++;
@@ -2733,5 +2914,7 @@ static fa_protocol_t fa_protocol_smb = {
   .fap_stat  = smb_stat,
   .fap_unlink= smb_unlink,
   .fap_rmdir = smb_rmdir,
+  .fap_set_xattr = smb_set_xattr,
+  .fap_get_xattr = smb_get_xattr,
 };
 FAP_REGISTER(smb);

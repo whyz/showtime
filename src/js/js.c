@@ -584,8 +584,10 @@ js_getAuthCredentials(JSContext *cx, JSObject *obj,
   flags |= forcetmp ? 0 : KEYRING_SHOW_REMEMBER_ME | KEYRING_REMEMBER_ME_SET;
 
 
+  jsrefcount s = JS_SuspendRequest(cx);
   r = keyring_lookup(buf, &username, &password, NULL, NULL,
 		     source, reason, flags);
+  JS_ResumeRequest(cx, s);
 
   if(r == 1) {
     *rval = BOOLEAN_TO_JSVAL(0);
@@ -623,10 +625,13 @@ js_message(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval)
   if(!JS_ConvertArguments(cx, argc, argv, "sbb", &message, &ok, &cancel))
     return JS_FALSE;
 
+  jsrefcount s = JS_SuspendRequest(cx);
+
   r = message_popup(message, 
 		    (ok     ? MESSAGE_POPUP_OK : 0) |
 		    (cancel ? MESSAGE_POPUP_CANCEL : 0) | 
 		    MESSAGE_POPUP_RICH_TEXT, NULL);
+  JS_ResumeRequest(cx, s);
 
   switch(r) {
   case MESSAGE_POPUP_OK:
@@ -719,11 +724,13 @@ js_textDialog(JSContext *cx, JSObject *obj, uintN argc, jsval *argv, jsval *rval
   if(!JS_ConvertArguments(cx, argc, argv, "sbb", &message, &ok, &cancel))
     return JS_FALSE;
 
+  jsrefcount s = JS_SuspendRequest(cx);
   r = text_dialog(message, &input, 
 		    (ok     ? MESSAGE_POPUP_OK : 0) |
 		    (cancel ? MESSAGE_POPUP_CANCEL : 0) | 
 		    MESSAGE_POPUP_RICH_TEXT);
-  
+  JS_ResumeRequest(cx, s);
+
   if(r == 1) {
     *rval = BOOLEAN_TO_JSVAL(0);
     return JS_TRUE;
@@ -1133,7 +1140,7 @@ js_plugin_unload0(JSContext *cx, js_plugin_t *jsp)
   js_page_flush_from_plugin(cx, jsp);
   js_io_flush_from_plugin(cx, jsp);
   js_service_flush_from_plugin(cx, jsp);
-  js_setting_group_flush_from_plugin(cx, jsp);
+  js_setting_group_flush_from_list(cx, &jsp->jsp_setting_groups);
   js_event_destroy_handlers(cx, &jsp->jsp_event_handlers);
   js_subscription_flush_from_list(cx, &jsp->jsp_subscriptions);
   js_subprovider_flush_from_plugin(cx, jsp);
@@ -1291,7 +1298,7 @@ js_plugin_load(const char *id, const char *url, char *errbuf, size_t errlen)
   
   ref = fa_reference(url);
 
-  if((buf = fa_load(url, NULL, errbuf, errlen, NULL, 0, NULL, NULL)) == NULL) {
+  if((buf = fa_load(url, FA_LOAD_ERRBUF(errbuf, errlen), NULL)) == NULL) {
     fa_unreference(ref);
     return -1;
   }
@@ -1434,9 +1441,6 @@ js_init(void)
   jsval val;
   JSFunction *fn;
 
-  js_page_init();
-  js_hook_init();
-
   JS_SetCStringsAreUTF8();
 
   runtime = JS_NewRuntime(0x1000000);
@@ -1507,6 +1511,11 @@ js_fini(void)
 
   prop_unsubscribe(js_event_sub);
 
+  if(js_wait_for_models_to_terminate()) {
+    TRACE(TRACE_ERROR, "JS", "Javascript models failed to terminate on time\n"
+          "No problem since we will exit soon anyway");
+  }
+
   prop_courier_destroy(js_global_pc);
 
   cx = js_global_cx;
@@ -1543,6 +1552,14 @@ js_load(const char *url)
 			     THREAD_PRIO_MODEL);
 }
 
+/**
+ *
+ */
+int
+js_get_mem_usage(void)
+{
+  return JS_GCBytes(runtime);
+}
 
 /**
  *

@@ -210,16 +210,32 @@ db_rollback_deadlock0(sqlite3 *db, const char *src)
  *
  */
 int
-db_upgrade_schema(sqlite3 *db, const char *schemadir, const char *dbname)
+db_upgrade_schema(sqlite3 *db, const char *schemadir, const char *dbname,
+                  const char *extra_db, const char *extra_db_path)
 {
   int ver, tgtver = 0;
   char path[256];
   char buf[256];
+  char detach[256];
+
+  if(extra_db != NULL) {
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp),
+             "ATTACH DATABASE '%s' AS %s", extra_db_path, extra_db);
+    snprintf(detach, sizeof(detach), "DETACH DATABASE %s", extra_db);
+    if(db_one_statement(db, tmp, NULL)) {
+      TRACE(TRACE_ERROR, "DB", "%s: Unable to %s", tmp);
+      return -1;
+    }
+  } else {
+    detach[0] = 0;
+  }
 
   db_one_statement(db, "pragma journal_mode=wal;", NULL);
 
   if(db_get_int_from_query(db, "pragma user_version", &ver)) {
     TRACE(TRACE_ERROR, "DB", "%s: Unable to query db version", dbname);
+    if(detach[0]) db_one_statement(db, detach, NULL);
     return -1;
   }
 
@@ -231,6 +247,7 @@ db_upgrade_schema(sqlite3 *db, const char *schemadir, const char *dbname)
   if(fd == NULL) {
     TRACE(TRACE_ERROR, "DB",
 	  "%s: Unable to scan schema dir %s -- %s", dbname, schemadir , buf);
+    if(detach[0]) db_one_statement(db, detach, NULL);
     return -1;
   }
 
@@ -245,25 +262,38 @@ db_upgrade_schema(sqlite3 *db, const char *schemadir, const char *dbname)
   if(ver > tgtver) {
     TRACE(TRACE_ERROR, "DB", "%s: Installed version %d is too high for "
 	  "this version of Showtime", dbname, ver);
+    if(detach[0]) db_one_statement(db, detach, NULL);
     return -1;
   }
+
+  int enable_fk = 0;
 
   while(1) {
 
     if(ver == tgtver) {
       TRACE(TRACE_DEBUG, "DB", "%s: At current version %d", dbname, ver);
+      if(detach[0]) db_one_statement(db, detach, NULL);
       return 0;
     }
 
     ver++;
     snprintf(path, sizeof(path), "%s/%03d.sql", schemadir, ver);
 
-    buf_t *sql = fa_load(path, NULL, buf, sizeof(buf), NULL, 0, NULL, NULL);
+    buf_t *sql = fa_load(path,
+                          FA_LOAD_ERRBUF(buf, sizeof(buf)),
+                          NULL);
     if(sql == NULL) {
       TRACE(TRACE_ERROR, "DB",
 	    "%s: Unable to upgrade db schema to version %d using %s -- %s",
 	    dbname, ver, path, buf);
+      if(detach[0]) db_one_statement(db, detach, NULL);
       return -1;
+    }
+
+
+    if(strstr(buf_cstr(sql), "-- schema-upgrade:disable-fk")) {
+      db_one_statement(db, "PRAGMA foreign_keys=OFF;", NULL);
+      enable_fk = 1;
     }
 
     db_begin(db);
@@ -296,11 +326,19 @@ db_upgrade_schema(sqlite3 *db, const char *schemadir, const char *dbname)
     }
 
     db_commit(db);
+    if(enable_fk) {
+      db_one_statement(db, "PRAGMA foreign_keys=ON;", NULL);
+      enable_fk = 0;
+    }
     TRACE(TRACE_INFO, "DB", "%s: Upgraded to version %d", dbname, ver);
     buf_release(sql);
   }
  fail:
+  if(detach[0]) db_one_statement(db, detach, NULL);
   db_rollback(db);
+
+  if(enable_fk)
+    db_one_statement(db, "PRAGMA foreign_keys=ON;", NULL);
   return -1;
 }
 
@@ -358,8 +396,8 @@ db_open(const char *path, int flags)
     db_one_statement(db, "PRAGMA case_sensitive_like=1", path);
   db_one_statement(db, "PRAGMA foreign_keys=1", path);
 
-  int freelist_count;
-  int page_count;
+  int freelist_count = 0;
+  int page_count = 0;
 
   db_get_int_from_query(db, "PRAGMA freelist_count", &freelist_count);
   db_get_int_from_query(db, "PRAGMA page_count",     &page_count);
@@ -599,6 +637,34 @@ db_log(void *aux, int code, const char *str)
         "SQLITE", "%s (code: %d)", str, code);
 }
 
+#if 0
+#include "misc/callout.h"
+
+static callout_t memlogger;
+
+static void
+memlogger_fn(callout_t *co, void *aux)
+{
+  callout_arm(&memlogger, memlogger_fn, NULL, 1);
+
+  int dyn_current, dyn_highwater;
+  int pgc_current, pgc_highwater;
+  int scr_current, scr_highwater;
+
+  sqlite3_status(SQLITE_STATUS_MEMORY_USED,
+                 &dyn_current, &dyn_highwater, 0);
+  sqlite3_status(SQLITE_STATUS_PAGECACHE_USED,
+                 &pgc_current, &pgc_highwater, 0);
+  sqlite3_status(SQLITE_STATUS_SCRATCH_USED,
+                 &scr_current, &scr_highwater, 0);
+
+  TRACE(TRACE_DEBUG, "SQLITE", "Mem %d (%d)  PGC: %d (%d) Scratch: %d (%d)",
+        dyn_current, dyn_highwater,
+        pgc_current, pgc_highwater,
+        scr_current, scr_highwater);
+
+}
+#endif
 
 void
 db_init(void)
@@ -608,5 +674,12 @@ db_init(void)
   sqlite3_config(SQLITE_CONFIG_MUTEX, &sqlite_mutexes);
 #endif
   sqlite3_config(SQLITE_CONFIG_LOG, &db_log, NULL);
+
   sqlite3_initialize();
+#ifdef PS3
+  sqlite3_soft_heap_limit(10000000);
+#endif
+#if 0
+  callout_arm(&memlogger, memlogger_fn, NULL, 1);
+#endif
 }

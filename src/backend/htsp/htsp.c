@@ -1014,7 +1014,7 @@ htsp_thread(void *aux)
     while(1) {
       char errbuf[256];
       hc->hc_tc = tcp_connect(hc->hc_hostname, hc->hc_port,
-			      errbuf, sizeof(errbuf), 3000, 0);
+			      errbuf, sizeof(errbuf), 3000, 0, NULL);
       if(hc->hc_tc != NULL)
 	break;
 
@@ -1067,7 +1067,7 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
 
   TRACE(TRACE_DEBUG, "HTSP", "Connecting to %s:%d", hostname, port);
 
-  tc = tcp_connect(hostname, port, errbuf, errlen, 3000, 0);
+  tc = tcp_connect(hostname, port, errbuf, errlen, 3000, 0, NULL);
   if(tc == NULL) {
     hts_mutex_unlock(&htsp_global_mutex);
     TRACE(TRACE_ERROR, "HTSP", "Connection to %s:%d failed: %s", 
@@ -1427,7 +1427,7 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 
   prop_set_string(mp->mp_prop_playstatus, "play");
 
-  mp_configure(mp, mp_flags, MP_BUFFER_DEEP, 0);
+  mp_configure(mp, mp_flags, MP_BUFFER_DEEP, 0, "tv");
 
   if(primary)
     mp_become_primary(mp);
@@ -1802,8 +1802,6 @@ be_htsp_playvideo(const char *url, media_pipe_t *mp,
   hs->hs_sid = atomic_add(&hc->hc_sid_generator, 1);
   hs->hs_mp = mp;
 
-  prop_set_string(mp->mp_prop_type, "tv");
-
   hts_mutex_lock(&hc->hc_subscription_mutex);
   LIST_INSERT_HEAD(&hc->hc_subscriptions, hs, hs_link);
   hts_mutex_unlock(&hc->hc_subscription_mutex);
@@ -1881,8 +1879,12 @@ htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m)
       mb->mb_data_type = hss->hss_data_type;
       mb->mb_stream = hss->hss_index;
 
-      if(htsmsg_get_u32(m, "duration", &mb->mb_duration))
+      uint32_t u32;
+
+      if(htsmsg_get_u32(m, "duration", &u32))
 	mb->mb_duration = 0;
+      else
+        mb->mb_duration = u32;
 
       if(htsmsg_get_s64(m, "dts", &mb->mb_dts))
 	mb->mb_dts = PTS_UNSET;
@@ -1985,32 +1987,32 @@ htsp_subscriptionStart(htsp_connection_t *hc, htsmsg_t *m)
       lang = htsmsg_get_str(sub, "language");
 
       if(!strcmp(type, "AC3")) {
-	codec_id = CODEC_ID_AC3;
+	codec_id = AV_CODEC_ID_AC3;
 	media_type = MEDIA_TYPE_AUDIO;
 	nicename = "AC3";
       } else if(!strcmp(type, "EAC3")) {
-	codec_id = CODEC_ID_EAC3;
+	codec_id = AV_CODEC_ID_EAC3;
 	media_type = MEDIA_TYPE_AUDIO;
 	nicename = "EAC3";
       } else if(!strcmp(type, "AAC")) {
-	codec_id = CODEC_ID_AAC;
+	codec_id = AV_CODEC_ID_AAC;
 	media_type = MEDIA_TYPE_AUDIO;
 	nicename = "AAC";
       } else if(!strcmp(type, "MPEG2AUDIO")) {
-	codec_id = CODEC_ID_MP2;
+	codec_id = AV_CODEC_ID_MP2;
 	media_type = MEDIA_TYPE_AUDIO;
 	nicename = "MPEG";
       } else if(!strcmp(type, "MPEG2VIDEO")) {
-	codec_id = CODEC_ID_MPEG2VIDEO;
+	codec_id = AV_CODEC_ID_MPEG2VIDEO;
 	media_type = MEDIA_TYPE_VIDEO;
 	nicename = "MPEG-2";
       } else if(!strcmp(type, "H264")) {
-	codec_id = CODEC_ID_H264;
+	codec_id = AV_CODEC_ID_H264;
 	media_type = MEDIA_TYPE_VIDEO;
 	nicename = "H264";
 	mcp.cheat_for_speed = 1;
       } else if(!strcmp(type, "DVBSUB")) {
-	codec_id = CODEC_ID_DVB_SUBTITLE;
+	codec_id = AV_CODEC_ID_DVB_SUBTITLE;
 	media_type = MEDIA_TYPE_SUBTITLE;
 	nicename = "Bitmap";
 

@@ -36,6 +36,10 @@
 
 #include "fa_proto.h"
 
+#ifdef __APPLE__
+#include <sys/xattr.h>
+#endif
+
 typedef struct part {
   int fd;
   off_t size;
@@ -181,7 +185,7 @@ fs_close(fa_handle_t *fh0)
  */
 static fa_handle_t *
 fs_open(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
-	int flags, struct prop *stats)
+	int flags, struct fa_open_extra *foe)
 {
   fs_handle_t *fh=NULL;
   struct stat st;
@@ -369,7 +373,7 @@ fs_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
 
     piece_num = get_split_piece_count(url);
     if(piece_num == 0)
-      return FAP_STAT_ERR;
+      return FAP_ERROR;
 
     memset(fs, 0, sizeof(struct fa_stat));
     for(i = 0; i < piece_num; i++) {
@@ -378,20 +382,20 @@ fs_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
 
       if(stat(buf, &st)) {
         snprintf(errbuf, errlen, "%s", strerror(errno));
-        return FAP_STAT_ERR;
+        return FAP_ERROR;
       }
       fs->fs_size += st.st_size;
       fs->fs_mtime = st.st_mtime;
       fs->fs_type = CONTENT_FILE;
     }
-    return FAP_STAT_OK;
+    return FAP_OK;
   }
 
   memset(fs, 0, sizeof(struct fa_stat));
   fs->fs_size = st.st_size;
   fs->fs_mtime = st.st_mtime;
   fs->fs_type = S_ISDIR(st.st_mode) ? CONTENT_DIR : CONTENT_FILE;
-  return FAP_STAT_OK;
+  return FAP_OK;
 }
 
 /**
@@ -697,6 +701,66 @@ fs_normalize(struct fa_protocol *fap, const char *url, char *dst, size_t dstlen)
 #endif
 
 
+#ifdef __APPLE__
+/**
+ *
+ */
+static fa_err_code_t
+fs_set_xattr(struct fa_protocol *fap, const char *url,
+             const char *name,
+             const void *data, size_t len)
+{
+  if(data == NULL) {
+    removexattr(url, name, 0);
+    return 0;
+  }
+
+  if(!setxattr(url, name, data, len, 0, 0))
+    return 0;
+
+  switch(errno) {
+  case EROFS:
+  case ENOTSUP:
+    return FAP_NOT_SUPPORTED;
+  default:
+    return FAP_ERROR;
+  }
+}
+
+
+/**
+ *
+ */
+static fa_err_code_t
+fs_get_xattr(struct fa_protocol *fap, const char *url,
+             const char *name,
+             void **datap, size_t *lenp)
+{
+  int len = getxattr(url, name, NULL, 0, 0, 0);
+  if(len < 0) {
+    switch(errno) {
+    case ENOATTR:
+      *datap = NULL;
+      *lenp = 0;
+      return 0;
+    case ENOTSUP:
+      return FAP_NOT_SUPPORTED;
+    default:
+      return FAP_ERROR;
+    }
+  }
+  *datap = malloc(len);
+  *lenp = len;
+  if(getxattr(url, name, *datap, len, 0, 0) < 0) {
+    free(*datap);
+    *datap = NULL;
+    return FAP_ERROR;
+  }
+  return 0;
+}
+#endif
+
+
 fa_protocol_t fa_protocol_fs = {
   .fap_name = "file",
   .fap_scan = fs_scandir,
@@ -721,6 +785,14 @@ fa_protocol_t fa_protocol_fs = {
   .fap_normalize = fs_normalize,
 #endif
   .fap_makedirs = fs_makedirs,
+
+#ifdef __APPLE__
+  .fap_set_xattr = fs_set_xattr,
+  .fap_get_xattr = fs_get_xattr,
+#endif
+
+
+
 };
 
 FAP_REGISTER(fs);

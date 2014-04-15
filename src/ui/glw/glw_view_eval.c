@@ -30,7 +30,6 @@
 #include "glw.h"
 #include "glw_event.h"
 #include "backend/backend.h"
-#include "misc/pixmap.h"
 #include "settings.h"
 #include "prop/prop_grouper.h"
 #include "prop/prop_nodefilter.h"
@@ -328,7 +327,7 @@ token_resolve_ex(glw_view_eval_context_t *ec, token_t *t, int type)
     return NULL;
   
   if(t->type == TOKEN_PROPERTY_SUBSCRIPTION) {
-    ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_PROP;
+    ec->dynamic_eval |= GLW_VIEW_EVAL_PROP;
     t = t->t_propsubr->gps_token ?: eval_alloc(t, ec, TOKEN_VOID);
   }
   return t;
@@ -856,7 +855,7 @@ set_prop_from_token(prop_t *p, token_t *t)
  *
  */
 static int
-eval_assign(glw_view_eval_context_t *ec, struct token *self, int conditional)
+eval_assign(glw_view_eval_context_t *ec, struct token *self, int how)
 {
   token_t *b = eval_pop(ec), *a = eval_pop(ec);
   int r = 0;
@@ -899,7 +898,7 @@ eval_assign(glw_view_eval_context_t *ec, struct token *self, int conditional)
 	    a->type == TOKEN_PROPERTY_REF) {
 
     if(b->t_prop != a->t_prop)
-      prop_link(b->t_prop, a->t_prop);
+      prop_link_ex(b->t_prop, a->t_prop, NULL, PROP_LINK_NORMAL, how == 2);
     eval_push(ec, b);
     return 0;
 
@@ -912,7 +911,7 @@ eval_assign(glw_view_eval_context_t *ec, struct token *self, int conditional)
       return -1;
     
 
-  if(conditional && b->type == TOKEN_VOID) {
+  if(how == 1 && b->type == TOKEN_VOID) {
     eval_push(ec, b);
     return 0;
   }
@@ -954,7 +953,7 @@ eval_assign(glw_view_eval_context_t *ec, struct token *self, int conditional)
       break;
     case TOKEN_PROPERTY_REF:
       if(b->t_prop != a->t_prop)
-	prop_link(b->t_prop, a->t_prop);
+	prop_link_ex(b->t_prop, a->t_prop, NULL, PROP_LINK_NORMAL, how == 2);
       break;
     default:
       prop_set_void(a->t_prop);
@@ -972,61 +971,6 @@ eval_assign(glw_view_eval_context_t *ec, struct token *self, int conditional)
   return r;
 }
 
-/**
- *
- */
-static int
-eval_dynamic_every_frame_sig(glw_t *w, void *opaque, 
-			     glw_signal_t signal, void *extra)
-{
-  if(signal == GLW_SIGNAL_LAYOUT)
-    eval_dynamic(w, opaque, extra, NULL, NULL, NULL);
-  return 0;
-}
-
-/**
- *
- */
-static int
-eval_dynamic_focused_child_change_sig(glw_t *w, void *opaque, 
-				      glw_signal_t signal, void *extra)
-{
-  if(signal == GLW_SIGNAL_FOCUS_CHILD_INTERACTIVE ||
-     signal == GLW_SIGNAL_FOCUS_CHILD_AUTOMATIC)
-    eval_dynamic(w, opaque, NULL, NULL, NULL, NULL);
-  return 0;
-}
-
-
-/**
- *
- */
-static int
-eval_dynamic_fhp_change_sig(glw_t *w, void *opaque, 
-			    glw_signal_t signal, void *extra)
-{
-  if(signal == GLW_SIGNAL_FHP_PATH_CHANGED)
-    eval_dynamic(w, opaque, NULL, NULL, NULL, NULL);
-  return 0;
-}
-
-
-/**
- *
- */
-static int
-eval_dynamic_widget_meta_sig(glw_t *w, void *opaque, 
-			     glw_signal_t signal, void *extra)
-{
-  if(signal == GLW_SIGNAL_ACTIVE ||
-     signal == GLW_SIGNAL_INACTIVE ||
-     signal == GLW_SIGNAL_CAN_SCROLL_CHANGED ||
-     signal == GLW_SIGNAL_FULLWINDOW_CONSTRAINT_CHANGED ||
-     signal == GLW_SIGNAL_READINESS ||
-     signal == GLW_SIGNAL_RESELECT_CHANGED)
-    eval_dynamic(w, opaque, NULL, NULL, NULL, NULL);
-  return 0;
-}
 
 /**
  *
@@ -1048,37 +992,95 @@ eval_dynamic(glw_t *w, token_t *rpn, struct glw_rctx *rc,
   ec.sublist = &w->glw_prop_subscriptions;
 
   glw_view_eval_rpn0(rpn, &ec);
+  rpn->t_dynamic_eval = ec.dynamic_eval;
+  w->glw_dynamic_eval |= ec.dynamic_eval;
 
   glw_view_free_chain(ec.gr, ec.alloc);
+}
 
-  if(ec.dynamic_eval & GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME)
-    glw_signal_handler_register(w, eval_dynamic_every_frame_sig, rpn, 1000);
-  else
-    glw_signal_handler_unregister(w, eval_dynamic_every_frame_sig, rpn);
 
-  if(ec.dynamic_eval & GLW_VIEW_DYNAMIC_EVAL_FOCUSED_CHILD_CHANGE)
-    glw_signal_handler_register(w, eval_dynamic_focused_child_change_sig,
-				rpn, 1000);
-  else
-    glw_signal_handler_unregister(w, eval_dynamic_focused_child_change_sig,
-				  rpn);
+/**
+ *
+ */
+static uint8_t signal_to_eval_mask[GLW_SIGNAL_num] = {
+  [GLW_SIGNAL_INACTIVE]                      = GLW_VIEW_EVAL_ACTIVE,
 
-  if(ec.dynamic_eval & GLW_VIEW_DYNAMIC_EVAL_FHP_CHANGE)
-    glw_signal_handler_register(w, eval_dynamic_fhp_change_sig, rpn, 1000);
-  else
-    glw_signal_handler_unregister(w, eval_dynamic_fhp_change_sig, rpn);
+  [GLW_SIGNAL_FHP_PATH_CHANGED]              = GLW_VIEW_EVAL_FHP_CHANGE,
+  
+  [GLW_SIGNAL_FOCUS_CHILD_INTERACTIVE]       = GLW_VIEW_EVAL_OTHER,
+  [GLW_SIGNAL_FOCUS_CHILD_AUTOMATIC]         = GLW_VIEW_EVAL_OTHER,
+  [GLW_SIGNAL_CAN_SCROLL_CHANGED]            = GLW_VIEW_EVAL_OTHER,
+  [GLW_SIGNAL_FULLWINDOW_CONSTRAINT_CHANGED] = GLW_VIEW_EVAL_OTHER,
+  [GLW_SIGNAL_READINESS]                     = GLW_VIEW_EVAL_OTHER,
+  [GLW_SIGNAL_RESELECT_CHANGED]              = GLW_VIEW_EVAL_OTHER,
+};
 
-  if(ec.dynamic_eval & GLW_VIEW_DYNAMIC_EVAL_WIDGET_META)
-    glw_signal_handler_register(w, eval_dynamic_widget_meta_sig, rpn, 1000);
-  else
-    glw_signal_handler_unregister(w, eval_dynamic_widget_meta_sig, rpn);
+
+/**
+ *
+ */
+static inline void
+run_dynamics(glw_t *w, glw_view_eval_context_t *ec, int mask)
+{
+  ec->w = w;
+  ec->gr = w->glw_root;
+  ec->sublist = &w->glw_prop_subscriptions;
+
+  token_t *t = w->glw_dynamic_expressions;
+  uint8_t all_flags = 0;
+
+  while(t != NULL) {
+    if(t->t_dynamic_eval & mask) {
+      glw_view_eval_rpn0(t, ec);
+      t->t_dynamic_eval = ec->dynamic_eval;
+    }
+    all_flags |= t->t_dynamic_eval;
+    t = t->next;
+  }
+  w->glw_dynamic_eval = all_flags;
+  glw_view_free_chain(ec->gr, ec->alloc);
 }
 
 
 
+/**
+ *
+ */
+void
+glw_view_eval_signal(glw_t *w, glw_signal_t sig)
+{
+  int mask = signal_to_eval_mask[sig];
+  if(mask == 0)
+    return;
+
+  if(!(w->glw_dynamic_eval & mask))
+    return;
+
+  glw_view_eval_context_t ec;
+
+  memset(&ec, 0, sizeof(ec));
+  run_dynamics(w, &ec, mask);
+}
+
+
+
+/**
+ *
+ */
+void
+glw_view_eval_layout(glw_t *w, const glw_rctx_t *rc, int mask)
+{
+  glw_view_eval_context_t ec;
+
+  memset(&ec, 0, sizeof(ec));
+  ec.rc = rc;
+  run_dynamics(w, &ec, mask);
+}
+
+
+
+
 static void cloner_resequence(sub_cloner_t *sc);
-
-
 
 /**
  *
@@ -1219,7 +1221,8 @@ clone_sig_handler(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
     break;
 
   case GLW_SIGNAL_WRAP_CHECK:
-    return sc->sc_have_more == 1;
+    *(int *)extra = sc->sc_have_more;
+    return 0;
 
   default:
     break;
@@ -1282,18 +1285,20 @@ cloner_add_child0(sub_cloner_t *sc, prop_t *p, prop_t *before,
 
   sc->sc_entries++;
 
-  c->c_clone_root = prop_create_root(NULL);
+  c->c_clone_root = prop_create_root("clone");
 
   c->c_w = glw_create(gr, sc->sc_cloner_class, parent, b, p);
   c->c_w->glw_clone = c;
 
-  glw_set(c->c_w,
-	  GLW_ATTRIB_PROPROOTS3, p, sc->sc_originating_prop, c->c_clone_root,
-	  NULL);
+  if(c->c_w->glw_class->gc_set_roots != NULL) {
+    c->c_w->glw_class->gc_set_roots(c->c_w,
+                                    p, sc->sc_originating_prop,
+                                    c->c_clone_root);
+  }
 
   prop_tag_set(p, sc, c);
 
-  glw_signal_handler_register(c->c_w, clone_sig_handler, c, 1000);
+  glw_signal_handler_register(c->c_w, clone_sig_handler, c);
 
   if(flags & PROP_ADD_SELECTED && parent->glw_class->gc_select_child != NULL)
     parent->glw_class->gc_select_child(parent, c->c_w, NULL);
@@ -2325,6 +2330,9 @@ subscribe_prop(glw_view_eval_context_t *ec, struct token *self, int type)
 		       PROP_TAG_NAMED_ROOT, ec->prop_clone, "clone",
 		       PROP_TAG_ROOT, w->glw_root->gr_prop_ui,
 		       PROP_TAG_ROOT, w->glw_root->gr_prop_nav,
+#ifdef PROP_SUB_RECORD_SOURCE
+                       PROP_TAG_SOURCE, rstr_get(self->file), self->line,
+#endif
 		       NULL);
   }
 
@@ -2490,6 +2498,11 @@ glw_view_eval_rpn0(token_t *t0, glw_view_eval_context_t *ec)
 	return -1;
       break;
 
+    case TOKEN_DEBUG_ASSIGNMENT:
+      if(eval_assign(ec, t, 2))
+	return -1;
+      break;
+
     default:
       fprintf(stderr, "Can not handle token %s\n", token2name(t));
       abort();
@@ -2565,19 +2578,8 @@ glw_view_eval_block(token_t *t, glw_view_eval_context_t *ec)
       t->next =  w->glw_dynamic_expressions;
       w->glw_dynamic_expressions = t;
 
-      if(copy & GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME)
-	glw_signal_handler_register(w, eval_dynamic_every_frame_sig, t, 1000);
-
-      if(copy & GLW_VIEW_DYNAMIC_EVAL_FOCUSED_CHILD_CHANGE)
-	glw_signal_handler_register(w, eval_dynamic_focused_child_change_sig,
-				    t, 1000);
-
-      if(copy & GLW_VIEW_DYNAMIC_EVAL_FHP_CHANGE)
-	glw_signal_handler_register(w, eval_dynamic_fhp_change_sig, t, 1000);
-
-      if(copy & GLW_VIEW_DYNAMIC_EVAL_WIDGET_META)
-	glw_signal_handler_register(w, eval_dynamic_widget_meta_sig, t, 1000);
-
+      t->t_dynamic_eval = copy;
+      w->glw_dynamic_eval |= copy;
       continue;
       
     case TOKEN_FLOAT:
@@ -2641,9 +2643,9 @@ glwf_widget(glw_view_eval_context_t *ec, struct token *self,
   if(c->gc_freeze != NULL)
     c->gc_freeze(n.w);
 
-  glw_set(n.w,
-	  GLW_ATTRIB_PROPROOTS3, ec->prop, ec->prop_parent, ec->prop_clone,
-	  NULL);
+  if(n.w->glw_class->gc_set_roots != NULL)
+    n.w->glw_class->gc_set_roots(n.w,
+                                 ec->prop, ec->prop_parent, ec->prop_clone);
 
   n.sublist = &n.w->glw_prop_subscriptions;
 
@@ -2986,14 +2988,15 @@ static int
 glwf_navOpen(glw_view_eval_context_t *ec, struct token *self,
 	     token_t **argv, unsigned int argc)
 {
-  token_t *a, *b, *c, *d, *e, *r;
+  token_t *a, *b, *c, *d, *e, *f, *r;
   const char *url;
   const char *view = NULL;
   const char *how = NULL;
   prop_t *origin = NULL;
   prop_t *model = NULL;
+  const char *purl = NULL;
 
-  if(argc < 1 || argc > 5)
+  if(argc < 1 || argc > 6)
     return glw_view_seterr(ec->ei, self, "navOpen(): Invalid number of args");
 
   if((a = token_resolve(ec, argv[0])) == NULL)
@@ -3057,8 +3060,22 @@ glwf_navOpen(glw_view_eval_context_t *ec, struct token *self,
 			     "Fifth argument is not a string or (void)");
   }
 
+
+  if(argc > 5) {
+    if((f = token_resolve(ec, argv[5])) == NULL)
+      return -1;
+
+    if(f->type == TOKEN_VOID)
+      purl = NULL;
+    else if(f->type == TOKEN_RSTRING)
+      purl = rstr_get(f->t_rstring);
+    else
+      return glw_view_seterr(ec->ei, f, "navOpen(): "
+			     "Sixth argument is not a string or (void)");
+  }
+
   r = eval_alloc(self, ec, TOKEN_EVENT);
-  r->t_gem = glw_event_map_navOpen_create(url, view, origin, model, how);
+  r->t_gem = glw_event_map_navOpen_create(url, view, origin, model, how, purl);
   eval_push(ec, r);
   return 0;
 }
@@ -3348,7 +3365,7 @@ glwf_changed(glw_view_eval_context_t *ec, struct token *self,
 	     token_t **argv, unsigned int argc)
 
 {
-  const glw_root_t *gr = ec->w->glw_root;
+  glw_root_t *gr = ec->w->glw_root;
   token_t *a, *b, *c, *r;
   glwf_changed_extra_t *e = self->t_extra;
   int change = 0;
@@ -3473,8 +3490,10 @@ glwf_changed(glw_view_eval_context_t *ec, struct token *self,
   r = eval_alloc(self, ec, TOKEN_FLOAT);
   if(e->deadline > gr->gr_frame_start) {
     r->t_float = 1;
-    ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+    ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
+    glw_schedule_refresh(gr, e->deadline);
   }
+
 
   eval_push(ec, r);
   return 0;
@@ -3559,7 +3578,7 @@ glwf_iir(glw_view_eval_context_t *ec, struct token *self,
   r = eval_alloc(self, ec, TOKEN_FLOAT);
 
   if(x != y)
-    ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+    ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
   else
     self->t_extra_float = f;
 
@@ -3590,7 +3609,7 @@ static int
 glwf_scurve(glw_view_eval_context_t *ec, struct token *self,
 	    token_t **argv, unsigned int argc)
 {
-  const glw_root_t *gr = ec->w->glw_root;
+  glw_root_t *gr = ec->w->glw_root;
   token_t *a, *b, *c;
   token_t *r;
   float f, v, tup, tdown;
@@ -3636,7 +3655,8 @@ glwf_scurve(glw_view_eval_context_t *ec, struct token *self,
 
     v = GLW_S(x);
     s->current = GLW_LERP(v, s->startval, s->target);
-    ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+    ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
+    glw_schedule_refresh(gr, s->deadline);
   } else {
     s->current = s->target;
   }
@@ -4268,7 +4288,7 @@ glwf_isFocused(glw_view_eval_context_t *ec, struct token *self,
 {
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_FHP_CHANGE;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_FHP_CHANGE;
 
   r = eval_alloc(self, ec, TOKEN_INT);
   r->t_int = glw_is_focused(ec->w);
@@ -4286,7 +4306,7 @@ glwf_isHovered(glw_view_eval_context_t *ec, struct token *self,
 {
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_FHP_CHANGE;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_FHP_CHANGE;
 
   r = eval_alloc(self, ec, TOKEN_INT);
   r->t_int = glw_is_hovered(ec->w);
@@ -4303,7 +4323,7 @@ glwf_isPressed(glw_view_eval_context_t *ec, struct token *self,
 {
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_FHP_CHANGE;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_FHP_CHANGE;
 
   r = eval_alloc(self, ec, TOKEN_INT);
   r->t_int = glw_is_pressed(ec->w);
@@ -4325,7 +4345,7 @@ glwf_focusedChild(glw_view_eval_context_t *ec, struct token *self,
   if(w == NULL) 
     return glw_view_seterr(ec->ei, self, "focusedChild() without widget");
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_FOCUSED_CHILD_CHANGE;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_OTHER;
 
   c = w->glw_focused;
   if(c != NULL) {
@@ -4368,7 +4388,7 @@ glwf_focusedIndex(glw_view_eval_context_t *ec, struct token *self,
   glw_t *w = ec->w;
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_FOCUSED_CHILD_CHANGE;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_OTHER;
 
   if(w->glw_focused == NULL || w->glw_focused->glw_clone == NULL) {
     r = eval_alloc(self, ec, TOKEN_VOID);
@@ -4440,7 +4460,7 @@ glwf_bind(glw_view_eval_context_t *ec, struct token *self,
 					    ec->prop_clone);
 
   } else if(a != NULL && a->type == TOKEN_RSTRING) {
-    glw_set(ec->w, GLW_ATTRIB_BIND_TO_ID, rstr_get(a->t_rstring), NULL);
+    ec->w->glw_class->gc_bind_to_id(ec->w, rstr_get(a->t_rstring));
 
   } else {
     if(ec->w->glw_class->gc_bind_to_property != NULL)
@@ -4498,7 +4518,7 @@ glwf_delta(glw_view_eval_context_t *ec, struct token *self,
 
   p = prop_ref_inc(a->t_prop);
  
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
 
   if(p == de->p && de->f + f == 0) {
     prop_ref_dec(p);
@@ -4586,7 +4606,7 @@ glwf_set(glw_view_eval_context_t *ec, struct token *self,
     break;
   }
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   return 0;
 }
 
@@ -4613,7 +4633,7 @@ glwf_isVisible(glw_view_eval_context_t *ec, struct token *self,
 {
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_WIDGET_META;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_ACTIVE;
 
   r = eval_alloc(self, ec, TOKEN_INT);
 
@@ -4633,7 +4653,7 @@ glwf_canScroll(glw_view_eval_context_t *ec, struct token *self,
 {
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_WIDGET_META;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_OTHER;
 
   r = eval_alloc(self, ec, TOKEN_INT);
 
@@ -4798,7 +4818,7 @@ glwf_browse(glw_view_eval_context_t *ec, struct token *self,
 
   r = eval_alloc(self, ec, TOKEN_PROPERTY_REF);
   r->t_prop = prop_ref_inc(be->p);
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   eval_push(ec, r);
   return 0;
 }
@@ -4906,9 +4926,24 @@ glwf_sinewave(glw_view_eval_context_t *ec, struct token *self,
   int v = v64 & 0xfff;
 
   r = eval_alloc(self, ec, TOKEN_FLOAT);
-  r->t_float = sin(v * 0.00153398f);
+
+  union {
+    float f;
+    uint32_t u32;
+  } u;
+
+  u.f = sin(v * M_PI * 2.0 / 4096.0);
+
+  if(u.u32 == self->t_extra_int) {
+    // flip lowest bit so we never output same value twice as that might
+    // cause conditional layout to think that we don't need to refresh
+    u.u32 ^= 1;
+  }
+
+  self->t_extra_int = u.u32;
+  r->t_float = u.f;
   eval_push(ec, r);
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
   return 0;
 }
 
@@ -4926,7 +4961,7 @@ glwf_monotime(glw_view_eval_context_t *ec, struct token *self,
   r = eval_alloc(self, ec, TOKEN_FLOAT);
   r->t_float = gr->gr_time_sec;
   eval_push(ec, r);
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
   return 0;
 }
 
@@ -4994,7 +5029,8 @@ glwf_delay(glw_view_eval_context_t *ec, struct token *self,
   
   if(e->deadline > gr->gr_frame_start) {
     f = e->oldval;
-    ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+    ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
+    glw_schedule_refresh(gr, e->deadline);
   } else {
     eval_push(ec, a);
     return 0;
@@ -5043,7 +5079,7 @@ glwf_isReady(glw_view_eval_context_t *ec, struct token *self,
   } else {
     r->t_int = 0;
   }
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_WIDGET_META;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_OTHER;
   eval_push(ec, r);
   return 0;
 }
@@ -5134,7 +5170,7 @@ glwf_propGrouper(glw_view_eval_context_t *ec, struct token *self,
 
   r = eval_alloc(self, ec, TOKEN_PROPERTY_REF);
   r->t_prop = prop_ref_inc(prop_create_root(NULL));
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   eval_push(ec, r);
 
   self->t_extra = prop_grouper_create(r->t_prop, a->t_prop,
@@ -5176,7 +5212,7 @@ glwf_propSorter(glw_view_eval_context_t *ec, struct token *self,
 
   r = eval_alloc(self, ec, TOKEN_PROPERTY_REF);
   r->t_prop = prop_ref_inc(prop_create_root(NULL));
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   eval_push(ec, r);
 
   self->t_extra = prop_nf_create(r->t_prop, a->t_prop, NULL,
@@ -5285,7 +5321,7 @@ glwf_getLayer(glw_view_eval_context_t *ec, struct token *self,
 {
   token_t *r;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
 
   r = eval_alloc(self, ec, TOKEN_INT);
 
@@ -5309,7 +5345,7 @@ glwf_getWidth(glw_view_eval_context_t *ec, struct token *self,
   token_t *r;
   glw_t *w = ec->w;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
 
   if(w->glw_flags & GLW_CONSTRAINT_CONF_X) {
     r = eval_alloc(self, ec, TOKEN_INT);
@@ -5335,7 +5371,7 @@ glwf_getHeight(glw_view_eval_context_t *ec, struct token *self,
   token_t *r;
   glw_t *w = ec->w;
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
 
   if(w->glw_flags & GLW_CONSTRAINT_CONF_Y) {
     r = eval_alloc(self, ec, TOKEN_INT);
@@ -5394,7 +5430,7 @@ glwf_preferTentative(glw_view_eval_context_t *ec, struct token *self,
     abort();
   }
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   eval_push(ec, r);
   return 0;
 }
@@ -5449,7 +5485,7 @@ glwf_ignoreTentative(glw_view_eval_context_t *ec, struct token *self,
     abort();
   }
 
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   eval_push(ec, r);
   return 0;
 }
@@ -5513,39 +5549,86 @@ glwf_clamp(glw_view_eval_context_t *ec, struct token *self,
 }
 
 
-static int 
+static int
 glwf_join(glw_view_eval_context_t *ec, struct token *self,
 	  token_t **argv, unsigned int argc)
 {
   token_t *sep, *t;
   int i;
   char *ret = NULL;
-  const char *s = NULL;
-  
+  const char *parts[argc];
+  int rich[argc];
+  int nparts = 0;
+  int nriches = 0;
+
+  memset(parts, 0, sizeof(const char *) * argc);
+  memset(rich, 0, sizeof(int) * argc);
+
   if(argc < 2)
     return glw_view_seterr(ec->ei, self,
 			   "join() requires at least two arguments");
-  
+
   if((sep = token_resolve(ec, argv[0])) == NULL)
     return -1;
-  
+
   if(sep->type != TOKEN_RSTRING)
     return glw_view_seterr(ec->ei, sep,
 			   "first arg (separator) must be a string");
 
-  for(i = 1; i < argc; i++)  {
+  for(i = 1; i < argc; i++) {
     if((t = token_resolve(ec, argv[i])) == NULL)
       continue;
-    const char *x = token_as_string(t);
-    if(x == NULL)
+    if(t->type == TOKEN_RSTRING) {
+      parts[nparts] = rstr_get(t->t_rstring);
+      rich[nparts] = t->t_rstrtype == PROP_STR_RICH;
+      nriches += t->t_rstrtype == PROP_STR_RICH;
+    } else if(t->type == TOKEN_LINK) {
+      parts[nparts] = rstr_get(t->t_rstring);
+    } else if(t->type == TOKEN_CSTRING) {
+      parts[nparts] = t->t_cstring;
+    } else {
       continue;
+    }
+    nparts++;
+  }
+
+  int sep_rich = sep->t_rstrtype == PROP_STR_RICH;
+  const char *sep_str = rstr_get(sep->t_rstring);
+  const char *s = NULL;
+
+  token_t *r = eval_alloc(self, ec, TOKEN_RSTRING);
+  if(nriches == 0 && sep_rich == 0) {
+    // No rich texts
+  } else if(nriches == nparts && sep_rich) {
+    // All is rich
+    r->t_rstrtype = PROP_STR_RICH;
+  } else {
+    // Some are rich, need to promote non-rich texts
+    r->t_rstrtype = PROP_STR_RICH;
+
+    if(!sep_rich) {
+      char *tmp = alloca(html_enteties_escape(sep_str, NULL));
+      html_enteties_escape(sep_str, tmp);
+      sep_str = tmp;
+    }
+
+    for(i = 0; i < nparts; i++) {
+      if(!rich[i]) {
+        char *tmp = alloca(html_enteties_escape(parts[i], NULL));
+        html_enteties_escape(parts[i], tmp);
+        parts[i] = tmp;
+      }
+    }
+  }
+
+  for(i = 0; i < nparts; i++) {
     if(s != NULL)
       strappend(&ret, s);
-    strappend(&ret, x);
+    strappend(&ret, parts[i]);
     if(s == NULL)
-      s = rstr_get(sep->t_rstring);
+      s = sep_str;
   }
-  token_t *r = eval_alloc(self, ec, TOKEN_RSTRING);
+
   r->t_rstring = rstr_alloc(ret);
   free(ret);
   eval_push(ec, r);
@@ -5956,7 +6039,7 @@ glwf_multiopt(glw_view_eval_context_t *ec, struct token *self,
   }
 
   prop_link(x->value, dst->t_prop);
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_KEEP;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_KEEP;
   return 0;
 }
 
@@ -5973,7 +6056,7 @@ glwf_canSelectNext(glw_view_eval_context_t *ec, struct token *self,
    
   r->t_int = w->glw_class->gc_can_select_child != NULL &&
     w->glw_class->gc_can_select_child(w, 1);
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_WIDGET_META;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_OTHER;
   eval_push(ec, r);
   return 0;
 }
@@ -5991,7 +6074,7 @@ glwf_canSelectPrev(glw_view_eval_context_t *ec, struct token *self,
    
   r->t_int = w->glw_class->gc_can_select_child != NULL &&
     w->glw_class->gc_can_select_child(w, 0);
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_WIDGET_META;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_OTHER;
   eval_push(ec, r);
   return 0;
 }
@@ -6055,7 +6138,7 @@ glwf_cloneIndex(glw_view_eval_context_t *ec, struct token *self,
     r->t_int = c->c_pos;
   }
    // XXX replace with some kind of DYNAMIC_EVAL_SIBLING_RESEQUENCE
-  ec->dynamic_eval |= GLW_VIEW_DYNAMIC_EVAL_EVERY_FRAME;
+  ec->dynamic_eval |= GLW_VIEW_EVAL_LAYOUT;
   eval_push(ec, r);
   return 0;
 }

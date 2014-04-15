@@ -207,7 +207,9 @@ vsource_load_hls(struct vsource_list *list, const char *url)
   buf_t *b;
   char errbuf[256];
 
-  b = fa_load(url, NULL, errbuf, sizeof(errbuf), NULL, 0, NULL, NULL);
+  b = fa_load(url,
+               FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+               NULL);
 
   if(b == NULL) {
     TRACE(TRACE_INFO, "HLS", "Unable to open %s -- %s", url, errbuf);
@@ -242,7 +244,8 @@ static event_t *
 play_video(const char *url, struct media_pipe *mp,
 	   int flags, int priority,
 	   char *errbuf, size_t errlen,
-	   video_queue_t *vq)
+	   video_queue_t *vq,
+           const char *parent_url, const char *parent_title)
 {
   htsmsg_t *subs, *sources;
   const char *str;
@@ -282,7 +285,7 @@ play_video(const char *url, struct media_pipe *mp,
 	TRACE(TRACE_DEBUG, "vp", "Page %s redirects to video source %s\n",
 	      url, rstr_get(r));
 	event_t *e = play_video(rstr_get(r), mp, flags, priority,
-				errbuf, errlen, vq);
+				errbuf, errlen, vq, parent_title, parent_url);
 	rstr_release(r);
 	return e;
       }
@@ -293,9 +296,11 @@ play_video(const char *url, struct media_pipe *mp,
     }
 
     va.canonical_url = canonical_url = url;
+    va.parent_title = parent_title;
+    va.parent_url = parent_url;
     va.flags = flags | BACKEND_VIDEO_SET_TITLE;
 
-    mp_set_url(mp, url);
+    mp_set_url(mp, url, va.parent_url, va.parent_title);
     e = be->be_play_video(url, mp, errbuf, errlen, vq, &vsources, &va);
 
   } else {
@@ -404,6 +409,8 @@ play_video(const char *url, struct media_pipe *mp,
     va.canonical_url = canonical_url;
     va.flags = flags | vs->vs_flags;
     va.mimetype = vs->vs_mimetype;
+    va.parent_title = parent_title;
+    va.parent_url = parent_url;
 
     e = backend_play_video(vs->vs_url, mp, errbuf, errlen, vq, &vsources, &va);
     vsource_free(vs);
@@ -736,15 +743,20 @@ video_player_idle(void *aux)
   rstr_t *play_url = NULL;
   int force_continuous = 0;
   prop_t *origin = NULL;
+  rstr_t *parent_url = NULL;
+  rstr_t *parent_title = NULL;
+
 
   while(run) {
-    
+
     if(play_url != NULL) {
       prop_set_void(errprop);
-      e = play_video(rstr_get(play_url), mp, 
-		     play_flags, play_priority, 
-		     errbuf, sizeof(errbuf), vq);
+      e = play_video(rstr_get(play_url), mp,
+		     play_flags, play_priority,
+		     errbuf, sizeof(errbuf), vq,
+                     rstr_get(parent_url), rstr_get(parent_title));
       mp_bump_epoch(mp);
+      prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
       if(e == NULL)
 	prop_set_string(errprop, errbuf);
     }
@@ -780,6 +792,17 @@ video_player_idle(void *aux)
       if(vq != NULL) {
 	video_queue_destroy(vq);
 	vq = NULL;
+      }
+
+      rstr_release(parent_url);
+      parent_url = backend_normalize(rstr_alloc(ep->parent_url));
+
+      rstr_release(parent_title);
+
+      if(ep->model != NULL) {
+        parent_title = prop_get_string(ep->model, "metadata", "title", NULL);
+      } else {
+        parent_title = NULL;
       }
 
       origin = prop_ref_inc(ep->origin);
@@ -839,6 +862,8 @@ video_player_idle(void *aux)
     e = NULL;
   }
 
+  rstr_release(parent_url);
+  rstr_release(parent_title);
   rstr_release(play_url);
   if(vq != NULL)
     video_queue_destroy(vq);

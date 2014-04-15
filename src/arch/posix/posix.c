@@ -74,10 +74,14 @@ posix_init(void)
   gettimeofday(&tv, NULL);
   srand(tv.tv_usec);
 
+#ifdef STOS
+  gconf.cache_path = strdup("/stos/cache/showtime");
+  gconf.persistent_path = strdup("/stos/persistent/showtime");
+#else
   const char *homedir = getenv("HOME");
-  char buf[PATH_MAX];
 
   if(homedir != NULL) {
+    char buf[PATH_MAX];
 
     snprintf(buf, sizeof(buf), "%s/.cache/showtime", homedir);
     gconf.cache_path = strdup(buf);
@@ -85,6 +89,7 @@ posix_init(void)
     snprintf(buf, sizeof(buf), "%s/.hts/showtime", homedir);
     gconf.persistent_path = strdup(buf);
   }
+#endif
 
   setlocale(LC_ALL, "");
   decorate_trace = isatty(2);
@@ -191,21 +196,6 @@ arch_get_seed(void)
   v = (v << 32) ^ time(NULL);
   return v;
 }
-
-
-#if 0
-/**
- *
- */
-void
-arch_preload_fonts(void)
-{
-#ifdef __APPLE__
-  freetype_load_font("file:///Library/Fonts/Arial Unicode.ttf",
-		     FONT_DOMAIN_FALLBACK, NULL);
-#endif
-}
-#endif
 
 
 #include <sys/mman.h>

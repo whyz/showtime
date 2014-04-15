@@ -48,8 +48,7 @@
 #include "blobcache.h"
 #include "i18n.h"
 #include "misc/str.h"
-#include "misc/pixmap.h"
-#include "text/text.h"
+#include "image/image.h"
 #include "video/video_settings.h"
 #include "metadata/metadata.h"
 #include "subtitles/subtitles.h"
@@ -61,6 +60,7 @@
 #if ENABLE_GLW
 #include "src/ui/glw/glw_settings.h"
 #endif
+#include "playqueue.h"
 
 #include "networking/asyncio.h"
 
@@ -206,9 +206,12 @@ swthread(void *aux)
 
     int timeout = 0;
 
-    while(gconf.swrefresh == 0)
+    while(gconf.swrefresh == 0) {
       timeout = hts_cond_wait_timeout(&gconf.state_cond, &gconf.state_mutex,
-				      86400000);
+				      12 * 3600 * 1000);
+      if(timeout)
+	break;
+    }
     
     gconf.swrefresh = 0;
     hts_mutex_unlock(&gconf.state_mutex);
@@ -295,10 +298,12 @@ showtime_init(void)
     gconf.persistent_path = NULL;
   }
 
+  /* Per-item key/value store */
+  kvstore_init();
+
   /* Metadata init */
   metadata_init();
   metadb_init();
-  kvstore_init();
   subtitles_init();
 
   /* Metadata decoration init */
@@ -316,17 +321,11 @@ showtime_init(void)
   TRACE(TRACE_INFO, "libav", LIBAVFORMAT_IDENT", "LIBAVCODEC_IDENT", "LIBAVUTIL_IDENT);
 #endif
 
-  /* Freetype */
-#if ENABLE_LIBFREETYPE
-  freetype_init();
-  rasterizer_ft_init();
-#endif
+  init_group(INIT_GROUP_GRAPHICS);
 
 #if ENABLE_GLW
   glw_settings_init();
 #endif
-
-  fontstash_init();
 
   /* Global keymapper */
   keymapper_init();
@@ -609,6 +608,8 @@ showtime_shutdown(int retcode)
     arch_exit();
   }
 
+  event_dispatch(event_create_action(ACTION_STOP));
+  prop_destroy_by_name(prop_get_global(), "popups");
   gconf.exit_code = retcode;
 
   showtime_flush_caches();
@@ -639,7 +640,13 @@ showtime_shutdown(int retcode)
 void
 showtime_fini(void)
 {
+  prop_destroy_by_name(prop_get_global(), "popups");
+  playqueue_fini();
+  TRACE(TRACE_DEBUG, "core", "Playqueue finished");
   audio_fini();
+  TRACE(TRACE_DEBUG, "core", "Audio finihsed");
+  nav_fini();
+  TRACE(TRACE_DEBUG, "core", "Navigator finihsed");
   backend_fini();
   TRACE(TRACE_DEBUG, "core", "Backend finished");
   shutdown_hook_run(0);

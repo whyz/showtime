@@ -25,6 +25,7 @@
 #include <stdlib.h>
 
 #include "config.h"
+#include "settings.h"
 
 #if ENABLE_LIBAV
 #include <libavcodec/avcodec.h>
@@ -38,15 +39,15 @@
 #else
 
 enum codec_id {
-  CODEC_ID_AC3 = 1,
-  CODEC_ID_EAC3, 
-  CODEC_ID_AAC,
-  CODEC_ID_MP2,
-  CODEC_ID_MPEG2VIDEO,
-  CODEC_ID_H264,
-  CODEC_ID_DVB_SUBTITLE,
-  CODEC_ID_MOV_TEXT,
-  CODEC_ID_DVD_SUBTITLE,
+  AV_CODEC_ID_AC3 = 1,
+  AV_CODEC_ID_EAC3, 
+  AV_CODEC_ID_AAC,
+  AV_CODEC_ID_MP2,
+  AV_CODEC_ID_MPEG2VIDEO,
+  AV_CODEC_ID_H264,
+  AV_CODEC_ID_DVB_SUBTITLE,
+  AV_CODEC_ID_MOV_TEXT,
+  AV_CODEC_ID_DVD_SUBTITLE,
 };
 
 #define MEDIA_TYPE_VIDEO      0
@@ -71,6 +72,7 @@ struct media_buf;
 struct media_queue;
 struct media_pipe;
 struct video_decoder;
+struct cancellable;
 
 #define MP_SKIP_LIMIT 2000000 /* µs that must before a skip back is
 				 actually considered a restart */
@@ -93,9 +95,9 @@ TAILQ_HEAD(dvdspu_queue, dvdspu);
  *
  */
 typedef struct frame_info {
-  uint8_t *fi_data[4];
+  struct AVFrame *fi_avframe;
 
-  void (*fi_refop)(void *data, int delta); // Depends (A LOT) on fi_type
+  uint8_t *fi_data[4];
 
   int fi_pitch[4];
 
@@ -156,20 +158,49 @@ typedef struct media_codec {
 
   void (*close)(struct media_codec *mc);
   void (*reinit)(struct media_codec *mc);
-  void (*reconfigure)(struct media_codec *mc);
+  void (*reconfigure)(struct media_codec *mc, const frame_info_t *fi);
+
+  unsigned int sar_num;
+  unsigned int sar_den;
+
+  int (*get_buffer2)(struct AVCodecContext *s, AVFrame *frame, int flags);
 
 } media_codec_t;
 
 /**
  *
  */
-typedef void (video_frame_deliver_t)(const frame_info_t *info, void *opaque);
+typedef int (video_frame_deliver_t)(const frame_info_t *info, void *opaque);
 typedef int (set_video_codec_t)(uint32_t type, struct media_codec *mc,
-				void *opaque);
+				void *opaque, const frame_info_t *info);
+
+
 
 
 /**
- * 
+ *
+ */
+typedef union media_buf_flags {
+
+  struct {
+    uint32_t aspect_override      : 2;
+    uint32_t skip                 : 2;
+    uint32_t keyframe             : 1;
+    uint32_t flush                : 1;
+    uint32_t nopts                : 1;
+    uint32_t nodts                : 1;
+    uint32_t drive_clock          : 1;
+    uint32_t disable_deinterlacer : 1;
+  };
+
+  uint32_t u32;
+
+} media_buf_flags_t;
+
+
+
+/**
+ *
  */
 typedef struct media_buf_meta {
   int64_t mbm_delta;
@@ -177,14 +208,17 @@ typedef struct media_buf_meta {
   int64_t mbm_dts;
   int mbm_epoch;
   uint32_t mbm_duration;
-  uint32_t mbm_aspect_override      : 2;
-  uint32_t mbm_skip                 : 2;
-  uint32_t mbm_keyframe             : 1;
-  uint32_t mbm_flush                : 1; 
-  uint32_t mbm_nopts                : 1;
-  uint32_t mbm_nodts                : 1;
-  uint32_t mbm_drive_clock          : 1;
-  uint32_t mbm_disable_deinterlacer : 1;
+
+  media_buf_flags_t mbm_flags;
+
+#define mbm_aspect_override          mbm_flags.aspect_override
+#define mbm_skip                     mbm_flags.skip
+#define mbm_keyframe                 mbm_flags.keyframe
+#define mbm_flush                    mbm_flags.flush
+#define mbm_nopts                    mbm_flags.nopts
+#define mbm_nodts                    mbm_flags.nodts
+#define mbm_drive_clock              mbm_flags.drive_clock
+#define mbm_disable_deinterlacer     mbm_flags.disable_deinterlacer
 } media_buf_meta_t;
 
 
@@ -194,23 +228,30 @@ typedef struct media_buf_meta {
 typedef struct media_buf {
   TAILQ_ENTRY(media_buf) mb_link;
 
-  media_buf_meta_t mb_meta;
+  AVPacket mb_pkt;
+#define mb_pts        mb_pkt.pts
+#define mb_dts        mb_pkt.dts
+#define mb_duration   mb_pkt.duration
+#define mb_data       mb_pkt.data
+#define mb_size       mb_pkt.size
+#define mb_stream     mb_pkt.stream_index
 
-#define mb_delta                mb_meta.mbm_delta
-#define mb_pts                  mb_meta.mbm_pts
-#define mb_dts                  mb_meta.mbm_dts
-#define mb_duration             mb_meta.mbm_duration
-#define mb_epoch                mb_meta.mbm_epoch
-#define mb_aspect_override      mb_meta.mbm_aspect_override
-#define mb_skip                 mb_meta.mbm_skip
-#define mb_disable_deinterlacer mb_meta.mbm_disable_deinterlacer
-#define mb_keyframe             mb_meta.mbm_keyframe
-#define mb_drive_clock          mb_meta.mbm_drive_clock
+  int64_t mb_delta;
+
+  media_buf_flags_t mb_flags;
+
+  int mb_epoch;
+
+#define mb_aspect_override      mb_flags.aspect_override
+#define mb_skip                 mb_flags.skip
+#define mb_disable_deinterlacer mb_flags.disable_deinterlacer
+#define mb_keyframe             mb_flags.keyframe
+#define mb_drive_clock          mb_flags.drive_clock
 
   enum {
     MB_VIDEO,
     MB_AUDIO,
-
+    MB_SET_PROP_STRING,
 
     MB_DVD_CLUT,
     MB_DVD_RESET_SPU,
@@ -235,33 +276,34 @@ typedef struct media_buf {
 
     MB_CTRL_REQ_OUTPUT_SIZE,
     MB_CTRL_DVD_SPU2,
-    
+
     MB_CTRL_UNBLOCK,
 
     MB_CTRL_SET_VOLUME_MULTIPLIER,
 
   } mb_data_type;
 
-  void *mb_data;
   media_codec_t *mb_cw;
   void (*mb_dtor)(struct media_buf *mb);
 
-  int mb_size;
 
   union {
     int32_t mb_data32;
     int mb_rate;
-    int mb_codecid;
-    int mb_font_context;
     float mb_float;
+    prop_t *mb_prop;
+    uint16_t mb_font_context;
+    frame_info_t *mb_frame_info;
   };
-
-
-  uint8_t mb_stream;
 
   uint8_t mb_channels;
 
+  int mb_codecid;
+
 } media_buf_t;
+
+
+void copy_mbm_from_mb(media_buf_meta_t *mbm, const media_buf_t *mb);
 
 /*
  * Media queue
@@ -342,6 +384,8 @@ typedef struct media_pipe {
 #define MP_PRIMABLE      0x1
 #define MP_ON_STACK      0x2
 #define MP_VIDEO         0x4
+#define MP_FLUSH_ON_HOLD 0x8
+#define MP_ALWAYS_SATISFIED 0x10
 
   int mp_eof;   // End of file: We don't expect to need to read more data
   int mp_hold;  // Paused
@@ -385,7 +429,6 @@ typedef struct media_pipe {
   /* Props */
 
   prop_t *mp_prop_root;
-  prop_t *mp_prop_type;
   prop_t *mp_prop_io;
   prop_t *mp_prop_ctrl;
   prop_t *mp_prop_notifications;
@@ -443,24 +486,21 @@ typedef struct media_pipe {
    * Settings
    */
 
+  prop_t *mp_setting_root;
+
   prop_t *mp_setting_video_root;
   prop_t *mp_setting_audio_root;
   prop_t *mp_setting_subtitle_root;
-  prop_t *mp_setting_root;
 
-  struct setting *mp_setting_av_delta;   // Audio vs. Video delta
-  struct setting *mp_setting_audio_vol;  // Audio volume
-  struct setting *mp_setting_sv_delta;   // Subtitle vs. Video delta
-  struct setting *mp_setting_sub_scale;  // Subtitle scaling
-  struct setting *mp_setting_sub_displace_y;
-  struct setting *mp_setting_sub_displace_x;
-  struct setting *mp_setting_sub_on_video; // Subtitle always on video
-  struct setting *mp_setting_vzoom;      // Video zoom in %
-  struct setting *mp_setting_hstretch;   // Horizontal stretch
-  struct setting *mp_setting_fstretch;   // Fullscreen stretch
-  struct setting *mp_setting_vdpau_deinterlace;      // Deinterlace interlaced content
-  struct setting *mp_setting_standby_after_eof;
+  struct setting_list mp_settings_video;
+  struct setting_list mp_settings_audio;
+  struct setting_list mp_settings_subtitle;
 
+  struct setting_list mp_settings_video_dir;
+  struct setting_list mp_settings_audio_dir;
+  struct setting_list mp_settings_subtitle_dir;
+
+  struct setting_list mp_settings_other;
 
   /**
    * Extra (created by media_pipe_init_extra)
@@ -471,6 +511,7 @@ typedef struct media_pipe {
   void (*mp_seek_audio_done)(struct media_pipe *mp);
   void (*mp_seek_video_done)(struct media_pipe *mp);
   void (*mp_hold_changed)(struct media_pipe *mp);
+  void (*mp_clock_setup)(struct media_pipe *mp, int has_audio);
 
 
   /**
@@ -479,6 +520,11 @@ typedef struct media_pipe {
 
   int mp_vol_user;
   float mp_vol_ui;
+
+  /**
+   * Cancellable must be accessed under mp_mutex protection
+   */
+  struct cancellable *mp_cancellable;
 
 } media_pipe_t;
 
@@ -501,6 +547,12 @@ typedef struct media_codec_params {
   int cheat_for_speed;
   const void *extradata;
   size_t extradata_size;
+  unsigned int sar_num;
+  unsigned int sar_den;
+
+  unsigned int frame_rate_num;
+  unsigned int frame_rate_den;
+
 } media_codec_params_t;
 
 
@@ -571,7 +623,9 @@ media_buf_t *media_buf_alloc_locked(media_pipe_t *mp, size_t payloadsize);
 media_buf_t *media_buf_alloc_unlocked(media_pipe_t *mp, size_t payloadsize);
 media_buf_t *media_buf_from_avpkt_unlocked(media_pipe_t *mp, struct AVPacket *pkt);
 
-media_pipe_t *mp_create(const char *name, int flags, const char *type);
+void media_buf_dtor_frame_info(media_buf_t *mb);
+
+media_pipe_t *mp_create(const char *name, int flags);
 
 void mp_reinit_streams(media_pipe_t *mp);
 
@@ -600,6 +654,9 @@ void mp_send_cmd(media_pipe_t *mp, media_queue_t *mq, int cmd);
 void mp_send_cmd_data(media_pipe_t *mp, media_queue_t *mq, int cmd, void *d);
 void mp_send_cmd_u32(media_pipe_t *mp, media_queue_t *mq, int cmd, 
 		     uint32_t u);
+
+void mp_send_prop_set_string(media_pipe_t *mp, media_queue_t *mq,
+                             prop_t *prop, const char *str);
 
 void mp_flush(media_pipe_t *mp, int blackout);
 
@@ -634,22 +691,27 @@ void mp_set_playstatus_by_hold(media_pipe_t *mp, int hold, const char *msg);
 
 void mp_set_playstatus_stop(media_pipe_t *mp);
 
-void mp_set_url(media_pipe_t *mp, const char *url);
+void mp_set_url(media_pipe_t *mp, const char *url, const char *parent_url,
+                const char *parent_title);
 
 void mp_send_volume_update_locked(media_pipe_t *mp);
 
-#define MP_PLAY_CAPS_SEEK 0x1
-#define MP_PLAY_CAPS_PAUSE 0x2
-#define MP_PLAY_CAPS_EJECT 0x4
+#define MP_PLAY_CAPS_SEEK          0x1
+#define MP_PLAY_CAPS_PAUSE         0x2
+#define MP_PLAY_CAPS_EJECT         0x4
+#define MP_PLAY_CAPS_FLUSH_ON_HOLD 0x8
+#define MP_PLAY_CAPS_ALWAYS_SATISFIED 0x10
 
 #define MP_BUFFER_NONE    0
 #define MP_BUFFER_SHALLOW 2
 #define MP_BUFFER_DEEP    3
 
 void mp_configure(media_pipe_t *mp, int caps, int buffer_mode,
-		  int64_t duration);
+		  int64_t duration, const char *type);
 
 void mp_set_duration(media_pipe_t *mp, int64_t duration);
+
+void mp_set_cancellable(media_pipe_t *mp, struct cancellable *c);
 
 int64_t mq_realtime_delay(media_queue_t *mq);
 

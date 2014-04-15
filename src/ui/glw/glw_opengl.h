@@ -108,15 +108,13 @@ typedef struct glw_backend_root {
    */
   struct glw_program *gbr_yuv2rgb_1f;
   struct glw_program *gbr_yuv2rgb_2f;
+  struct glw_program *gbr_rgb2rgb_1f;
+  struct glw_program *gbr_rgb2rgb_2f;
 
   /**
    *
    */
   struct vdpau_dev *gbr_vdpau_dev;
-#if ENABLE_GLW_FRONTEND_X11
-  PFNGLXBINDTEXIMAGEEXTPROC gbr_bind_tex_image;
-  PFNGLXRELEASETEXIMAGEEXTPROC gbr_release_tex_image;
-#endif
 
   struct glw_program *gbr_renderer_tex;
   struct glw_program *gbr_renderer_tex_simple;
@@ -142,6 +140,19 @@ typedef struct glw_backend_root {
   int gbr_vertex_offset;
 
   GLuint gbr_vbo;
+
+#if ENABLE_VDPAU
+
+  PFNGLVDPAUUNREGISTERSURFACENVPROC     gbr_glVDPAUUnregisterSurfaceNV;
+  PFNGLVDPAUUNMAPSURFACESNVPROC         gbr_glVDPAUUnmapSurfacesNV;
+  PFNGLVDPAUREGISTEROUTPUTSURFACENVPROC gbr_glVDPAURegisterOutputSurfaceNV;
+  PFNGLVDPAUMAPSURFACESNVPROC           gbr_glVDPAUMapSurfacesNV;
+  PFNGLVDPAUINITNVPROC                  gbr_glVDPAUInitNV;
+
+#endif
+
+
+
 
 } glw_backend_root_t;
 

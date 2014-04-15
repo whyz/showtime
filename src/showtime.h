@@ -175,6 +175,14 @@ void *mymalloc(size_t size);
 
 void *myrealloc(void *ptr, size_t size);
 
+static inline void *myreallocf(void *ptr, size_t size)
+{
+  void *r = myrealloc(ptr, size);
+  if(ptr != NULL && size > 0 && r == NULL)
+    free(ptr);
+  return r;
+}
+
 void *mycalloc(size_t count, size_t size);
 
 void *mymemalign(size_t align, size_t size);
@@ -239,6 +247,9 @@ typedef struct gconf {
   int enable_fa_scanner_debug;
   int enable_smb_debug;
   int enable_mem_debug;
+  int enable_nav_always_close;
+  int enable_kvstore_debug;
+  int enable_conditional_rendering;
 
   const char *devplugin;
   const char *plugin_repo;
@@ -258,13 +269,17 @@ typedef struct gconf {
   struct prop *settings_network;
   struct prop_concat *settings_look_and_feel;
 
+  struct setting *setting_av_volume; // Maybe move to audio.h
+  struct setting *setting_av_sync;   // Maybe move to audio.h
+
   hts_mutex_t state_mutex;
   hts_cond_t state_cond;
 
   int state_plugins_loaded;
 
   int fa_allow_delete;
-
+  int fa_kvstore_as_xattr;
+  int show_filename_extensions;
   int ignore_the_prefix;
 
   uint32_t log_server_ipv4;
@@ -290,6 +305,7 @@ typedef struct inithelper {
     INIT_GROUP_IPC,
     INIT_GROUP_STATIC_APPS,
     INIT_GROUP_ASYNCIO,
+    INIT_GROUP_GRAPHICS,
   } group;
   void (*fn)(void);
 } inithelper_t;

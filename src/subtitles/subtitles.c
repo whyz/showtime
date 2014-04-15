@@ -300,9 +300,18 @@ check_subtitle_file(sub_scanner_t *ss,
 
     type = "ASS / SSA";
 
-  } else if(!strcasecmp(postfix, ".sub")) {
+  } else if(!strcasecmp(postfix, ".sub") ||
+            !strcasecmp(postfix, ".txt") ||
+            !strcasecmp(postfix, ".mpl")) {
 
-    type = "SUB";
+    type = subtitles_probe(sub_url);
+
+    if(type == NULL) {
+      TRACE(TRACE_DEBUG, "Subtitles", "%s is not a recognized subtitle format",
+            sub_url);
+      return;
+    }
+    TRACE(TRACE_DEBUG, "Subtitles", "%s probed as %s", sub_url, type);
 
   } else if(!strcasecmp(postfix, ".idx")) {
 
@@ -674,21 +683,23 @@ subtitles_init_settings(prop_concat_t *pc)
 
   settings_create_separator(s, _p("Subtitle size and positioning"));
 
-  setting_create(SETTING_INT, s, SETTINGS_INITIAL_UPDATE,
-                 SETTING_TITLE(_p("Subtitle size")),
-                 SETTING_VALUE(100),
-                 SETTING_RANGE(30, 500),
-                 SETTING_STEP(5),
-                 SETTING_UNIT_CSTR("%"),
-                 SETTING_WRITE_INT(&subtitle_settings.scaling),
-                 SETTING_HTSMSG("scale", store, "subtitles"),
-                 NULL);
+  subtitle_settings.scaling_setting =
+    setting_create(SETTING_INT, s, SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Subtitle size")),
+                   SETTING_VALUE(100),
+                   SETTING_RANGE(30, 500),
+                   SETTING_STEP(5),
+                   SETTING_UNIT_CSTR("%"),
+                   SETTING_HTSMSG("scale", store, "subtitles"),
+                   SETTING_VALUE_ORIGIN("global"),
+                   NULL);
 
-  setting_create(SETTING_BOOL, s, SETTINGS_INITIAL_UPDATE,
-                 SETTING_TITLE(_p("Force subtitles to reside on video frame")),
-                 SETTING_HTSMSG("subonvideoframe", store, "subtitles"),
-                 SETTING_WRITE_BOOL(&subtitle_settings.align_on_video),
-                 NULL);
+  subtitle_settings.align_on_video_setting =
+    setting_create(SETTING_BOOL, s, SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Force subtitles to reside on video frame")),
+                   SETTING_HTSMSG("subonvideoframe", store, "subtitles"),
+                   SETTING_VALUE_ORIGIN("global"),
+                   NULL);
 
   setting_create(SETTING_MULTIOPT, s, SETTINGS_INITIAL_UPDATE,
                  SETTING_TITLE(_p("Subtitle position")),
@@ -699,6 +710,28 @@ subtitles_init_settings(prop_concat_t *pc)
                  SETTING_OPTION("3", _p("Right")),
                  SETTING_OPTION("0", _p("Auto")),
                  NULL);
+
+  subtitle_settings.vertical_displacement_setting =
+    setting_create(SETTING_INT, s, SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Subtitle vertical displacement")),
+                   SETTING_RANGE(-300, 300),
+                   SETTING_STEP(5),
+                   SETTING_UNIT_CSTR("px"),
+                   SETTING_UNIT_CSTR("px"),
+                   SETTING_HTSMSG("vdisplace", store, "subtitles"),
+                   SETTING_VALUE_ORIGIN("global"),
+                   NULL);
+
+  subtitle_settings.horizontal_displacement_setting =
+    setting_create(SETTING_INT, s, SETTINGS_INITIAL_UPDATE,
+                   SETTING_TITLE(_p("Subtitle horizontal displacement")),
+                   SETTING_RANGE(-300, 300),
+                   SETTING_STEP(5),
+                   SETTING_UNIT_CSTR("px"),
+                   SETTING_UNIT_CSTR("px"),
+                   SETTING_HTSMSG("hdisplace", store, "subtitles"),
+                   SETTING_VALUE_ORIGIN("global"),
+                   NULL);
 
   setting_create(SETTING_STRING, s, SETTINGS_INITIAL_UPDATE,
                  SETTING_TITLE(_p("Color")),

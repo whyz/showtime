@@ -56,6 +56,8 @@ typedef struct rpi_video_display {
 
   media_codec_t *rvd_mc; // Current media codec
 
+  glw_rect_t rvd_pos;
+
 } rpi_video_display_t;
 
 
@@ -192,7 +194,33 @@ rvd_reset(glw_video_t *gv)
 static void
 rvd_render(glw_video_t *gv, glw_rctx_t *rc)
 {
+  rpi_video_display_t *rvd = gv->gv_aux;
+  if(!memcmp(&rvd->rvd_pos, &gv->gv_rect, sizeof(glw_rect_t)))
+    return;
+
+  rvd->rvd_pos = gv->gv_rect;
+
+  OMX_CONFIG_DISPLAYREGIONTYPE conf;
+  OMX_INIT_STRUCTURE(conf);
+  conf.nPortIndex = 90;
+
+  conf.fullscreen = OMX_FALSE;
+  conf.noaspect   = OMX_TRUE;
+
+  conf.set =
+    OMX_DISPLAY_SET_DEST_RECT |
+    OMX_DISPLAY_SET_FULLSCREEN |
+    OMX_DISPLAY_SET_NOASPECT;
+
+  conf.dest_rect.x_offset = rvd->rvd_pos.x1;
+  conf.dest_rect.y_offset = rvd->rvd_pos.y1;
+  conf.dest_rect.width    = rvd->rvd_pos.x2 - rvd->rvd_pos.x1;
+  conf.dest_rect.height   = rvd->rvd_pos.y2 - rvd->rvd_pos.y1;
+
+  omxchk(OMX_SetConfig(rvd->rvd_vrender->oc_handle,
+		       OMX_IndexConfigDisplayRegion, &conf));
 }
+
 
 
 /**
@@ -208,7 +236,8 @@ rvd_blackout(glw_video_t *gv)
 }
 
 
-static int rvd_set_codec(media_codec_t *mc, glw_video_t *gv);
+static int rvd_set_codec(media_codec_t *mc, glw_video_t *gv,
+			 const frame_info_t *fi);
 
 /**
  * Tunneled OMX
@@ -229,11 +258,14 @@ GLW_REGISTER_GVE(glw_video_rvd);
  *
  */
 static int
-rvd_set_codec(media_codec_t *mc, glw_video_t *gv)
+rvd_set_codec(media_codec_t *mc, glw_video_t *gv, const frame_info_t *fi)
 {
   media_pipe_t *mp = gv->gv_mp;
 
   glw_video_configure(gv, &glw_video_rvd);
+
+  gv->gv_width = fi->fi_width;
+  gv->gv_height = fi->fi_height;
 
   rpi_video_display_t *rvd = gv->gv_aux;
   rpi_video_codec_t *rvc = mc->opaque;

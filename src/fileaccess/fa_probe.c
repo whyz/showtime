@@ -44,7 +44,7 @@
 #include "media.h"
 #include "misc/str.h"
 #include "misc/isolang.h"
-#include "misc/jpeg.h"
+#include "image/jpeg.h"
 #include "htsmsg/htsmsg_json.h"
 
 #if ENABLE_LIBAV
@@ -59,21 +59,21 @@
  *
  */
 static const char *
-codecname(enum CodecID id)
+codecname(enum AVCodecID id)
 {
   AVCodec *c;
 
   switch(id) {
-  case CODEC_ID_AC3:
+  case AV_CODEC_ID_AC3:
     return "AC3";
-  case CODEC_ID_EAC3:
+  case AV_CODEC_ID_EAC3:
     return "EAC3";
-  case CODEC_ID_DTS:
+  case AV_CODEC_ID_DTS:
     return "DTS";
-  case CODEC_ID_TEXT:
-  case CODEC_ID_MOV_TEXT:
+  case AV_CODEC_ID_TEXT:
+  case AV_CODEC_ID_MOV_TEXT:
     return "Text";
-  case CODEC_ID_SSA:
+  case AV_CODEC_ID_SSA:
     return "SSA";
 
   default:
@@ -213,10 +213,8 @@ fa_probe_spc(metadata_t *md, const uint8_t *pb, const char *filename)
 static void 
 fa_probe_psid(metadata_t *md, uint8_t *pb)
 {
-  md->md_title  = rstr_alloc(utf8_from_bytes((char *)pb + 0x16, 32, NULL,
-					     NULL, 0));
-  md->md_artist = rstr_alloc(utf8_from_bytes((char *)pb + 0x36, 32, NULL,
-					     NULL, 0));
+  md->md_title = rstr_from_bytes_len((char *)pb + 0x16, 32, NULL, 0);
+  md->md_artist = rstr_from_bytes_len((char *)pb + 0x36, 32, NULL, 0);
 }
 
 
@@ -320,7 +318,7 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh,
     buf_t *buf;
 
     snprintf(path, sizeof(path), "zip://%s/plugin.json", url);
-    buf = fa_load(path, NULL, NULL, 0, NULL, 0, NULL, NULL);
+    buf = fa_load(path, NULL);
     if(buf != NULL) {
       htsmsg_t *json = htsmsg_json_deserialize(buf_cstr(buf));
       buf_release(buf);
@@ -351,9 +349,7 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh,
   }
 #endif
 
-  if(l > 16 &&
-     ((buf[6] == 'J' && buf[7] == 'F' && buf[8] == 'I' && buf[9] == 'F') ||
-      (buf[6] == 'E' && buf[7] == 'x' && buf[8] == 'i' && buf[9] == 'f'))) {
+  if(l > 16 && buf[0] == 0xff && buf[1] == 0xd8 && buf[2] == 0xff) {
     /* JPEG image */
     md->md_contenttype = CONTENT_IMAGE;
     fa_probe_exif(md, url, buf, fh, l); // Try to get more info
@@ -697,9 +693,10 @@ fa_probe_metadata(const char *url, char *errbuf, size_t errsize,
     return md;
   }
 
-  AVIOContext *avio = fa_libav_reopen(fh);
+  AVIOContext *avio = fa_libav_reopen(fh, 0);
  
-  if((fctx = fa_libav_open_format(avio, url, errbuf, errsize, NULL)) == NULL) {
+  if((fctx = fa_libav_open_format(avio, url, errbuf, errsize,
+                                  NULL, 0, -1, 2)) == NULL) {
     fa_libav_close(avio);
     metadata_destroy(md);
     return NULL;

@@ -30,6 +30,8 @@ uint32_t html_makecolor(const char *str);
 
 void url_deescape(char *s);
 
+void deescape_cstyle(char *s);
+
 #define URL_ESCAPE_PATH   1
 #define URL_ESCAPE_PARAM  2
 
@@ -100,12 +102,19 @@ struct buf *utf16_to_utf8(struct buf *b);
 
 typedef struct charset {
   const char *id, *title;
-  const uint16_t *ptr;
+  const uint16_t *table;
+  int (*convert)(const struct charset *cs, char *dst,
+                 const char *src, int len, int strict);
   const char **aliases;
 } charset_t;
 
-char *utf8_from_bytes(const char *str, int len, const charset_t *cs,
-		      char *msg, size_t msglen);
+struct buf *utf8_from_bytes(const char *str, int len, const charset_t *cs,
+                            char *msg, size_t msglen);
+
+struct rstr *rstr_from_bytes(const char *str, char *how, size_t howlen);
+
+struct rstr *rstr_from_bytes_len(const char *str, int len,
+                                 char *how, size_t howlen);
 
 const charset_t *charset_get(const char *id);
 
@@ -118,5 +127,9 @@ struct rstr *get_random_string(void);
 char *lp_get(char **lp);
 
 #define LINEPARSE(out, src) for(char *lp = src, *out; (out = lp_get(&lp)) != NULL; )
+
+char *find_str(char *s, int len, const char *needle);
+
+void mystrlower(char *s);
 
 #endif

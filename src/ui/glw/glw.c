@@ -66,44 +66,6 @@ glw_cond_wait(glw_root_t *gr, hts_cond_t *c)
 /**
  *
  */
-static int
-top_event_handler(glw_t *w, void *opaque, glw_signal_t sig, void *extra)
-{
-  event_t *e = extra;
-  glw_root_t *gr = opaque;
-
-  if(sig != GLW_SIGNAL_EVENT_BUBBLE)
-    return 0;
-
-  if(e->e_type_x == EVENT_KEYDESC)
-    return 0;
-
-  if(event_is_action(e, ACTION_ENABLE_SCREENSAVER)) {
-    gr->gr_screensaver_force_enable = 1;
-
-  } else if(event_is_action(e, ACTION_NAV_BACK) ||
-	    event_is_action(e, ACTION_NAV_FWD) ||
-	    event_is_action(e, ACTION_HOME) ||
-	    event_is_action(e, ACTION_PLAYQUEUE) ||
-	    event_is_action(e, ACTION_RELOAD_DATA) ||
-	    event_is_type(e, EVENT_OPENURL)) {
-
-    prop_t *p = prop_get_by_name(PNVEC("nav", "eventsink"), 0,
-                                 PROP_TAG_ROOT, gr->gr_prop_nav,
-                                 NULL);
-    prop_send_ext_event(p, e);
-    prop_ref_dec(p);
-  } else {
-    event_addref(e);
-    event_dispatch(e);
-  }
-
-  return 1;
-}
-
-/**
- *
- */
 static void
 glw_update_sizes(glw_root_t *gr)
 {
@@ -281,8 +243,6 @@ glw_load_universe(glw_root_t *gr)
 				    NULL, NULL, NULL, 0, 1);
 
   rstr_release(universe);
-
-  glw_signal_handler_register(gr->gr_universe, top_event_handler, gr, 1000);
 }
 
 /**
@@ -308,16 +268,23 @@ update_in_path(glw_t *w)
  *
  */
 void
-glw_layout0(glw_t *w, glw_rctx_t *rc)
+glw_layout0(glw_t *w, const glw_rctx_t *rc)
 {
   glw_root_t *gr = w->glw_root;
   LIST_REMOVE(w, glw_active_link);
   LIST_INSERT_HEAD(&gr->gr_active_list, w, glw_active_link);
-  if(!(w->glw_flags & GLW_ACTIVE)) {
+  int mask = GLW_VIEW_EVAL_LAYOUT;
+
+  if(unlikely(!(w->glw_flags & GLW_ACTIVE))) {
     w->glw_flags |= GLW_ACTIVE;
+    mask |= GLW_VIEW_EVAL_ACTIVE;
     glw_signal0(w, GLW_SIGNAL_ACTIVE, NULL);
   }
-  glw_signal0(w, GLW_SIGNAL_LAYOUT, rc);
+
+  if(unlikely(w->glw_dynamic_eval & mask))
+    glw_view_eval_layout(w, rc, mask);
+
+  w->glw_class->gc_layout(w, rc);
 }
 
 
@@ -364,26 +331,7 @@ glw_create(glw_root_t *gr, const glw_class_t *class,
   if(class->gc_ctor != NULL)
     class->gc_ctor(w);
 
-  if(class->gc_signal_handler != NULL)
-    glw_signal_handler_int(w, class->gc_signal_handler);
-
    return w;
-}
-
-
-/**
- *
- */
-void
-glw_set(glw_t *w, ...)
-{
-  va_list ap;
-
-  va_start(ap, w);
-
-  if(w->glw_class->gc_set != NULL)
-    w->glw_class->gc_set(w, ap);
-  va_end(ap);
 }
 
 
@@ -503,14 +451,17 @@ glw_prepare_frame(glw_root_t *gr, int flags)
   LIST_FOREACH(w, &gr->gr_every_frame_list, glw_every_frame_link)
     w->glw_class->gc_newframe(w, flags);
 
-  while((w = LIST_FIRST(&gr->gr_active_flush_list)) != NULL) {
-    LIST_REMOVE(w, glw_active_link);
-    LIST_INSERT_HEAD(&gr->gr_active_dummy_list, w, glw_active_link);
-    w->glw_flags &= ~GLW_ACTIVE;
-    glw_signal0(w, GLW_SIGNAL_INACTIVE, NULL);
-  }
+  if(gr->gr_need_refresh) {
 
-  glw_reap(gr);
+    while((w = LIST_FIRST(&gr->gr_active_flush_list)) != NULL) {
+      LIST_REMOVE(w, glw_active_link);
+      LIST_INSERT_HEAD(&gr->gr_active_dummy_list, w, glw_active_link);
+      w->glw_flags &= ~GLW_ACTIVE;
+      glw_signal0(w, GLW_SIGNAL_INACTIVE, NULL);
+    }
+
+    glw_reap(gr);
+  }
 
   if(gr->gr_mouse_valid) {
     glw_pointer_event_t gpe;
@@ -525,6 +476,14 @@ glw_prepare_frame(glw_root_t *gr, int flags)
     if(--gr->gr_delayed_focus_leave == 0 && gr->gr_current_focus) {
       glw_focus_leave(gr->gr_current_focus);
     }
+  }
+
+  if(!gconf.enable_conditional_rendering)
+    gr->gr_need_refresh = GLW_REFRESH_FLAG_LAYOUT | GLW_REFRESH_FLAG_RENDER;
+
+  if(gr->gr_scheduled_refresh <= gr->gr_frame_start) {
+    gr->gr_need_refresh = GLW_REFRESH_FLAG_LAYOUT | GLW_REFRESH_FLAG_RENDER;
+    gr->gr_scheduled_refresh = INT64_MAX;
   }
 }
 
@@ -643,7 +602,7 @@ glw_destroy(glw_t *w)
     glw_remove_from_parent(w, p);
   }
 
-  free((void *)w->glw_id);
+  rstr_release(w->glw_id_rstr);
 
   TAILQ_INSERT_TAIL(&gr->gr_destroyer_queue, w, glw_parent_link);
 
@@ -655,30 +614,22 @@ glw_destroy(glw_t *w)
  *
  */
 void
-glw_signal_handler_register(glw_t *w, glw_callback_t *func, void *opaque, 
-			    int pri)
+glw_signal_handler_register(glw_t *w, glw_callback_t *func, void *opaque)
 {
-  glw_signal_handler_t *gsh, *p = NULL;
+  glw_signal_handler_t *gsh;
 
   LIST_FOREACH(gsh, &w->glw_signal_handlers, gsh_link) {
     if(gsh->gsh_func == func && gsh->gsh_opaque == opaque)
       return;
 
-    if(gsh->gsh_pri < pri)
-      p = gsh;
   } 
 
   gsh = malloc(sizeof(glw_signal_handler_t));
   gsh->gsh_func   = func;
   gsh->gsh_opaque = opaque;
-  gsh->gsh_pri    = pri;
   gsh->gsh_defer_remove = 0;
 
-  if(p == NULL) {
-    LIST_INSERT_HEAD(&w->glw_signal_handlers, gsh, gsh_link);
-  } else {
-    LIST_INSERT_AFTER(p, gsh, gsh_link);
-  }
+  LIST_INSERT_HEAD(&w->glw_signal_handlers, gsh, gsh_link);
 }
 
 /*
@@ -709,11 +660,16 @@ glw_signal_handler_unregister(glw_t *w, glw_callback_t *func, void *opaque)
 /**
  *
  */
-int
+void
 glw_signal0(glw_t *w, glw_signal_t sig, void *extra)
 {
   glw_signal_handler_t *x, *gsh = LIST_FIRST(&w->glw_signal_handlers);
   int r;
+
+  if(w->glw_class->gc_signal_handler != NULL)
+    w->glw_class->gc_signal_handler(w, NULL, sig, extra);
+
+  glw_view_eval_signal(w, sig);
 
   while(gsh != NULL) {
     if(gsh->gsh_func != NULL) {
@@ -733,11 +689,10 @@ glw_signal0(glw_t *w, glw_signal_t sig, void *extra)
       }
 
       if(r)
-	return 1;
+	return;
     }
     gsh = LIST_NEXT(gsh, gsh_link);
   }
-  return 0;
 }
 
 
@@ -1441,11 +1396,46 @@ glw_event_to_widget(glw_t *w, event_t *e, int local)
   if(glw_event_map_intercept(w, e))
     return 1;
 
-  if(glw_signal0(w, GLW_SIGNAL_EVENT, e))
+  if(glw_send_event(w, e))
     return 1;
 
   return glw_navigate(w, e, local);
 }
+
+
+
+/**
+ *
+ */
+int
+glw_root_event_handler(glw_root_t *gr, event_t *e)
+{
+  if(e->e_type_x == EVENT_KEYDESC)
+    return 0;
+
+  if(event_is_action(e, ACTION_ENABLE_SCREENSAVER)) {
+    gr->gr_screensaver_force_enable = 1;
+
+  } else if(event_is_action(e, ACTION_NAV_BACK) ||
+	    event_is_action(e, ACTION_NAV_FWD) ||
+	    event_is_action(e, ACTION_HOME) ||
+	    event_is_action(e, ACTION_PLAYQUEUE) ||
+	    event_is_action(e, ACTION_RELOAD_DATA) ||
+	    event_is_type(e, EVENT_OPENURL)) {
+
+    prop_t *p = prop_get_by_name(PNVEC("nav", "eventsink"), 0,
+                                 PROP_TAG_ROOT, gr->gr_prop_nav,
+                                 NULL);
+    prop_send_ext_event(p, e);
+    prop_ref_dec(p);
+  } else {
+    event_addref(e);
+    event_dispatch(e);
+  }
+  return 1;
+}
+
+
 
 /**
  *
@@ -1462,13 +1452,15 @@ glw_event(glw_root_t *gr, event_t *e)
     while((w = w->glw_parent) != NULL) {
       if(glw_event_map_intercept(w, e))
 	return 1;
-      if(glw_signal0(w, GLW_SIGNAL_EVENT_BUBBLE, e))
+      w->glw_flags &= ~GLW_FLOATING_FOCUS;
+      if(glw_bubble_event(w, e))
 	return 1;
     }
   }
   if(glw_event_map_intercept(gr->gr_universe, e))
     return 1;
-  return 0;
+
+  return glw_root_event_handler(gr, e);
 }
 
 
@@ -1499,7 +1491,7 @@ glw_pointer_event0(glw_root_t *gr, glw_t *w, glw_pointer_event_t *gpe,
       if(glw_is_focusable(w) && *hp == NULL)
 	*hp = w;
 
-      if(glw_signal0(w, GLW_SIGNAL_POINTER_EVENT, &gpe0))
+      if(glw_send_pointer_event(w, &gpe0))
 	return 1;
 
       if(glw_is_focusable(w)) {
@@ -1593,7 +1585,7 @@ glw_pointer_event(glw_root_t *gr, glw_pointer_event_t *gpe)
 	gpe0.x = x;
 	gpe0.y = y;
       
-	glw_signal0(w, GLW_SIGNAL_POINTER_EVENT, &gpe0);
+	glw_send_pointer_event(w, &gpe0);
       }
 
       if((w = gr->gr_pointer_press) != NULL && w->glw_matrix != NULL) {
@@ -1614,7 +1606,7 @@ glw_pointer_event(glw_root_t *gr, glw_pointer_event_t *gpe)
     gpe0.x = x;
     gpe0.y = y;
 
-    glw_signal0(w, GLW_SIGNAL_POINTER_EVENT, &gpe0);
+    glw_send_pointer_event(w, &gpe0);
     gr->gr_pointer_grab = NULL;
     return;
   }
@@ -2068,6 +2060,7 @@ glw_class_find_by_name(const char *name)
 void
 glw_register_class(glw_class_t *gc)
 {
+  assert(gc->gc_layout != NULL);
   LIST_INSERT_HEAD(&glw_classes, gc, gc_link);
 }
 
@@ -2111,8 +2104,8 @@ glw_get_a_name(glw_t *w)
   if(w == NULL)
     return "<null>";
 
-  if(w->glw_id != NULL)
-    return w->glw_id;
+  if(w->glw_id_rstr != NULL)
+    return rstr_get(w->glw_id_rstr);
 
   static char buf[1024];
   buf[0] = 0;
@@ -2152,9 +2145,6 @@ glw_get_path(glw_t *w)
 {
   if(w == NULL)
     return "<null>";
-
-  if(w->glw_id != NULL)
-    return w->glw_id;
 
   static char buf[1024];
   buf[0] = 0;
@@ -2526,3 +2516,96 @@ glw_project(glw_rect_t *r, const glw_rctx_t *rc, const glw_root_t *gr)
   r->x2 = roundf((1.0 + (glw_vec4_extract(V1, 0) / w)) * gr->gr_width  / 2.0);
   r->y2 = roundf((1.0 - (glw_vec4_extract(V1, 1) / w)) * gr->gr_height / 2.0);
 }
+
+
+/**
+ *
+ */
+void
+glw_lp(float *v, glw_root_t *gr, float target, float alpha)
+{
+  const float in = *v;
+
+  const int x = in * 1000.0f;
+  const float out = in + alpha * (target - in);
+  const int y = out * 1000.0f;
+
+  if(x == y) {
+    *v = target;
+    return;
+  }
+  *v = out;
+  glw_need_refresh(gr, 0);
+}
+
+
+/**
+ *
+ */
+int
+glw_attrib_set_float3_clamped(float *dst, const float *src)
+{
+  float v[3];
+  for(int i = 0; i < 3; i++)
+    v[i] = GLW_CLAMP(src[i], 0.0f, 1.0f);
+  return glw_attrib_set_float3(dst, v);
+}
+
+int
+glw_attrib_set_float3(float *dst, const float *src)
+{
+  if(!memcmp(dst, src, sizeof(float) * 3))
+    return 0;
+  memcpy(dst, src, sizeof(float) * 3);
+  return 1;
+}
+
+int
+glw_attrib_set_float4(float *dst, const float *src)
+{
+  if(!memcmp(dst, src, sizeof(float) * 4))
+    return 0;
+  memcpy(dst, src, sizeof(float) * 4);
+  return 1;
+}
+
+int
+glw_attrib_set_rgb(glw_rgb_t *rgb, const float *src)
+{
+  return glw_attrib_set_float3((float *)rgb, src);
+}
+
+int
+glw_attrib_set_int16_4(int16_t *dst, const int16_t *src)
+{
+  if(!memcmp(dst, src, sizeof(int16_t) * 4))
+    return 0;
+  memcpy(dst, src, sizeof(int16_t) * 4);
+  return 1;
+}
+
+
+
+
+/**
+ *
+ */
+#ifdef GLW_TRACK_REFRESH
+void
+glw_need_refresh0(glw_root_t *gr, int how, const char *file, int line)
+{
+  int flags = GLW_REFRESH_FLAG_LAYOUT;
+
+  if(how != GLW_REFRESH_LAYOUT_ONLY)
+    flags |= GLW_REFRESH_FLAG_RENDER;
+
+  if((gr->gr_need_refresh & flags) == flags)
+    return;
+
+  gr->gr_need_refresh |= flags;
+  printf("%s%srefresh requested by %s:%d\n",
+         flags & GLW_REFRESH_FLAG_LAYOUT ? "layout " : "",
+         flags & GLW_REFRESH_FLAG_RENDER ? "render " : "",
+         file, line);
+}
+#endif

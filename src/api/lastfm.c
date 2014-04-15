@@ -31,6 +31,7 @@
 #include "fileaccess/fileaccess.h"
 #include "blobcache.h"
 #include "db/db_support.h"
+#include "metadata/metadata_sources.h"
 
 #define LASTFM_APIKEY "e8fb67200bce49da092a9de1eb1c649c"
 
@@ -137,7 +138,8 @@ lastfm_load_artistinfo(void *db, const char *artist,
                NULL);
 
   if(n) {
-    TRACE(TRACE_DEBUG, "lastfm", "HTTP query to lastfm failed: %s",  errbuf);
+    TRACE(TRACE_DEBUG, "lastfm",
+          "artist.getinfo query to lastfm failed: %s",  errbuf);
     return;
   }
   
@@ -152,7 +154,13 @@ lastfm_load_artistinfo(void *db, const char *artist,
 					  "tags", "artist",
 					  "tags", "mbid", 
 					  "cdata", NULL);
-  
+
+  if(mbid == NULL) {
+    TRACE(TRACE_DEBUG, "lastfm", "No MBID for '%s', skipping", artist);
+    htsmsg_destroy(info);
+    return;
+  }
+
   int64_t artist_id =
     metadb_artist_get_by_title(db, artist, lastfm->ms_id, mbid);
 
@@ -175,7 +183,8 @@ lastfm_load_artistinfo(void *db, const char *artist,
                  NULL);
 
     if(n) {
-      TRACE(TRACE_DEBUG, "lastfm", "HTTP query to lastfm failed: %s",  errbuf);
+      TRACE(TRACE_DEBUG, "lastfm",
+            "artist.getimages query to lastfm failed: %s",  errbuf);
       break;
     }
 

@@ -93,7 +93,7 @@ resolve_file(const char *url)
  */
 static fa_handle_t *
 b_open(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
-       int flags, struct prop *stats)
+       int flags, struct fa_open_extra *foe)
 {
   const struct filebundle_entry *fbe;
   fa_bundle_fh_t *fh;
@@ -326,14 +326,14 @@ b_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
   if((fbe = resolve_file(url)) != NULL) {
     fs->fs_type = CONTENT_FILE;
     fs->fs_size = fbe->size;
-    return FAP_STAT_OK;
+    return FAP_OK;
   }
 
   if(b_scandir(fap, NULL, url, errbuf, errlen))
-    return FAP_STAT_ERR;
+    return FAP_ERROR;
 
   fs->fs_type = CONTENT_DIR;
-  return FAP_STAT_OK;
+  return FAP_OK;
 }
 
 
@@ -387,7 +387,7 @@ find_memfile(const char *url)
  */
 static fa_handle_t *
 mf_open(fa_protocol_t *fap, const char *url, char *errbuf, size_t errlen,
-	int flags, struct prop *stats)
+	int flags, struct fa_open_extra *foe)
 {
   const memfile_t *mf = find_memfile(url);
   if(mf == NULL) {
@@ -415,12 +415,12 @@ mf_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
 
   if(mf == NULL) {
     snprintf(errbuf, errlen, "No such file or directory");
-    return FAP_STAT_ERR;
+    return FAP_ERROR;
   }
 
   fs->fs_type = CONTENT_FILE;
   fs->fs_size = mf->mf_size;
-  return FAP_STAT_OK;
+  return FAP_OK;
 }
 
 

@@ -48,10 +48,8 @@ typedef struct glw_list {
   int16_t saved_width;
   int16_t spacing;
   int16_t scroll_threshold;
-  int16_t padding_left;
-  int16_t padding_right;
-  int16_t padding_top;
-  int16_t padding_bottom;
+
+  int16_t padding[4];
 
   float alpha_falloff;
   float blur_falloff;
@@ -114,16 +112,17 @@ glw_list_update_metrics(glw_list_t *l)
 /**
  *
  */
-static int
-glw_list_layout_y(glw_list_t *l, glw_rctx_t *rc)
+static void
+glw_list_layout_y(glw_t *w, const glw_rctx_t *rc)
 {
-  glw_t *c, *w = &l->w;
+  glw_list_t *l = (glw_list_t *)w;
+  glw_t *c;
   const int bd = l->scroll_threshold;
   int ypos = bd;
   glw_rctx_t rc0 = *rc;
 
-  glw_reposition(&rc0, l->padding_left, rc->rc_height - l->padding_top,
-		 rc->rc_width  - l->padding_right, l->padding_bottom);
+  glw_reposition(&rc0, l->padding[0], rc->rc_height - l->padding[1],
+		 rc->rc_width - l->padding[2], l->padding[3]);
   int height0 = rc0.rc_height - bd * 2;
 
   float IH = 1.0f / rc0.rc_height;
@@ -207,8 +206,6 @@ glw_list_layout_y(glw_list_t *l, glw_rctx_t *rc)
 
   if(l->w.glw_flags & GLW_UPDATE_METRICS)
     glw_list_update_metrics(l);
-
-  return 0;
 }
 
 
@@ -216,16 +213,17 @@ glw_list_layout_y(glw_list_t *l, glw_rctx_t *rc)
 /**
  *
  */
-static int
-glw_list_layout_x(glw_list_t *l, glw_rctx_t *rc)
+static void
+glw_list_layout_x(glw_t *w, const glw_rctx_t *rc)
 {
-  glw_t *c, *w = &l->w;
+  glw_list_t *l = (glw_list_t *)w;
+  glw_t *c;
   const int bd = l->scroll_threshold;
   int xpos = bd;
   glw_rctx_t rc0 = *rc;
 
-  glw_reposition(&rc0, l->padding_left, rc->rc_height - l->padding_top,
-		 rc->rc_width  - l->padding_right, l->padding_bottom);
+  glw_reposition(&rc0, l->padding[0], rc->rc_height - l->padding[1],
+		 rc->rc_width - l->padding[2], l->padding[3]);
   int width0 = rc0.rc_width - bd * 2;
 
   float IW = 1.0f / rc0.rc_width;
@@ -295,8 +293,6 @@ glw_list_layout_x(glw_list_t *l, glw_rctx_t *rc)
 
   if(l->w.glw_flags & GLW_UPDATE_METRICS)
     glw_list_update_metrics(l);
-
-  return 0;
 }
 
 
@@ -377,8 +373,8 @@ glw_list_render_y(glw_t *w, const glw_rctx_t *rc)
   if(l->noclip)
     glw_store_matrix(w, &rc0);
 
-  glw_reposition(&rc0, l->padding_left, rc->rc_height - l->padding_top,
-		 rc->rc_width  - l->padding_right, l->padding_bottom);
+  glw_reposition(&rc0, l->padding[0], rc->rc_height - l->padding[1],
+		 rc->rc_width  - l->padding[2], l->padding[3]);
 
   if(!l->noclip)
     glw_store_matrix(w, &rc0);
@@ -420,8 +416,8 @@ glw_list_render_x(glw_t *w, const glw_rctx_t *rc)
     glw_store_matrix(w, rc);
 
   rc0 = *rc;
-  glw_reposition(&rc0, l->padding_left, rc->rc_height - l->padding_top,
-		 rc->rc_width  - l->padding_right, l->padding_bottom);
+  glw_reposition(&rc0, l->padding[0], rc->rc_height - l->padding[1],
+		 rc->rc_width  - l->padding[2], l->padding[3]);
   height = rc0.rc_height;
   width = rc0.rc_width;
 
@@ -489,47 +485,52 @@ glw_list_render_x(glw_t *w, const glw_rctx_t *rc)
 static void
 glw_list_scroll(glw_list_t *l, glw_scroll_t *gs)
 {
-  l->current_pos = GLW_MAX(gs->value * (l->total_size - l->page_size), 0);
+  int top = GLW_MAX(gs->value * (l->total_size - l->page_size), 0);
+
+  l->current_pos = top;
+
+  int bottom = top + l->page_size;
+
+  glw_t *c = l->w.glw_focused;
+
+  if(c == NULL)
+    return;
+
+
+  if(c->glw_parent_pos < top) {
+
+    while(c != NULL && c->glw_parent_pos < top) {
+      c = glw_next_widget(c);
+    }
+
+    if(c != NULL)
+      l->w.glw_focused = c;
+  } else if(c->glw_parent_pos > bottom) {
+
+    while(c != NULL && c->glw_parent_pos > bottom) {
+      c = glw_prev_widget(c);
+    }
+
+    if(c != NULL)
+      l->w.glw_focused = c;
+  }
 }
 
 
 
 
-static void
-handle_pointer_event(glw_list_t *l, glw_pointer_event_t *gpe)
+static int
+handle_pointer_event(glw_t *w, const glw_pointer_event_t *gpe)
 {
-  int y;
+  glw_list_t *l = (glw_list_t *)w;
 
   switch(gpe->type) {
   case GLW_POINTER_SCROLL:
     l->current_pos += l->page_size * gpe->delta_y;
     l->w.glw_flags |= GLW_UPDATE_METRICS;
-    break;
-
-  case GLW_POINTER_TOUCH_PRESS:
-    y = (0.5 - gpe->y * 0.5) *  l->page_size;
-    l->touch_pos = l->current_pos + y;
-    l->touched = 1;
-    l->velocity = 0;
-    break;
-
-  case GLW_POINTER_TOUCH_RELEASE:
-    l->touched = 0;
-    gpe->vel_y = 3;
-    l->velocity = (0.5 - gpe->vel_y * 0.5) *  l->page_size;
-    break;
-
-  case GLW_POINTER_TOUCH_MOTION:
-    if(!l->touched)
-      return;
-    
-    y = (0.5 - gpe->y * 0.5) *  l->page_size;
-    l->current_pos = l->touch_pos - y;
-    l->w.glw_flags |= GLW_UPDATE_METRICS;
-    break;
-
+    return 1;
   default:
-    break;
+    return 0;
   }
 }
 
@@ -597,10 +598,6 @@ glw_list_callback(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
     }
     break;
 
-  case GLW_SIGNAL_POINTER_EVENT:
-    handle_pointer_event(l, extra);
-    break;
-
   case GLW_SIGNAL_SCROLL:
     glw_list_scroll(l, extra);
     break;
@@ -619,10 +616,6 @@ glw_list_callback(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
     }
     break;
 
-  case GLW_SIGNAL_EVENT_BUBBLE:
-    w->glw_flags &= ~GLW_FLOATING_FOCUS;
-    break;
-
   case GLW_SIGNAL_FHP_PATH_CHANGED:
     if(!glw_is_focused(w)) 
       l->suggest_cnt = 1;
@@ -631,16 +624,43 @@ glw_list_callback(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
   return 0;
 }
 
+
 /**
  *
  */
 static int
-glw_list_callback_y(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
+glw_list_set_float(glw_t *w, glw_attribute_t attrib, float value)
 {
-  if(signal == GLW_SIGNAL_LAYOUT)
-    return glw_list_layout_y((glw_list_t *)w, extra);
-  else
-    return glw_list_callback(w, opaque, signal, extra);
+  glw_list_t *l = (glw_list_t *)w;
+  switch(attrib) {
+
+  case GLW_ATTRIB_CHILD_ASPECT:
+    if(l->child_aspect == value)
+      return 0;
+
+    l->child_aspect = value;
+    break;
+
+  case GLW_ATTRIB_ALPHA_FALLOFF:
+    if(l->alpha_falloff == value)
+      return 0;
+
+    l->alpha_falloff = value;
+    l->noclip = 1;
+    break;
+
+  case GLW_ATTRIB_BLUR_FALLOFF:
+    if(l->blur_falloff == value)
+      return 0;
+
+    l->blur_falloff = value;
+    l->noclip = 1;
+    break;
+
+  default:
+    return -1;
+  }
+  return 1;
 }
 
 
@@ -648,54 +668,29 @@ glw_list_callback_y(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
  *
  */
 static int
-glw_list_callback_x(glw_t *w, void *opaque, glw_signal_t signal, void *extra)
+glw_list_set_int(glw_t *w, glw_attribute_t attrib, int value)
 {
-  if(signal == GLW_SIGNAL_LAYOUT)
-    return glw_list_layout_x((glw_list_t *)w, extra);
-  else
-    return glw_list_callback(w, opaque, signal, extra);
-}
+  glw_list_t *l = (glw_list_t *)w;
 
-/**
- *
- */
-static void 
-glw_list_set(glw_t *w, va_list ap)
-{
-  glw_attribute_t attrib;
-  glw_list_t *l = (void *)w;
+  switch(attrib) {
 
-  do {
-    attrib = va_arg(ap, int);
-    switch(attrib) {
+  case GLW_ATTRIB_SPACING:
+    if(l->spacing == value)
+      return 0;
 
-    case GLW_ATTRIB_CHILD_ASPECT:
-      l->child_aspect = va_arg(ap, double);
-      break;
+    l->spacing = value;
+    break;
 
-    case GLW_ATTRIB_SPACING:
-      l->spacing = va_arg(ap, int);
-      break;
+  case GLW_ATTRIB_SCROLL_THRESHOLD:
+    if(l->scroll_threshold == value)
+      return 0;
+    l->scroll_threshold = value;
+    break;
 
-    case GLW_ATTRIB_ALPHA_FALLOFF:
-      l->alpha_falloff = va_arg(ap, double);
-      l->noclip = 1;
-      break;
-
-    case GLW_ATTRIB_BLUR_FALLOFF:
-      l->blur_falloff = va_arg(ap, double);
-      l->noclip = 1;
-      break;
-
-    case GLW_ATTRIB_SCROLL_THRESHOLD:
-      l->scroll_threshold = va_arg(ap, int);
-      break;
-
-    default:
-      GLW_ATTRIB_CHEW(attrib, ap);
-      break;
-    }
-  } while(attrib);
+  default:
+    return -1;
+  }
+  return 1;
 }
 
 /**
@@ -752,14 +747,17 @@ glw_list_suggest_focus(glw_t *w, glw_t *c)
 /**
  *
  */
-static void
-set_padding(glw_t *w, const int16_t *v)
+static int
+glw_list_set_int16_4(glw_t *w, glw_attribute_t attrib, const int16_t *v)
 {
   glw_list_t *l = (glw_list_t *)w;
-  l->padding_left   = v[0];
-  l->padding_top    = v[1];
-  l->padding_right  = v[2];
-  l->padding_bottom = v[3];
+
+  switch(attrib) {
+  case GLW_ATTRIB_PADDING:
+    return glw_attrib_set_int16_4(l->padding, v);
+  default:
+    return -1;
+  }
 }
 
 
@@ -772,13 +770,16 @@ static glw_class_t glw_list_y = {
   .gc_nav_descend_mode = GLW_NAV_DESCEND_FOCUSED,
   .gc_nav_search_mode = GLW_NAV_SEARCH_BY_ORIENTATION_WITH_PAGING,
 
+  .gc_layout = glw_list_layout_y,
   .gc_render = glw_list_render_y,
-  .gc_set = glw_list_set,
+  .gc_set_int = glw_list_set_int,
+  .gc_set_float = glw_list_set_float,
   .gc_ctor = glw_list_y_ctor,
-  .gc_signal_handler = glw_list_callback_y,
+  .gc_signal_handler = glw_list_callback,
   .gc_escape_score = 100,
   .gc_suggest_focus = glw_list_suggest_focus,
-  .gc_set_padding = set_padding,
+  .gc_set_int16_4 = glw_list_set_int16_4,
+  .gc_pointer_event = handle_pointer_event,
 };
 
 GLW_REGISTER_CLASS(glw_list_y);
@@ -793,13 +794,16 @@ static glw_class_t glw_list_x = {
   .gc_nav_descend_mode = GLW_NAV_DESCEND_FOCUSED,
   .gc_nav_search_mode = GLW_NAV_SEARCH_BY_ORIENTATION_WITH_PAGING,
 
+  .gc_layout = glw_list_layout_x,
   .gc_render = glw_list_render_x,
-  .gc_set = glw_list_set,
+  .gc_set_int = glw_list_set_int,
+  .gc_set_float = glw_list_set_float,
   .gc_ctor = glw_list_x_ctor,
-  .gc_signal_handler = glw_list_callback_x,
+  .gc_signal_handler = glw_list_callback,
   .gc_escape_score = 100,
   .gc_suggest_focus = glw_list_suggest_focus,
-  .gc_set_padding = set_padding,
+  .gc_set_int16_4 = glw_list_set_int16_4,
+  .gc_pointer_event = handle_pointer_event,
 };
 
 GLW_REGISTER_CLASS(glw_list_x);

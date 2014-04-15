@@ -24,6 +24,7 @@
 
 #include "showtime.h"
 #include "osx.h"
+#include "osx_c.h"
 #include "src/ui/glw/glw.h"
 
 
@@ -349,26 +350,37 @@ newframe(CVDisplayLinkRef displayLink, const CVTimeStamp *now,
 
   glw_lock(gr);
 
-  glViewport(0, 0, gr->gr_width, gr->gr_height);
-  glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-  
   glw_prepare_frame(gr, GLW_NO_FRAMERATE_UPDATE);
-  
+
   if(!minimized && gr->gr_width > 1 && gr->gr_height > 1 && gr->gr_universe) {
 
-    glw_rctx_t rc;
-    glw_rctx_init(&rc, gr->gr_width, gr->gr_height, 1);
-    glw_layout0(gr->gr_universe, &rc);
-    glw_render0(gr->gr_universe, &rc);
+    if(gr->gr_need_refresh) {
+      glw_rctx_t rc;
+      gr->gr_need_refresh &= ~GLW_REFRESH_FLAG_LAYOUT;
+      glw_rctx_init(&rc, gr->gr_width, gr->gr_height, 1);
+      glw_layout0(gr->gr_universe, &rc);
+
+      if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+        glViewport(0, 0, gr->gr_width, gr->gr_height);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        glw_render0(gr->gr_universe, &rc);
+      }
+    }
 
     glw_unlock(gr);
-    glw_post_scene(gr);
+    if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+      glw_post_scene(gr);
+    }
 
   } else {
     glw_unlock(gr);
   }
-  [currentContext flushBuffer];
-    
+  if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+    [currentContext flushBuffer];
+    gr->gr_need_refresh &= ~GLW_REFRESH_FLAG_RENDER;
+  }
+
+
   CGLUnlockContext((CGLContextObj)[currentContext CGLContextObj]);
 }
 
@@ -455,12 +467,16 @@ newframe(CVDisplayLinkRef displayLink, const CVTimeStamp *now,
   
   CVDisplayLinkCreateWithActiveCGDisplays(&m_displayLink);
   CVDisplayLinkSetOutputCallback(m_displayLink, newframe, self);
-  CGLContextObj cglc = (CGLContextObj)[[self openGLContext] CGLContextObj];
-  CGLPixelFormatObj pf = 
+  m_cgl_context = (CGLContextObj)[[self openGLContext] CGLContextObj];
+  m_cgl_pixel_format =
     (CGLPixelFormatObj)[[self pixelFormat] CGLPixelFormatObj];
-  CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(m_displayLink, cglc, pf);
+
+  CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(m_displayLink,
+                                                    m_cgl_context,
+                                                    m_cgl_pixel_format);
 
   NSSize s = [self bounds].size;
+  gr->gr_private = self;
   gr->gr_width = s.width;
   gr->gr_height = s.height;
 
@@ -472,5 +488,36 @@ newframe(CVDisplayLinkRef displayLink, const CVTimeStamp *now,
 }
 
 
+/**
+ *
+ */
+- (CGLContextObj)getCglContext {
+  return m_cgl_context;
+}
+
+
+/**
+ *
+ */
+- (CGLPixelFormatObj)getCglPixelFormat {
+  return m_cgl_pixel_format;
+}
+
+
+
 @end
 
+
+CGLContextObj
+osx_get_cgl_context(glw_root_t *gr)
+{
+  GLWView *v = gr->gr_private;
+  return [v getCglContext];
+}
+
+CGLPixelFormatObj
+osx_get_cgl_pixel_format(glw_root_t *gr)
+{
+  GLWView *v = gr->gr_private;
+  return [v getCglPixelFormat];
+}

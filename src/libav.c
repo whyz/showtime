@@ -19,6 +19,7 @@
  *  For more information, contact andreas@lonelycoder.com
  */
 
+#include <ctype.h>
 #include <libavformat/avformat.h>
 #include <libavutil/audioconvert.h>
 
@@ -28,6 +29,13 @@
 #include "fileaccess/fa_libav.h"
 #include "video/video_decoder.h"
 
+#if ENABLE_VDPAU
+#include "video/vdpau.h"
+#endif
+
+/**
+ *
+ */
 static void
 libav_decode_video(struct media_codec *mc, struct video_decoder *vd,
                    struct media_queue *mq, struct media_buf *mb, int reqsize)
@@ -38,7 +46,7 @@ libav_decode_video(struct media_codec *mc, struct video_decoder *vd,
   AVFrame *frame = vd->vd_frame;
   int t;
 
-  vd->vd_reorder[vd->vd_reorder_ptr] = mb->mb_meta;
+  copy_mbm_from_mb(&vd->vd_reorder[vd->vd_reorder_ptr], mb);
   ctx->reordered_opaque = vd->vd_reorder_ptr;
   vd->vd_reorder_ptr = (vd->vd_reorder_ptr + 1) & VIDEO_DECODER_REORDER_MASK;
 
@@ -48,12 +56,7 @@ libav_decode_video(struct media_codec *mc, struct video_decoder *vd,
   ctx->skip_frame = mb->mb_skip == 1 ? AVDISCARD_NONREF : AVDISCARD_DEFAULT;
   avgtime_start(&vd->vd_decode_time);
 
-  AVPacket avpkt;
-  av_init_packet(&avpkt);
-  avpkt.data = mb->mb_data;
-  avpkt.size = mb->mb_size;
-
-  avcodec_decode_video2(ctx, frame, &got_pic, &avpkt);
+  avcodec_decode_video2(ctx, frame, &got_pic, &mb->mb_pkt);
 
   t = avgtime_stop(&vd->vd_decode_time, mq->mq_prop_decode_avg,
 		   mq->mq_prop_decode_peak);
@@ -66,14 +69,15 @@ libav_decode_video(struct media_codec *mc, struct video_decoder *vd,
   if(got_pic == 0 || mbm->mbm_skip == 1)
     return;
 
-  video_deliver_frame_avctx(vd, mp, mq, ctx, frame, mbm, t);
+  video_deliver_frame_avctx(vd, mp, mq, ctx, frame, mbm, t, mc);
+  av_frame_unref(frame);
 }
 
 
 /**
  *
  */
-void
+static void
 libav_video_flush(media_codec_t *mc, video_decoder_t *vd)
 {
   AVCodecContext *ctx = mc->ctx;
@@ -92,6 +96,38 @@ libav_video_flush(media_codec_t *mc, video_decoder_t *vd)
 /**
  *
  */
+static enum PixelFormat
+libav_get_format(struct AVCodecContext *ctx, const enum PixelFormat *fmt)
+{
+  media_codec_t *mc = ctx->opaque;
+  if(mc->close != NULL) {
+    mc->close(mc);
+    mc->close = NULL;
+  }
+
+#if ENABLE_VDPAU
+  if(!vdpau_init_libav_decode(mc, ctx)) {
+    return AV_PIX_FMT_VDPAU;
+  }
+#endif
+  mc->get_buffer2 = &avcodec_default_get_buffer2;
+  return avcodec_default_get_format(ctx, fmt);
+}
+
+
+/**
+ *
+ */
+static int
+get_buffer2_wrapper(struct AVCodecContext *s, AVFrame *frame, int flags)
+{
+  media_codec_t *mc = s->opaque;
+  return mc->get_buffer2(s, frame, flags);
+}
+
+/**
+ *
+ */
 static int
 media_codec_create_lavc(media_codec_t *cw, const media_codec_params_t *mcp,
                         media_pipe_t *mp)
@@ -101,9 +137,9 @@ media_codec_create_lavc(media_codec_t *cw, const media_codec_params_t *mcp,
   if(codec == NULL)
     return -1;
 
-  if(cw->codec_id == CODEC_ID_AC3 ||
-     cw->codec_id == CODEC_ID_EAC3 ||
-     cw->codec_id == CODEC_ID_DTS) {
+  if(cw->codec_id == AV_CODEC_ID_AC3 ||
+     cw->codec_id == AV_CODEC_ID_EAC3 ||
+     cw->codec_id == AV_CODEC_ID_DTS) {
 
     // We create codec instances later in audio thread.
     return 0;
@@ -119,22 +155,31 @@ media_codec_create_lavc(media_codec_t *cw, const media_codec_params_t *mcp,
     cw->ctx->extradata_size = mcp->extradata_size;
   }
 
-  if(cw->codec_id == CODEC_ID_H264 && gconf.concurrency > 1) {
+  if(cw->codec_id == AV_CODEC_ID_H264 && gconf.concurrency > 1) {
     cw->ctx->thread_count = gconf.concurrency;
     if(mcp && mcp->cheat_for_speed)
       cw->ctx->flags2 |= CODEC_FLAG2_FAST;
   }
 
+  if(codec->type == AVMEDIA_TYPE_VIDEO) {
+
+    cw->ctx->opaque = cw;
+    cw->ctx->refcounted_frames = 1;
+    cw->ctx->get_format = &libav_get_format;
+    cw->ctx->get_buffer2 = &get_buffer2_wrapper;
+
+    cw->decode = &libav_decode_video;
+    cw->flush  = &libav_video_flush;
+  }
+
   if(avcodec_open2(cw->ctx, codec, NULL) < 0) {
     TRACE(TRACE_INFO, "libav", "Unable to open codec %s",
 	  codec ? codec->name : "<noname>");
+
     if(cw->fmt_ctx != cw->ctx)
       av_freep(&cw->ctx);
+
     return -1;
-  }
-  if(codec->type == AVMEDIA_TYPE_VIDEO) {
-    cw->decode = &libav_decode_video;
-    cw->flush  = &libav_video_flush;
   }
 
   return 0;
@@ -185,7 +230,7 @@ metadata_from_libav(char *dst, size_t dstlen,
     n++;
   }
 
-  if(codec->id  == CODEC_ID_H264) {
+  if(codec->id  == AV_CODEC_ID_H264) {
     const char *p;
     switch(avctx->profile) {
     case FF_PROFILE_H264_BASELINE:  p = "Baseline";  break;

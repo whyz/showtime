@@ -38,8 +38,9 @@
 #include <libavformat/avformat.h>
 #include <libavutil/mathematics.h>
 #endif
-#include "misc/pixmap.h"
-#include "misc/jpeg.h"
+#include "misc/callout.h"
+#include "image/pixmap.h"
+#include "image/jpeg.h"
 #include "backend/backend.h"
 #include "blobcache.h"
 
@@ -54,11 +55,11 @@ static const uint8_t svgsig2[4] = {'<', 's', 'v', 'g'};
 static hts_mutex_t image_from_video_mutex[2];
 static AVCodecContext *thumbctx;
 static AVCodec *thumbcodec;
+static callout_t thumb_flush_callout;
 
-static pixmap_t *fa_image_from_video(const char *url, const image_meta_t *im,
-				     char *errbuf, size_t errlen,
-				     int *cache_control,
-				     fa_load_cb_t *cb, void *opaque);
+static image_t *fa_image_from_video(const char *url, const image_meta_t *im,
+                                    char *errbuf, size_t errlen,
+                                    int *cache_control, cancellable_t *c);
 #endif
 
 /**
@@ -70,7 +71,7 @@ fa_imageloader_init(void)
 #if ENABLE_LIBAV
   hts_mutex_init(&image_from_video_mutex[0]);
   hts_mutex_init(&image_from_video_mutex[1]);
-  thumbcodec = avcodec_find_encoder(CODEC_ID_MJPEG);
+  thumbcodec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
 #endif
 }
 
@@ -79,19 +80,24 @@ fa_imageloader_init(void)
  * Load entire image into memory using fileaccess load method.
  * Faster than open+read+close.
  */
-static pixmap_t *
+static image_t *
 fa_imageloader2(const char *url, const char **vpaths,
 		char *errbuf, size_t errlen, int *cache_control,
-		fa_load_cb_t *cb, void *opaque)
+                cancellable_t *c)
 {
   buf_t *buf;
   jpeg_meminfo_t mi;
-  pixmap_type_t fmt;
+  image_coded_type_t fmt;
   int width = -1, height = -1, orientation = 0;
 
-  buf = fa_load(url, vpaths, errbuf, errlen, cache_control, 0, cb, opaque);
+  buf = fa_load(url,
+                 FA_LOAD_VPATHS(vpaths),
+                 FA_LOAD_ERRBUF(errbuf, errlen),
+                 FA_LOAD_CACHE_CONTROL(cache_control),
+                 FA_LOAD_CANCELLABLE(c),
+                 NULL);
   if(buf == NULL || buf == NOT_MODIFIED)
-    return (pixmap_t *)buf;
+    return (image_t *)buf;
 
   const uint8_t *p = buf_c8(buf);
   mi.data = p;
@@ -102,19 +108,18 @@ fa_imageloader2(const char *url, const char **vpaths,
 
   /* Probe format */
 
-  if((p[6] == 'J' && p[7] == 'F' && p[8] == 'I' && p[9] == 'F') ||
-     (p[6] == 'E' && p[7] == 'x' && p[8] == 'i' && p[9] == 'f')) {
-      
+  if(p[0] == 0xff && p[1] == 0xd8 && p[2] == 0xff) {
+
     jpeginfo_t ji;
-    
-    if(jpeg_info(&ji, jpeginfo_mem_reader, &mi, 
+
+    if(jpeg_info(&ji, jpeginfo_mem_reader, &mi,
 		 JPEG_INFO_DIMENSIONS | JPEG_INFO_ORIENTATION,
 		 p, buf->b_size, errbuf, errlen)) {
       buf_release(buf);
       return NULL;
     }
 
-    fmt = PIXMAP_JPEG;
+    fmt = IMAGE_JPEG;
 
     width = ji.ji_width;
     height = ji.ji_height;
@@ -123,13 +128,13 @@ fa_imageloader2(const char *url, const char **vpaths,
     jpeg_info_clear(&ji);
 
   } else if(!memcmp(pngsig, p, 8)) {
-    fmt = PIXMAP_PNG;
+    fmt = IMAGE_PNG;
   } else if(!memcmp(gif87sig, p, sizeof(gif87sig)) ||
 	    !memcmp(gif89sig, p, sizeof(gif89sig))) {
-    fmt = PIXMAP_GIF;
+    fmt = IMAGE_GIF;
   } else if(!memcmp(svgsig1, p, sizeof(svgsig1)) ||
 	    !memcmp(svgsig2, p, sizeof(svgsig2))) {
-    fmt = PIXMAP_SVG;
+    fmt = IMAGE_SVG;
   } else {
   bad:
     snprintf(errbuf, errlen, "Unknown format");
@@ -137,16 +142,16 @@ fa_imageloader2(const char *url, const char **vpaths,
     return NULL;
   }
 
-  pixmap_t *pm = pixmap_alloc_coded(p, buf->b_size, fmt);
-  if(pm != NULL) {
-    pm->pm_width = width;
-    pm->pm_height = height;
-    pm->pm_orientation = orientation;
+  image_t *img = image_coded_create_from_buf(buf, fmt);
+  if(img != NULL) {
+    img->im_width = width;
+    img->im_height = height;
+    img->im_orientation = orientation;
   } else {
     snprintf(errbuf, errlen, "Out of memory");
   }
   buf_release(buf);
-  return pm;
+  return img;
 }
 
 
@@ -165,30 +170,32 @@ jpeginfo_reader(void *handle, void *buf, off_t offset, size_t size)
 /**
  *
  */
-pixmap_t *
+image_t *
 fa_imageloader(const char *url, const struct image_meta *im,
 	       const char **vpaths, char *errbuf, size_t errlen,
-	       int *cache_control, fa_load_cb_t *cb, void *opaque)
+	       int *cache_control, cancellable_t *c)
 {
   uint8_t p[16];
   int r;
   int width = -1, height = -1, orientation = 0;
   fa_handle_t *fh;
-  pixmap_t *pm;
-  pixmap_type_t fmt;
+  image_t *img;
+  image_coded_type_t fmt;
 
 #if ENABLE_LIBAV
   if(strchr(url, '#'))
-    return fa_image_from_video(url, im, errbuf, errlen, cache_control,
-			       cb, opaque);
+    return fa_image_from_video(url, im, errbuf, errlen, cache_control, c);
 #endif
 
   if(!im->im_want_thumb)
-    return fa_imageloader2(url, vpaths, errbuf, errlen, cache_control,
-			   cb, opaque);
+    return fa_imageloader2(url, vpaths, errbuf, errlen, cache_control, c);
+
+  fa_open_extra_t foe = {
+    .foe_c = c
+  };
 
   if((fh = fa_open_vpaths(url, vpaths, errbuf, errlen,
-			  FA_BUFFERED_SMALL)) == NULL)
+			  FA_BUFFERED_SMALL, &foe)) == NULL)
     return NULL;
 
   if(ONLY_CACHED(cache_control)) {
@@ -204,8 +211,7 @@ fa_imageloader(const char *url, const struct image_meta *im,
 
   /* Probe format */
 
-  if((p[6] == 'J' && p[7] == 'F' && p[8] == 'I' && p[9] == 'F') ||
-     (p[6] == 'E' && p[7] == 'x' && p[8] == 'i' && p[9] == 'f')) {
+  if(p[0] == 0xff && p[1] == 0xd8 && p[2] == 0xff) {
       
     jpeginfo_t ji;
     
@@ -219,13 +225,13 @@ fa_imageloader(const char *url, const struct image_meta *im,
     }
 
     if(im->im_want_thumb && ji.ji_thumbnail) {
-      pixmap_t *pm = pixmap_dup(ji.ji_thumbnail);
+      image_t *im = image_retain(ji.ji_thumbnail);
       fa_close(fh);
       jpeg_info_clear(&ji);
-      return pm;
+      return im;
     }
 
-    fmt = PIXMAP_JPEG;
+    fmt = IMAGE_JPEG;
 
     width = ji.ji_width;
     height = ji.ji_height;
@@ -234,13 +240,13 @@ fa_imageloader(const char *url, const struct image_meta *im,
     jpeg_info_clear(&ji);
 
   } else if(!memcmp(pngsig, p, 8)) {
-    fmt = PIXMAP_PNG;
+    fmt = IMAGE_PNG;
   } else if(!memcmp(gif87sig, p, sizeof(gif87sig)) ||
 	    !memcmp(gif89sig, p, sizeof(gif89sig))) {
-    fmt = PIXMAP_GIF;
+    fmt = IMAGE_GIF;
   } else if(!memcmp(svgsig1, p, sizeof(svgsig1)) ||
 	    !memcmp(svgsig2, p, sizeof(svgsig2))) {
-    fmt = PIXMAP_SVG;
+    fmt = IMAGE_SVG;
   } else {
     snprintf(errbuf, errlen, "Unknown format");
     fa_close(fh);
@@ -254,27 +260,28 @@ fa_imageloader(const char *url, const struct image_meta *im,
     return NULL;
   }
 
-  pm = pixmap_alloc_coded(NULL, s, fmt);
+  void *ptr;
+  img = image_coded_alloc(&ptr, s, fmt);
 
-  if(pm == NULL) {
+  if(img == NULL) {
     snprintf(errbuf, errlen, "Out of memory");
     fa_close(fh);
     return NULL;
   }
 
-  pm->pm_width = width;
-  pm->pm_height = height;
-  pm->pm_orientation = orientation;
+  img->im_width = width;
+  img->im_height = height;
+  img->im_orientation = orientation;
   fa_seek(fh, SEEK_SET, 0);
-  r = fa_read(fh, pm->pm_data, pm->pm_size);
+  r = fa_read(fh, ptr, s);
   fa_close(fh);
 
-  if(r != pm->pm_size) {
-    pixmap_release(pm);
+  if(r != s) {
+    image_release(img);
     snprintf(errbuf, errlen, "Read error");
     return NULL;
   }
-  return pm;
+  return img;
 }
 
 #if ENABLE_LIBAV
@@ -301,6 +308,20 @@ ifv_close(void)
   }
 }
 
+/**
+ *
+ */
+static void
+ifv_autoclose(callout_t *c, void *aux)
+{
+  if(hts_mutex_trylock(&image_from_video_mutex[1])) {
+    callout_arm(&thumb_flush_callout, ifv_autoclose, NULL, 5);
+  } else {
+    TRACE(TRACE_DEBUG, "Thumb", "Closing movie for thumb sources"); 
+    ifv_close();
+    hts_mutex_unlock(&image_from_video_mutex[1]);
+  }
+}
 
 /**
  *
@@ -313,7 +334,6 @@ write_thumb(const AVCodecContext *src, const AVFrame *sframe,
     return;
 
   AVCodecContext *ctx = thumbctx;
-  static AVFrame *oframe;
 
   if(ctx == NULL || ctx->width  != width || ctx->height != height) {
     
@@ -337,12 +357,9 @@ write_thumb(const AVCodecContext *src, const AVFrame *sframe,
       return;
     }
     thumbctx = ctx;
-
-    if(oframe == NULL) {
-      oframe = avcodec_alloc_frame();
-      memset(oframe, 0, sizeof(AVFrame));
-    }
   }
+
+  AVFrame *oframe = av_frame_alloc();
 
   avpicture_alloc((AVPicture *)oframe, ctx->pix_fmt, width, height);
       
@@ -362,12 +379,12 @@ write_thumb(const AVCodecContext *src, const AVFrame *sframe,
   int r = avcodec_encode_video2(ctx, &out, oframe, &got_packet);
   if(r >= 0 && got_packet) {
     buf_t *b = buf_create_and_adopt(out.size, out.data, &av_free);
-    blobcache_put(cacheid, "videothumb", b, INT32_MAX, NULL, mtime);
+    blobcache_put(cacheid, "videothumb", b, INT32_MAX, NULL, mtime, 0);
     buf_release(b);
   } else {
     assert(out.data == NULL);
   }
-  avpicture_free((AVPicture *)oframe);
+  av_frame_free(&oframe);
 }
 
 
@@ -378,12 +395,12 @@ write_thumb(const AVCodecContext *src, const AVFrame *sframe,
 /**
  *
  */
-static pixmap_t *
-fa_image_from_video2(const char *url, const image_meta_t *im, 
+static image_t *
+fa_image_from_video2(const char *url, const image_meta_t *im,
 		     const char *cacheid, char *errbuf, size_t errlen,
-		     int sec, time_t mtime, fa_load_cb_t *cb, void *opaque)
+		     int sec, time_t mtime, cancellable_t *c)
 {
-  pixmap_t *pm = NULL;
+  image_t *img = NULL;
 
   if(ifv_url == NULL || strcmp(url, ifv_url)) {
     // Need to open
@@ -394,9 +411,10 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
     if(fh == NULL)
       return NULL;
 
-    AVIOContext *avio = fa_libav_reopen(fh);
+    AVIOContext *avio = fa_libav_reopen(fh, 0);
 
-    if((fctx = fa_libav_open_format(avio, url, NULL, 0, NULL)) == NULL) {
+    if((fctx = fa_libav_open_format(avio, url, NULL, 0, NULL, 0, 0,
+				    0)) == NULL) {
       fa_libav_close(avio);
       snprintf(errbuf, errlen, "Unable to open format");
       return NULL;
@@ -440,7 +458,7 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
   }
 
   AVPacket pkt;
-  AVFrame *frame = avcodec_alloc_frame();
+  AVFrame *frame = av_frame_alloc();
   int got_pic;
 
 
@@ -462,16 +480,16 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
     int r;
 
     r = av_read_frame(ifv_fctx, &pkt);
-    
+
     if(r == AVERROR(EAGAIN))
       continue;
-    
-    if(r == AVERROR_EOF) {
+
+    if(r == AVERROR_EOF)
       break;
-    }
-    
-    if(cb != NULL && cb(opaque, 0, 1)) {
-      snprintf(errbuf, errlen, "Aborted");
+
+    if(cancellable_is_cancelled(c)) {
+      snprintf(errbuf, errlen, "Cancelled");
+      av_free_packet(&pkt);
       break;
     }
 
@@ -511,11 +529,12 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
       h = im->im_req_height;
     }
 
-    pm = pixmap_create(w, h, PIXMAP_BGR32, 0);
+    pixmap_t *pm = pixmap_create(w, h, PIXMAP_BGR32, 0);
 
     if(pm == NULL) {
       ifv_close();
       snprintf(errbuf, errlen, "Out of memory");
+      av_free(frame);
       return NULL;
     }
 
@@ -527,13 +546,14 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
       ifv_close();
       snprintf(errbuf, errlen, "Scaling failed");
       pixmap_release(pm);
+      av_free(frame);
       return NULL;
     }
     
     uint8_t *ptr[4] = {0,0,0,0};
     int strides[4] = {0,0,0,0};
 
-    ptr[0] = pm->pm_pixels;
+    ptr[0] = pm->pm_data;
     strides[0] = pm->pm_linesize;
 
     sws_scale(sws, (const uint8_t **)frame->data, frame->linesize,
@@ -543,30 +563,36 @@ fa_image_from_video2(const char *url, const image_meta_t *im,
 
     write_thumb(ifv_ctx, frame, w, h, cacheid, mtime);
 
+    img = image_create_from_pixmap(pm);
+    pixmap_release(pm);
+
     break;
   }
 
-  av_free(frame);
-  if(pm == NULL)
+  av_frame_free(&frame);
+  if(img == NULL)
     snprintf(errbuf, errlen, "Frame not found (scanned %d)", 
 	     MAX_FRAME_SCAN - cnt);
-  return pm;
+
+  avcodec_flush_buffers(ifv_ctx);
+  callout_arm(&thumb_flush_callout, ifv_autoclose, NULL, 5);
+  return img;
 }
 
 
 /**
  *
  */
-static pixmap_t *
+static image_t *
 fa_image_from_video(const char *url0, const image_meta_t *im,
 		    char *errbuf, size_t errlen, int *cache_control,
-		    fa_load_cb_t *cb, void *opaque)
+		    cancellable_t *c)
 {
   static char *stated_url;
   static fa_stat_t fs;
   time_t stattime = 0;
   time_t mtime = 0;
-  pixmap_t *pm = NULL;
+  image_t *img = NULL;
   char cacheid[512];
   char *url = mystrdupa(url0);
   char *tim = strchr(url, '#');
@@ -599,9 +625,9 @@ fa_image_from_video(const char *url0, const image_meta_t *im,
   snprintf(cacheid, sizeof(cacheid), "%s-%s", url0, siz);
   buf_t *b = blobcache_get(cacheid, "videothumb", 0, 0, NULL, &mtime);
   if(b != NULL && mtime == stattime) {
-    pm = pixmap_alloc_coded(b->b_ptr, b->b_size, PIXMAP_JPEG);
+    img = image_coded_create_from_buf(b, IMAGE_JPEG);
     buf_release(b);
-    return pm;
+    return img;
   }
   buf_release(b);
 
@@ -611,9 +637,9 @@ fa_image_from_video(const char *url0, const image_meta_t *im,
   }
 
   hts_mutex_lock(&image_from_video_mutex[1]);
-  pm = fa_image_from_video2(url, im, cacheid, errbuf, errlen,
-			    secs, stattime, cb, opaque);
+  img = fa_image_from_video2(url, im, cacheid, errbuf, errlen,
+                             secs, stattime, c);
   hts_mutex_unlock(&image_from_video_mutex[1]);
-  return pm;
+  return img;
 }
 #endif

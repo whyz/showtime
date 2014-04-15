@@ -26,26 +26,35 @@
  */
 typedef struct {
   glw_t w;
-
-  float gd_padding_left;
-  float gd_padding_right;
-  float gd_padding_top;
-  float gd_padding_bottom;
-
-  float gd_scale_x;
-  float gd_scale_y;
-  float gd_scale_z;
-
-  float gd_translate_x;
-  float gd_translate_y;
-  float gd_translate_z;
-  
-  float gd_rotate_a;
-  float gd_rotate_x;
-  float gd_rotate_y;
-  float gd_rotate_z;
-
+  float gd_scale[3];
+  float gd_translate[3];
+  float gd_rotate[4];
+  int16_t gd_padding[4];
 } glw_displacement_t;
+
+
+/**
+ *
+ */
+static void
+glw_displacement_layout(glw_t *w, const glw_rctx_t *rc)
+{
+  glw_displacement_t *gd = (glw_displacement_t *)w;
+  glw_rctx_t rc0;
+  glw_t *c;
+
+  if((c = TAILQ_FIRST(&w->glw_childs)) == NULL)
+    return;
+
+  int width  = rc->rc_width  - gd->gd_padding[0] - gd->gd_padding[2];
+  int height = rc->rc_height - gd->gd_padding[1] - gd->gd_padding[3];
+
+  rc0 = *rc;
+  rc0.rc_width  = width;
+  rc0.rc_height = height;
+
+  glw_layout0(c, &rc0);
+}
 
 
 
@@ -56,34 +65,15 @@ static int
 glw_displacement_callback(glw_t *w, void *opaque, 
 			  glw_signal_t signal, void *extra)
 {
-  glw_displacement_t *gd = (glw_displacement_t *)w;
-  glw_t *c;
-  glw_rctx_t *rc, rc0;
-
   switch(signal) {
   default:
-    break;
-
-  case GLW_SIGNAL_LAYOUT:
-    if((c = TAILQ_FIRST(&w->glw_childs)) == NULL)
-      break;
-
-    rc = extra;
-    int width  = rc->rc_width - gd->gd_padding_left - gd->gd_padding_right;
-    int height = rc->rc_height - gd->gd_padding_top - gd->gd_padding_bottom;
-
-    rc0 = *rc;
-    rc0.rc_width  = width;
-    rc0.rc_height = height;
-    
-    glw_layout0(c, &rc0);
     break;
 
  case GLW_SIGNAL_CHILD_CONSTRAINTS_CHANGED:
     glw_copy_constraints(w, extra);
     return 1;
-
   }
+
   return 0;
 }
 
@@ -106,27 +96,27 @@ glw_displacement_render(glw_t *w, const glw_rctx_t *rc)
     return;
    
   glw_Translatef(&rc0,
-		 gd->gd_translate_x,
-		 gd->gd_translate_y,
-		 gd->gd_translate_z);
+		 gd->gd_translate[0],
+		 gd->gd_translate[1],
+		 gd->gd_translate[2]);
 
   glw_Scalef(&rc0, 
-	     gd->gd_scale_x,
-	     gd->gd_scale_y,
-	     gd->gd_scale_z);
+	     gd->gd_scale[0],
+	     gd->gd_scale[1],
+	     gd->gd_scale[2]);
 
-  if(gd->gd_rotate_a)
-    glw_Rotatef(&rc0, 
-		gd->gd_rotate_a,
-		gd->gd_rotate_x,
-		gd->gd_rotate_y,
-		gd->gd_rotate_z);
+  if(gd->gd_rotate[0])
+    glw_Rotatef(&rc0,
+		gd->gd_rotate[0],
+		gd->gd_rotate[1],
+		gd->gd_rotate[2],
+		gd->gd_rotate[3]);
 
   glw_repositionf(&rc0,
-		  gd->gd_padding_left,
-		  rc->rc_height - gd->gd_padding_top,
-		  rc->rc_width  - gd->gd_padding_right,
-		  gd->gd_padding_bottom);
+		  gd->gd_padding[0],
+		  rc->rc_height - gd->gd_padding[1],
+		  rc->rc_width  - gd->gd_padding[2],
+		  gd->gd_padding[3]);
 
   if(glw_is_focusable(w))
     glw_store_matrix(w, &rc0);
@@ -138,13 +128,13 @@ glw_displacement_render(glw_t *w, const glw_rctx_t *rc)
 /**
  *
  */
-static void 
+static void
 glw_displacement_ctor(glw_t *w)
 {
   glw_displacement_t *gd = (glw_displacement_t *)w;
-  gd->gd_scale_x = 1;
-  gd->gd_scale_y = 1;
-  gd->gd_scale_z = 1;
+  gd->gd_scale[0] = 1.0f;
+  gd->gd_scale[1] = 1.0f;
+  gd->gd_scale[2] = 1.0f;
 }
 
 
@@ -152,58 +142,56 @@ glw_displacement_ctor(glw_t *w)
 /**
  *
  */
-static void
-set_translation(glw_t *w, const float *xyz)
+static int
+set_float3(glw_t *w, glw_attribute_t attrib, const float *vector)
 {
   glw_displacement_t *gd = (glw_displacement_t *)w;
-  gd->gd_translate_x = xyz[0];
-  gd->gd_translate_y = xyz[1];
-  gd->gd_translate_z = xyz[2];
+
+  switch(attrib) {
+  case GLW_ATTRIB_TRANSLATION:
+    return glw_attrib_set_float3(gd->gd_translate, vector);
+  case GLW_ATTRIB_SCALING:
+    return glw_attrib_set_float3(gd->gd_scale, vector);
+  default:
+    return -1;
+  }
+}
+
+
+
+/**
+ *
+ */
+static int
+displacement_set_int16_4(glw_t *w, glw_attribute_t attrib, const int16_t *v)
+{
+  glw_displacement_t *gd = (glw_displacement_t *)w;
+
+  switch(attrib) {
+  case GLW_ATTRIB_PADDING:
+    return glw_attrib_set_int16_4(gd->gd_padding, v);
+  default:
+    return -1;
+  }
 }
 
 
 /**
  *
  */
-static void
-set_scaling(glw_t *w, const float *xyz)
+static int
+set_float4(glw_t *w, glw_attribute_t attrib, const float *vector)
 {
   glw_displacement_t *gd = (glw_displacement_t *)w;
 
-  gd->gd_scale_x = xyz[0];
-  gd->gd_scale_y = xyz[1];
-  gd->gd_scale_z = xyz[2];
+  switch(attrib) {
+  case GLW_ATTRIB_ROTATION:
+    return glw_attrib_set_float4(gd->gd_rotate, vector);
+  default:
+    return -1;
+  }
 }
 
-
-/**
- *
- */
-static void
-set_padding(glw_t *w, const int16_t *v)
-{
-  glw_displacement_t *gd = (glw_displacement_t *)w;
-  
-  gd->gd_padding_left   = v[0];
-  gd->gd_padding_top    = v[1];
-  gd->gd_padding_right  = v[2];
-  gd->gd_padding_bottom = v[3];
-}
-
-
-/**
- *
- */
-static void
-set_rotation(glw_t *w, const float *v)
-{
-  glw_displacement_t *gd = (glw_displacement_t *)w;
-  
-  gd->gd_rotate_a = v[0];
-  gd->gd_rotate_x = v[1];
-  gd->gd_rotate_y = v[2];
-  gd->gd_rotate_z = v[3];
-}
 
 
 /**
@@ -213,12 +201,12 @@ static glw_class_t glw_displacement = {
   .gc_name = "displacement",
   .gc_instance_size = sizeof(glw_displacement_t),
   .gc_ctor = glw_displacement_ctor,
+  .gc_layout = glw_displacement_layout,
   .gc_render = glw_displacement_render,
   .gc_signal_handler = glw_displacement_callback,
-  .gc_set_translation = set_translation,
-  .gc_set_scaling = set_scaling,
-  .gc_set_padding = set_padding,
-  .gc_set_rotation = set_rotation,
+  .gc_set_float3 = set_float3,
+  .gc_set_float4 = set_float4,
+  .gc_set_int16_4 = displacement_set_int16_4,
 };
 
 GLW_REGISTER_CLASS(glw_displacement);

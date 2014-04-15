@@ -35,6 +35,16 @@
  *
  */
 static void
+glt_cancel(glw_loadable_texture_t *glt)
+{
+  cancellable_cancel(&glt->glt_cancellable);
+}
+
+
+/**
+ *
+ */
+static void
 glw_tex_purge_stash(glw_root_t *gr, int stash)
 {
   while(gr->gr_tex_stash[stash].size > gr->gr_tex_stash[stash].limit) {
@@ -76,7 +86,7 @@ glw_tex_stash(glw_root_t *gr, glw_loadable_texture_t *glt, int unreferenced)
 
   glt->glt_state = GLT_STATE_STASHED;
 
-  int stash = glt->glt_original_type == PIXMAP_JPEG;
+  int stash = glt->glt_origin_type == IMAGE_JPEG;
 
   glt->glt_stash = stash;
   glt->glt_q = &gr->gr_tex_stash[stash].q;
@@ -125,6 +135,7 @@ glw_tex_autoflush(glw_root_t *gr)
 
     case GLT_STATE_LOADING:
       glt->glt_state = GLT_STATE_LOAD_ABORT;
+      glt_cancel(glt);
       break;
 
     case GLT_STATE_STASHED:
@@ -196,24 +207,13 @@ glt_enqueue(glw_root_t *gr, glw_loadable_texture_t *glt, int q)
 /**
  *
  */
-static int
-img_load_cb(void *opaque, int loaded, int total)
-{
-  glw_loadable_texture_t *glt = opaque;
-  return glt->glt_url == NULL || glt->glt_state == GLT_STATE_LOAD_ABORT;
-}
-
-
-/**
- *
- */
 static void *
 loader_thread(void *aux)
 {
   loaderaux_t *la = aux;
   glw_root_t *gr = la->la_gr;
   glw_loadable_texture_t *glt;
-  pixmap_t *pm;
+  image_t *img;
   char errbuf[128];
   image_meta_t im = {0};
   int cache_control = 0;
@@ -243,16 +243,17 @@ loader_thread(void *aux)
 	cache_control = 0;
 	ccptr = &cache_control;
 	
-      } else if(glt->glt_q == &gr->gr_tex_load_queue[LQ_OTHER] ||
-		glt->glt_q == &gr->gr_tex_load_queue[LQ_REFRESH]) {
+      } else if(glt->glt_q == &gr->gr_tex_load_queue[LQ_REFRESH]) {
 	ccptr = BYPASS_CACHE;
       } else {
 	ccptr = NULL;
       }
 
+      cancellable_reset(&glt->glt_cancellable);
+
       glw_unlock(gr);
-      pm = backend_imageloader(url, &im, gr->gr_vpaths, errbuf, sizeof(errbuf),
-			       ccptr, img_load_cb, glt);
+      img = backend_imageloader(url, &im, gr->gr_vpaths, errbuf, sizeof(errbuf),
+                                ccptr, &glt->glt_cancellable);
 
       glw_lock(gr);
 
@@ -270,23 +271,23 @@ loader_thread(void *aux)
 #endif
 
       if(glt->glt_state == GLT_STATE_LOAD_ABORT) {
-	if(pm != NULL && pm != NOT_MODIFIED)
-	  pixmap_release(pm);
+	if(img != NULL && img != NOT_MODIFIED)
+	  image_release(img);
 	TRACE(TRACE_DEBUG, "GLW", "Load of %s was aborted", rstr_get(url));
 	glt->glt_state = GLT_STATE_INACTIVE;
-      } else if(pm == NULL) {
+      } else if(img == NULL) {
 
 	if(glt->glt_q == &gr->gr_tex_load_queue[LQ_TENTATIVE]) {
 	  glt_enqueue(gr, glt, LQ_OTHER);
 	} else if(glt->glt_q == &gr->gr_tex_load_queue[LQ_REFRESH]) {
 	  TRACE(TRACE_INFO, "GLW",
-		"Unable to load %s -- %s -- using cached copy", 
+		"Unable to load image %s -- %s -- using cached copy", 
 		rstr_get(url), errbuf);
 	  glt->glt_state = GLT_STATE_VALID;
 	} else {
 	  // if glt->glt_url is NULL we have aborted so don't ERR log
 	  if(glt->glt_url != NULL)
-	    TRACE(TRACE_ERROR, "GLW", "Unable to load %s -- %s", 
+	    TRACE(TRACE_ERROR, "GLW", "Unable to load image %s -- %s", 
 		  rstr_get(url), errbuf);
 	  else
 	    TRACE(TRACE_DEBUG, "GLW", "Aborted load of %s", 
@@ -307,24 +308,31 @@ loader_thread(void *aux)
 	    glt->glt_state = GLT_STATE_VALID;
 	  }
 
-	  if(pm != NOT_MODIFIED) {
+	  if(img != NOT_MODIFIED) {
 
             // Actually upload the texture to the render backend
 
-	    assert(!pixmap_is_coded(pm));
-	    glt->glt_orientation   = pm->pm_orientation;
+            image_component_t *ic = image_find_component(img, IMAGE_PIXMAP);
+
+            assert(ic != NULL);
+
+            pixmap_t *pm = ic->pm;
+
 	    glt->glt_aspect        = pm->pm_aspect;
 	    glt->glt_margin        = pm->pm_margin;
-            glt->glt_original_type = pm->pm_original_type;
             glt->glt_xs            = pm->pm_width;
             glt->glt_ys            = pm->pm_height;
 
+            glt->glt_origin_type   = img->im_origin_coded_type;
+	    glt->glt_orientation   = img->im_orientation;
+
 	    glt->glt_size          = glw_tex_backend_load(gr, glt, pm);
+	    glw_need_refresh(gr, 0);
 	  }
 	}
 
-	if(pm != NOT_MODIFIED)
-	  pixmap_release(pm);
+	if(img != NOT_MODIFIED)
+	  image_release(img);
       }
       rstr_release(url);
     }
@@ -459,6 +467,7 @@ glw_tex_deref(glw_root_t *gr, glw_loadable_texture_t *glt)
 
   if(glt->glt_refcnt > 0) {
 
+    // Loading state holds a ref, so this means that we're the only one
     if(glt->glt_refcnt == 1 && glt->glt_state == GLT_STATE_LOADING)
       goto unlink;
     return;
@@ -489,7 +498,10 @@ glw_tex_deref(glw_root_t *gr, glw_loadable_texture_t *glt)
 
   if(glt->glt_url == NULL)
     return;
+
  unlink:
+  if(glt->glt_state == GLT_STATE_LOADING)
+    glt_cancel(glt);
   rstr_release(glt->glt_url);
   glt->glt_url = NULL;
   LIST_REMOVE(glt, glt_global_link);

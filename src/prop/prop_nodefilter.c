@@ -32,7 +32,6 @@
 #include "showtime.h"
 #include "prop_i.h"
 #include "prop_nodefilter.h"
-#include "misc/pixmap.h"
 #include "misc/str.h"
 #include "misc/redblack.h"
 
@@ -415,7 +414,7 @@ nf_update_egress(prop_nf_t *nf, nfnode_t *nfn)
   if(en) {
     assert(nfn->out == NULL);
     nfn->out = prop_make(NULL, 0, NULL);
-    prop_link0(nfn->in, nfn->out, NULL, 0);
+    prop_link0(nfn->in, nfn->out, NULL, 0, 0);
 
     b = nfn;
     do {

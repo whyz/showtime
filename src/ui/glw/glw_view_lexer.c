@@ -22,6 +22,7 @@
 #include "glw.h"
 #include "glw_view.h"
 #include "fileaccess/fileaccess.h"
+#include "misc/str.h"
 
 /**
  *
@@ -61,6 +62,9 @@ lexer_add_token_string(glw_root_t *gr,
 {
   token_t *t = glw_view_token_alloc(gr);
   t->t_rstring = rstr_allocl(start, end - start);
+
+  deescape_cstyle(rstr_data(t->t_rstring));
+
   lexer_link_token(prev, f, line, t, type);
   return t;
 }
@@ -253,6 +257,12 @@ lexer(glw_root_t *gr,
       continue;
     }
 
+    if(src[0] == '_' && src[1] == '=' && src[2] == '_') {
+      prev = lexer_add_token_simple(gr, prev, f, line, TOKEN_DEBUG_ASSIGNMENT);
+      src+=3;
+      continue;
+    }
+
     if(src[0] == '|' && src[1] == '|') {
       prev = lexer_add_token_simple(gr, prev, f, line, TOKEN_BOOLEAN_OR);
       src+=2;
@@ -302,7 +312,7 @@ lexer(glw_root_t *gr,
       src++;
       start++;
 
-      while((*src != stop || src[-1] == '\\') && *src != 0) {
+      while((*src != stop || (src[-1] == '\\' && src[-2] != '\\')) && *src != 0) {
 	if(*src == '\n')
 	  line++;
 	src++;
@@ -378,8 +388,10 @@ glw_view_load1(glw_root_t *gr, rstr_t *url, errorinfo_t *ei, token_t *prev,
   char errbuf[256];
 
   rstr_t *p = fa_absolute_path(url, prev->file);
-  buf_t *b = fa_load(rstr_get(p), gr->gr_vpaths, 
-                     errbuf, sizeof(errbuf), NULL, 0, NULL, NULL);
+  buf_t *b = fa_load(rstr_get(p),
+                      FA_LOAD_VPATHS(gr->gr_vpaths),
+                      FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
+                      NULL);
   if(b == NULL) {
     snprintf(ei->error, sizeof(ei->error), "Unable to open \"%s\" -- %s",
 	     rstr_get(p), errbuf);

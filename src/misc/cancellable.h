@@ -18,42 +18,29 @@
  *  This program is also available under a commercial proprietary license.
  *  For more information, contact andreas@lonelycoder.com
  */
+#pragma once
 
-#ifndef JPEG_H__
-#define JPEG_H__
-
-typedef int (jpegreader_t)(void *handle, void *buf, off_t offset, size_t size);
-
-typedef struct jpeginfo {
-  int ji_width;
-  int ji_height;
-  int ji_orientation;  // See orientation in pixmap.h
-  struct pixmap *ji_thumbnail;
-  time_t ji_time;
-  struct rstr *ji_manufacturer;
-  struct rstr *ji_equipment;
-} jpeginfo_t;
+typedef struct cancellable {
+  int cancelled;
+  void (*cancel)(void *opaque);
+  void *opaque;
+} cancellable_t;
 
 
-#define JPEG_INFO_DIMENSIONS  0x1
-#define JPEG_INFO_THUMBNAIL   0x2
-#define JPEG_INFO_ORIENTATION 0x4
-#define JPEG_INFO_METADATA    0x8
+static inline int cancellable_is_cancelled(const cancellable_t *c)
+{
+  return c != NULL && c->cancelled;
+}
 
-int jpeg_info(jpeginfo_t *ji, jpegreader_t *reader, void *handle, int flags,
-	      const uint8_t *buf, size_t len, char *errbuf, size_t errlen);
+void cancellable_bind(cancellable_t *c, void (*fn)(void *opaque),
+                      void *opaque);
 
-void jpeg_info_clear(jpeginfo_t *ji);
+void cancellable_unbind(cancellable_t *c);
 
-/**
- *
- */
-typedef struct jpeg_meminfo {
-  const uint8_t *data;
-  size_t size;
-} jpeg_meminfo_t;
+void cancellable_cancel(cancellable_t *c);
 
-
-int jpeginfo_mem_reader(void *handle, void *buf, off_t offset, size_t size);
-
-#endif /* JPEG_H__ */
+static inline void cancellable_reset(cancellable_t *c)
+{
+  c->cancelled = 0;
+  c->cancel = NULL;
+}
