@@ -680,6 +680,9 @@ setting_create(int type, prop_t *model, int flags, ...)
     s->s_val = prop_create_r(s->s_root, "action");
     break;
 
+  case SETTING_SEPARATOR:
+    break;
+
   default:
     abort();
   }
@@ -851,6 +854,7 @@ setting_create(int type, prop_t *model, int flags, ...)
                [SETTING_STRING]   = "string",
                [SETTING_MULTIOPT] = "multiopt",
                [SETTING_ACTION]   = "action",
+               [SETTING_SEPARATOR]= "separator",
                }[type]);
 
   switch(type) {
@@ -1019,7 +1023,11 @@ setting_create(int type, prop_t *model, int flags, ...)
                      PROP_TAG_MUTEX, mtx,
                      NULL);
     break;
+
+  case SETTING_SEPARATOR:
+    break;
   }
+
 
   if(enabled != NULL) {
     prop_set_int(enabled, 1);
@@ -1390,14 +1398,32 @@ init_dev_settings(void)
   add_dev_bool(s, "Enable omnigrade",
 	       "omnigrade", &gconf.enable_omnigrade);
 
-  add_dev_bool(s, "Debug all HTTP requests",
-	       "httpdebug", &gconf.enable_http_debug);
+  add_dev_bool(s, "Always close pages when pressing back",
+	       "navalwaysclose", &gconf.enable_nav_always_close);
 
   add_dev_bool(s, "Disable HTTP connection reuse",
 	       "nohttpreuse", &gconf.disable_http_reuse);
 
   add_dev_bool(s, "Log AV-diff stats",
 	       "detailedavdiff", &gconf.enable_detailed_avdiff);
+#ifdef PS3
+  add_dev_bool(s, "Log memory usage",
+	       "memdebug", &gconf.enable_mem_debug);
+#endif
+
+  setting_create(SETTING_STRING, gconf.settings_dev, SETTINGS_INITIAL_UPDATE,
+                 SETTING_TITLE_CSTR("Network log destination"),
+                 SETTING_CALLBACK(set_netlog, NULL),
+                 SETTING_HTSMSG("netlogdest", s, "dev"),
+                 NULL);
+
+  // ---------- debug filtering
+
+  setting_add_cstr(gconf.settings_dev,
+                   "Debug log filtering", "separator", 0);
+
+  add_dev_bool(s, "Debug all HTTP requests",
+	       "httpdebug", &gconf.enable_http_debug);
 
   add_dev_bool(s, "Debug HLS",
 	       "hlsdebug", &gconf.enable_hls_debug);
@@ -1416,24 +1442,20 @@ init_dev_settings(void)
 
   add_dev_bool(s, "Debug SMB/CIFS (Windows File Sharing)",
 	       "smbdebug", &gconf.enable_smb_debug);
-#ifdef PS3
-  add_dev_bool(s, "Log memory usage",
-	       "memdebug", &gconf.enable_mem_debug);
-#endif
-
-  add_dev_bool(s, "Always close pages when pressing back",
-	       "navalwaysclose", &gconf.enable_nav_always_close);
 
   add_dev_bool(s, "Debug read/writes to URL key/value store",
 	       "kvstoredebug", &gconf.enable_kvstore_debug);
 
-  add_dev_bool(s, "Enable conditional UI rendering",
-	       "conduirender", &gconf.enable_conditional_rendering);
+  add_dev_bool(s, "Debug icecast streaming",
+	       "icecastdebug", &gconf.enable_icecast_debug);
 
-  setting_create(SETTING_STRING, gconf.settings_dev, SETTINGS_INITIAL_UPDATE,
-                 SETTING_TITLE_CSTR("Network log destination"),
-                 SETTING_CALLBACK(set_netlog, NULL),
-                 SETTING_HTSMSG("netlogdest", s, "dev"),
-                 NULL);
+  add_dev_bool(s, "Debug image loading and decoding",
+	       "imagedebug", &gconf.enable_image_debug);
+
+  add_dev_bool(s, "Debug settings store/load from disk",
+	       "settingsdebug", &gconf.enable_settings_debug);
+
+  add_dev_bool(s, "Debug threads",
+	       "threadsdebug", &gconf.enable_thread_debug);
 
 }

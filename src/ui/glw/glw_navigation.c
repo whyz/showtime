@@ -213,9 +213,8 @@ find_candidate(glw_t *w, query_t *query, float d_mul)
 static int
 glw_move_item(glw_t *w, action_type_t how) 
 {
-  glw_move_op_t mop;
+  glw_move_op_t mop = {0};
   int items;
-  mop.steps = 0;
 
   for(;w->glw_parent != NULL; w = w->glw_parent) {
 
@@ -255,9 +254,12 @@ glw_move_item(glw_t *w, action_type_t how)
 	continue;
       }
     }
-    if(mop.steps)
+    if(mop.steps) {
        glw_signal0(w, GLW_SIGNAL_MOVE, &mop);
-    return 1;
+       if(mop.did_move) {
+         return 1;
+       }
+    }
   }
   return 0;
 }
@@ -272,7 +274,7 @@ dowrap(glw_t *w)
   if(!glw_settings.gs_wrap)
     return 0;
 
-  int x = 0;
+  int x = 1;
   glw_signal0(w, GLW_SIGNAL_WRAP_CHECK, &x);
   return x;
 }
@@ -445,7 +447,7 @@ glw_navigate(glw_t *w, event_t *e, int local)
 
 	  } else if(pagemode == 2) {
 
-	    c = glw_last_widget(p);
+	    c = glw_last_widget(p, 1);
 	    loop = 0;
 
 	  } else {
@@ -493,7 +495,7 @@ glw_navigate(glw_t *w, event_t *e, int local)
 
 	  } else {
             if(dowrap(c)) {
-              wrap = glw_last_widget(c->glw_parent);
+              wrap = glw_last_widget(c->glw_parent, 1);
               while(wrap != NULL && !glw_is_child_focusable(wrap))
                 wrap = glw_prev_widget(wrap);
               if(wrap == c || wrap == w)

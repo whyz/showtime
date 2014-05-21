@@ -74,9 +74,6 @@ struct media_pipe;
 struct video_decoder;
 struct cancellable;
 
-#define MP_SKIP_LIMIT 2000000 /* µs that must before a skip back is
-				 actually considered a restart */
-
 typedef struct event_ts {
   event_t h;
   int64_t ts;
@@ -154,6 +151,9 @@ typedef struct media_codec {
   void (*decode)(struct media_codec *mc, struct video_decoder *vd,
 		 struct media_queue *mq, struct media_buf *mb, int reqsize);
 
+  int (*decode_locked)(struct media_codec *mc, struct video_decoder *vd,
+                       struct media_queue *mq, struct media_buf *mb);
+
   void (*flush)(struct media_codec *mc, struct video_decoder *vd);
 
   void (*close)(struct media_codec *mc);
@@ -184,7 +184,7 @@ typedef union media_buf_flags {
 
   struct {
     uint32_t aspect_override      : 2;
-    uint32_t skip                 : 2;
+    uint32_t skip                 : 1;
     uint32_t keyframe             : 1;
     uint32_t flush                : 1;
     uint32_t nopts                : 1;
@@ -317,6 +317,7 @@ typedef struct media_queue {
 
   int mq_stream;             /* Stream id, or -1 if queue is inactive */
   int mq_stream2;            /* Complementary stream */
+  int mq_no_data_interest;   // Don't wakeup if adding new DATA packet
   hts_cond_t mq_avail;
 
   int64_t mq_seektarget;
@@ -381,11 +382,17 @@ typedef struct media_pipe {
 
   LIST_ENTRY(media_pipe) mp_stack_link;
   int mp_flags;
-#define MP_PRIMABLE      0x1
-#define MP_ON_STACK      0x2
-#define MP_VIDEO         0x4
-#define MP_FLUSH_ON_HOLD 0x8
+#define MP_PRIMABLE         0x1
+#define MP_ON_STACK         0x2
+#define MP_VIDEO            0x4
+#define MP_FLUSH_ON_HOLD    0x8
 #define MP_ALWAYS_SATISFIED 0x10
+#define MP_CAN_SEEK         0x20
+#define MP_CAN_PAUSE        0x40
+#define MP_CAN_EJECT        0x80
+
+
+
 
   int mp_eof;   // End of file: We don't expect to need to read more data
   int mp_hold;  // Paused
@@ -696,18 +703,14 @@ void mp_set_url(media_pipe_t *mp, const char *url, const char *parent_url,
 
 void mp_send_volume_update_locked(media_pipe_t *mp);
 
-#define MP_PLAY_CAPS_SEEK          0x1
-#define MP_PLAY_CAPS_PAUSE         0x2
-#define MP_PLAY_CAPS_EJECT         0x4
-#define MP_PLAY_CAPS_FLUSH_ON_HOLD 0x8
-#define MP_PLAY_CAPS_ALWAYS_SATISFIED 0x10
-
 #define MP_BUFFER_NONE    0
 #define MP_BUFFER_SHALLOW 2
 #define MP_BUFFER_DEEP    3
 
-void mp_configure(media_pipe_t *mp, int caps, int buffer_mode,
+void mp_configure(media_pipe_t *mp, int flags, int buffer_mode,
 		  int64_t duration, const char *type);
+
+void mp_set_clr_flags(media_pipe_t *mp, int set, int clr);
 
 void mp_set_duration(media_pipe_t *mp, int64_t duration);
 

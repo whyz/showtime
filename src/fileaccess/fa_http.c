@@ -55,6 +55,8 @@
 #include "polarssl/havege.h"
 #endif
 
+#include "usage.h"
+
 static uint8_t nonce[20];
 
 /**
@@ -86,57 +88,6 @@ static int http_tokenize(char *buf, char **vec, int vecsize, int delimiter);
     if((hf)->hf_debug)				\
       TRACE(TRACE_DEBUG, "HTTP", x);		\
   } while(0)
-
-
-
-
-/**
- * Server quirks
- */
-LIST_HEAD(http_server_quirk_list, http_server_quirk);
-
-static struct http_server_quirk_list http_server_quirks;
-static hts_mutex_t http_server_quirk_mutex;
-
-#define HTTP_SERVER_QUIRK_NO_HEAD 0x1 // Can't do proper HEAD requests
-
-typedef struct http_server_quirk {
-  LIST_ENTRY(http_server_quirk) hsq_link;
-  char *hsq_hostname;
-  int hsq_quirks;
-} http_server_quirk_t;
-
-/**
- *
- */
-static int
-http_server_quirk_set_get(const char *hostname, int quirk)
-{
-  http_server_quirk_t *hsq;
-  int r;
-
-  hts_mutex_lock(&http_server_quirk_mutex);
-
-  LIST_FOREACH(hsq, &http_server_quirks, hsq_link) {
-    if(!strcmp(hsq->hsq_hostname, hostname))
-      break;
-  }
-  
-  if(quirk) {
-    if(hsq == NULL) {
-      hsq = malloc(sizeof(http_server_quirk_t));
-      hsq->hsq_hostname = strdup(hostname);
-    } else {
-      LIST_REMOVE(hsq, hsq_link);
-    }
-    hsq->hsq_quirks = quirk;
-    LIST_INSERT_HEAD(&http_server_quirks, hsq, hsq_link);
-  }
-  r = hsq ? hsq->hsq_quirks : 0;
-  hts_mutex_unlock(&http_server_quirk_mutex);
-  return r;
-}
-
 
 /**
  * Connection parking
@@ -516,7 +467,7 @@ cookie_persist(struct callout *c, void *aux)
   }
   hts_mutex_unlock(&http_cookies_mutex);
   htsmsg_store_save(m, "httpcookies", NULL);
-  htsmsg_destroy(m);
+  htsmsg_release(m);
 }
 
 
@@ -555,7 +506,7 @@ load_cookies(void)
     hc->hc_value  = strdup(value);
     hc->hc_expire = expire;
   }
-  htsmsg_destroy(m);
+  htsmsg_release(m);
 }
 
 
@@ -1138,7 +1089,7 @@ trace_request(htsbuf_queue_t *hq)
 /**
  *
  */
-static void *
+static buf_t *
 http_read_content(http_file_t *hf)
 {
   int s, csize;
@@ -1173,7 +1124,7 @@ http_read_content(http_file_t *hf)
 
       if(csize == 0) {
 	hf->hf_rsize = 0;
-	return buf;
+	return buf_create_from_malloced(s, buf);
       }
     }
     free(buf);
@@ -1192,7 +1143,7 @@ http_read_content(http_file_t *hf)
     return NULL;
   }
   hf->hf_rsize = 0;
-  return buf;
+  return buf_create_from_malloced(s, buf);
 }
 
 
@@ -1202,7 +1153,7 @@ http_read_content(http_file_t *hf)
 static int
 http_drain_content(http_file_t *hf)
 {
-  char *buf;
+  buf_t *buf;
 
   if(hf->hf_chunked_transfer == 0 && hf->hf_rsize < 0) {
     hf->hf_rsize = 0;
@@ -1212,7 +1163,7 @@ http_drain_content(http_file_t *hf)
   if((buf = http_read_content(hf)) == NULL)
     return -1;
 
-  free(buf);
+  buf_release(buf);
 
   if(hf->hf_connection_mode == CONNECTION_MODE_CLOSE)
     http_detach(hf, 0, "Connection-mode = close");
@@ -1658,7 +1609,6 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
   int code;
   htsbuf_queue_t q;
   int redircount = 0;
-  int nohead; // Set if server can't handle HEAD method
   struct http_header_list headers;
   struct http_header_list cookies;
 
@@ -1674,13 +1624,6 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
   htsbuf_queue_init(&q, 0);
 
-  nohead = !!(http_server_quirk_set_get(hf->hf_connection->hc_hostname, 0) &
-	      HTTP_SERVER_QUIRK_NO_HEAD);
-  
-  nohead = 1; // We're gonna test without HEAD requests for a while
-              // There seems to be a lot of issues with it, in particular
-              // for servers serving HLS
-
  again:
 
   http_headers_init(&headers, hf);
@@ -1691,14 +1634,10 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
     if(http_headers_auth(&headers, &cookies, hf, "GET", NULL, errbuf, errlen))
       return -1;
     tcp_huge_buffer(hf->hf_connection->hc_tc);
-  } else if(nohead) {
-    http_send_verb(&q, hf, "GET");
-    htsbuf_qprintf(&q, "Range: bytes=0-1\r\n");
-    if(http_headers_auth(&headers, &cookies, hf, "GET", NULL, errbuf, errlen))
-      return -1;
   } else {
-    http_send_verb(&q, hf, "HEAD");
-    if(http_headers_auth(&headers, &cookies, hf, "HEAD", NULL, errbuf, errlen))
+    http_send_verb(&q, hf, "GET");
+    htsbuf_qprintf(&q, "Range: bytes=0-4095\r\n");
+    if(http_headers_auth(&headers, &cookies, hf, "GET", NULL, errbuf, errlen))
       return -1;
   }
 
@@ -1722,62 +1661,24 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
   switch(code) {
   case 200:
-    if(hf->hf_streaming) {
-      if(hf->hf_filesize == -1)
-        hf->hf_rsize = INT64_MAX;
+    if(hf->hf_filesize == -1)
+      hf->hf_rsize = INT64_MAX;
 
-      HF_TRACE(hf, "Opened in streaming mode");
-      return 0;
-    }
+    hf->hf_no_ranges = 1;
 
-    if(nohead) {
-      http_detach(hf, 0, "Range request not understood");
-      hf->hf_streaming = 1;
-      goto reconnect;
-    }
-
-    if(hf->hf_filesize < 0) {
-      
-      if(!hf->hf_want_close && hf->hf_chunked_transfer) {
-	// Some servers seems incapable of sending content-length when
-	// in persistent connection mode (because they switch to using
-	// chunked transfer instead).
-	// Retry with HTTP/1.0 and closing connections
-
-	hf->hf_version = 0;
-	hf->hf_want_close = 1;
-	HF_TRACE(hf, "%s: No content-length, retrying with connection: close",
-		 hf->hf_url);
-	goto again;
-      }
-
-      HF_TRACE(hf, "%s: No known filesize, seeking may be slower", hf->hf_url);
-    }
-
-    // This was just a HEAD request, we don't actually get any data
-    hf->hf_rsize = 0;
-
-    if(hf->hf_connection_mode == CONNECTION_MODE_CLOSE)
-      http_detach(hf, 0, "Head request");
-
+    HF_TRACE(hf, "Opened in streaming mode");
     return 0;
-    
+
   case 206:
-    if(http_drain_content(hf)) {
-      snprintf(errbuf, errlen, "Connection lost");
-      return -1;
-    }
     if(hf->hf_filesize == -1)
       HF_TRACE(hf, "%s: No known filesize, seeking may be slower", hf->hf_url);
-
     return 0;
 
   case 301:
   case 302:
   case 303:
   case 307:
-    if(redirect(hf, &redircount, errbuf, errlen, code,
-		hf->hf_streaming || nohead))
+    if(redirect(hf, &redircount, errbuf, errlen, code, 1))
       return -1;
 
     if(hf->hf_connection_mode == CONNECTION_MODE_CLOSE)
@@ -1787,8 +1688,7 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
 
 
   case 401:
-    if(authenticate(hf, errbuf, errlen, non_interactive,
-		    hf->hf_streaming || nohead))
+    if(authenticate(hf, errbuf, errlen, non_interactive, 1))
       return -1;
 
     if(hf->hf_connection_mode == CONNECTION_MODE_CLOSE) {
@@ -1799,36 +1699,10 @@ http_open0(http_file_t *hf, int probe, char *errbuf, int errlen,
     goto again;
 
   case 405:
-    if(!nohead) {
-
-      // This server does not support HEAD, remember that
-      http_server_quirk_set_get(hf->hf_connection->hc_hostname, 
-				HTTP_SERVER_QUIRK_NO_HEAD);
-
-      // It's a bit unclear if we receive a body when we
-      // get a "405 Method Not Supported" as a result
-      // of a HEAD request (it seems to be differerent
-      // between different servers), so just disconnect
-      // and retry without HEAD
-
-      http_detach(hf, 0, "HEAD not supported");
-      nohead = 1;
-      goto reconnect;
-    }
     snprintf(errbuf, errlen, "Unsupported method");
     return -1;
 
   case -1:
-    if(!hf->hf_streaming && !nohead) {
-      // Server might choke on HEAD request
-
-      http_server_quirk_set_get(hf->hf_connection->hc_hostname, 
-				HTTP_SERVER_QUIRK_NO_HEAD);
-
-      http_detach(hf, 0, "Disconnect during HEAD request");
-      nohead = 1;
-      goto reconnect;
-    }
     snprintf(errbuf, errlen, "Server reset connection");
     return -1;
 
@@ -1943,6 +1817,10 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
   for(i = 0; i < 5; i++) {
     /* If not connected, try to (re-)connect */
   retry:
+
+    if(hf->hf_filesize != -1 && hf->hf_pos >= hf->hf_filesize)
+      return totsize; // Reading outside known filesize
+
     if((hc = hf->hf_connection) == NULL) {
       if(hf->hf_no_retries)
         return -1;
@@ -1965,9 +1843,6 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
       read_size = size - totsize;
 
       /* Must send a new request */
-
-      if(hf->hf_filesize != -1 && hf->hf_pos >= hf->hf_filesize)
-	return 0; // Reading outside known filesize
 
       htsbuf_queue_init(&q, 0);
 
@@ -2119,13 +1994,11 @@ http_read_i(http_file_t *hf, void *buf, const size_t size)
 
     if(read_size == 0)
       return totsize;
-      
-    if(hf->hf_rsize == 0 && hf->hf_connection_mode == CONNECTION_MODE_CLOSE) {
-      http_detach(hf, 0, "Connection-mode = close");
-      return totsize;
-    }
 
-    if(totsize != size && hf->hf_chunked_transfer) {
+    if(hf->hf_rsize == 0 && hf->hf_connection_mode == CONNECTION_MODE_CLOSE)
+      http_detach(hf, 0, "Connection-mode = close");
+
+    if(totsize != size) {
       i--;
       continue;
     }
@@ -2431,7 +2304,6 @@ http_init(void)
   hts_mutex_init(&http_connections_mutex);
   hts_mutex_init(&http_redirects_mutex);
   hts_mutex_init(&http_cookies_mutex);
-  hts_mutex_init(&http_server_quirk_mutex);
   hts_mutex_init(&http_auth_caches_mutex);
   load_cookies();
 }
@@ -2478,21 +2350,6 @@ static fa_protocol_t fa_protocol_https = {
 
 FAP_REGISTER(https);
 
-
-
-/**
- * XXX: Move to libhts?
- */
-static const char *
-get_cdata_by_tag(htsmsg_t *tags, const char *name)
-{
-  htsmsg_t *sub;
-  if((sub = htsmsg_get_map(tags, name)) == NULL)
-    return NULL;
-  return htsmsg_get_str(sub, "cdata");
-}
-
-
 /**
  * Parse WEBDAV PROPFIND results
  */
@@ -2500,7 +2357,7 @@ static int
 parse_propfind(http_file_t *hf, htsmsg_t *xml, fa_dir_t *fd,
 	       char *errbuf, size_t errlen)
 {
-  htsmsg_t *m, *c, *c2;
+  htsmsg_t *m, *c;
   htsmsg_field_t *f;
   const char *href, *d, *q;
   int isdir, i, r;
@@ -2515,26 +2372,19 @@ parse_propfind(http_file_t *hf, htsmsg_t *xml, fa_dir_t *fd,
   snprintf(rpath, URL_MAX, "%s", hf->hf_path);
   url_deescape(rpath);
 
-  if((m = htsmsg_get_map_multi(xml, "tags", 
-			       "DAV:multistatus", "tags", NULL)) == NULL) {
+  if((m = htsmsg_get_map(xml, "multistatus")) == NULL) {
     snprintf(errbuf, errlen, "WEBDAV: DAV:multistatus not found in XML");
     goto err;
   }
 
   HTSMSG_FOREACH(f, m) {
-    if(strcmp(f->hmf_name, "DAV:response"))
+    if(strcmp(f->hmf_name, "response"))
       continue;
     if((c = htsmsg_get_map_by_field(f)) == NULL)
       continue;
 
-    if((c = htsmsg_get_map(c, "tags")) == NULL)
-      continue;
-    
-    if((c2 = htsmsg_get_map(c, "DAV:href")) == NULL)
-      continue;
-
     /* Some DAV servers seams to send an empty href tag for root path "/" */
-    href = htsmsg_get_str(c2, "cdata") ?: "/";
+    href = htsmsg_get_str(c, "href") ?: "/";
 
     // Get rid of http://hostname (lighttpd includes those)
     if((q = strstr(href, "://")) != NULL)
@@ -2543,12 +2393,10 @@ parse_propfind(http_file_t *hf, htsmsg_t *xml, fa_dir_t *fd,
     snprintf(ehref, URL_MAX, "%s", href);
     url_deescape(ehref);
 
-    if((c = htsmsg_get_map_multi(c, "DAV:propstat", "tags",
-				 "DAV:prop", "tags", NULL)) == NULL)
+    if((c = htsmsg_get_map_multi(c, "propstat", "prop", NULL)) == NULL)
       continue;
 
-    isdir = !!htsmsg_get_map_multi(c, "DAV:resourcetype", "tags",
-				   "DAV:collection", NULL);
+    isdir = !!htsmsg_get_map_multi(c, "resourcetype", "collection", NULL);
 
     if(fd != NULL) {
 
@@ -2596,13 +2444,13 @@ parse_propfind(http_file_t *hf, htsmsg_t *xml, fa_dir_t *fd,
 
 	    if(!isdir) {
 	      
-	      if((d = get_cdata_by_tag(c, "DAV:getcontentlength")) != NULL)
+	      if((d = htsmsg_get_str(c, "getcontentlength")) != NULL)
 		fde->fde_stat.fs_size = strtoll(d, NULL, 10);
 	      else
 		fde->fde_statdone = 0;
 	    }
 
-	    if((d = get_cdata_by_tag(c, "DAV:getlastmodified")) != NULL)
+	    if((d = htsmsg_get_str(c, "getlastmodified")) != NULL)
 	      http_ctime(&fde->fde_stat.fs_mtime, d);
 	  }
 	}
@@ -2619,11 +2467,11 @@ parse_propfind(http_file_t *hf, htsmsg_t *xml, fa_dir_t *fd,
 	hf->hf_isdir = isdir;
 
 	if(!isdir) {
-	  if((d = get_cdata_by_tag(c, "DAV:getcontentlength")) != NULL)
+	  if((d = htsmsg_get_str(c, "getcontentlength")) != NULL)
 	    hf->hf_filesize = strtoll(d, NULL, 10);
         }
         hf->hf_mtime = 0;
-        if((d = get_cdata_by_tag(c, "DAV:getlastmodified")) != NULL)
+        if((d = htsmsg_get_str(c, "getlastmodified")) != NULL)
           http_ctime(&hf->hf_mtime, d);
 	goto ok;
       } 
@@ -2658,7 +2506,7 @@ dav_propfind(http_file_t *hf, fa_dir_t *fd, char *errbuf, size_t errlen,
 {
   int code, retval;
   htsbuf_queue_t q;
-  char *buf;
+  buf_t *buf;
   htsmsg_t *xml;
   int redircount = 0;
   char err0[128];
@@ -2710,14 +2558,14 @@ dav_propfind(http_file_t *hf, fa_dir_t *fd, char *errbuf, size_t errlen,
 	return -1;
       }
 
-      /* XML parser consumes 'buf' */
-      if((xml = htsmsg_xml_deserialize(buf, err0, sizeof(err0))) == NULL) {
+      xml = htsmsg_xml_deserialize_buf(buf, err0, sizeof(err0));
+      if(xml == NULL) {
 	snprintf(errbuf, errlen,
 		 "WEBDAV/PROPFIND: XML parsing failed:\n%s", err0);
 	return -1;
       }
       retval = parse_propfind(hf, xml, fd, errbuf, errlen);
-      htsmsg_destroy(xml);
+      htsmsg_release(xml);
       return retval;
 
     case 301:
@@ -2761,6 +2609,8 @@ dav_stat(fa_protocol_t *fap, const char *url, struct fa_stat *fs,
   int statcode = -1;
   hf->hf_version = 1;
   hf->hf_url = strdup(url);
+
+  usage_inc_counter("davstat", 1);
 
   if(dav_propfind(hf, NULL, errbuf, errlen, 
 		  non_interactive ? &statcode : NULL)) {

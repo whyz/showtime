@@ -267,7 +267,8 @@ window_open(glw_x11_t *gx11, int fullscreen)
 
   winAttr.event_mask = KeyPressMask | KeyReleaseMask | StructureNotifyMask |
     ButtonPressMask | ButtonReleaseMask |
-    PointerMotionMask | ButtonMotionMask | EnterWindowMask | LeaveWindowMask;
+    PointerMotionMask | ButtonMotionMask | EnterWindowMask | LeaveWindowMask |
+    ExposureMask;
 
   winAttr.background_pixmap = None;
   winAttr.background_pixel  = 0;
@@ -1022,6 +1023,12 @@ glw_x11_mainloop(glw_x11_t *gx11)
 	continue;
       
       switch(event.type) {
+      case Expose:
+	glw_lock(&gx11->gr);
+        glw_need_refresh(&gx11->gr, 0);
+	glw_unlock(&gx11->gr);
+	break;
+
       case EnterNotify:
 	break;
 
@@ -1175,21 +1182,23 @@ glw_x11_mainloop(glw_x11_t *gx11)
       gr->gr_screensaver_reset_at = gr->gr_frame_start;
 
     glw_prepare_frame(gr, flags);
-    if(gr->gr_need_refresh) {
+    int refresh = gr->gr_need_refresh;
+    gr->gr_need_refresh = 0;
+
+    if(refresh) {
       glw_rctx_t rc;
-      gr->gr_need_refresh &= ~GLW_REFRESH_FLAG_LAYOUT;
       glw_rctx_init(&rc, gr->gr_width, gx11->gr.gr_height, 1);
 
       glw_layout0(gr->gr_universe, &rc);
 
-      if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+      if(refresh & GLW_REFRESH_FLAG_RENDER) {
 	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
 	glw_render0(gr->gr_universe, &rc);
       }
     }
     glw_unlock(gr);
 
-    if(gr->gr_need_refresh & GLW_REFRESH_FLAG_RENDER) {
+    if(refresh & GLW_REFRESH_FLAG_RENDER) {
       glw_post_scene(gr);
 
       if(!gx11->working_vsync) {
@@ -1201,7 +1210,6 @@ glw_x11_mainloop(glw_x11_t *gx11)
 	clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL);
       }
       glXSwapBuffers(gx11->display, gx11->win);
-      gr->gr_need_refresh &= ~GLW_REFRESH_FLAG_RENDER;
     } else {
       usleep(16666);
     }

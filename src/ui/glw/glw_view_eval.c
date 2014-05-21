@@ -1139,7 +1139,7 @@ cloner_pagination_check(sub_cloner_t *sc)
  *
  */
 static void
-clone_req_move(sub_cloner_t *sc, glw_t *w, const glw_move_op_t *mop)
+clone_req_move(sub_cloner_t *sc, glw_t *w, glw_move_op_t *mop)
 {
   glw_t *b;
   int steps = mop->steps;
@@ -1168,6 +1168,7 @@ clone_req_move(sub_cloner_t *sc, glw_t *w, const glw_move_op_t *mop)
 
   glw_clone_t *d = b ? b->glw_clone : NULL;
   prop_req_move(w->glw_clone->c_prop, d ? d->c_prop : NULL);
+  mop->did_move = 1;
 }
 
 
@@ -4206,7 +4207,9 @@ glwf_value2size(glw_view_eval_context_t *ec, struct token *self,
       } else if(s > 1000 * 1000) {
 	snprintf(tmp, sizeof(tmp), "%.1f MB", s / 1000000.0);
       } else if(s > 1000) {
-	snprintf(tmp, sizeof(tmp), "%.1f MB", s / 1000.0);
+	snprintf(tmp, sizeof(tmp), "%.1f kB", s / 1000.0);
+      } else {
+	snprintf(tmp, sizeof(tmp), "%d B", (int)s);
       }
       str = tmp;
     }

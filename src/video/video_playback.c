@@ -34,6 +34,7 @@
 #include "htsmsg/htsmsg_json.h"
 #include "fileaccess/fileaccess.h"
 #include "misc/str.h"
+#include "usage.h"
 
 static hts_mutex_t video_queue_mutex;
 
@@ -127,25 +128,8 @@ vsource_dup(const vsource_t *src)
   vsource_t *dst = malloc(sizeof(vsource_t));
   *dst = *src;
   dst->vs_url = strdup(dst->vs_url);
-  dst->vs_mimetype = dst->vs_mimetype ? strdup(src->vs_url) : NULL;
+  dst->vs_mimetype = dst->vs_mimetype ? strdup(src->vs_mimetype) : NULL;
   return dst;
-}
-
-
-/**
- *
- */
-static void
-vsource_remove(struct vsource_list *list, const char *url)
-{
-  vsource_t *vs;
-  LIST_FOREACH(vs, list, vs_link) {
-    if(!strcmp(vs->vs_url, url)) {
-      LIST_REMOVE(vs, vs_link);
-      vsource_free(vs);
-      return;
-    }
-  }
 }
 
 
@@ -168,84 +152,13 @@ vsource_cleanup(struct vsource_list *list)
 /**
  *
  */
-static void
-vsource_parse_hls(struct vsource_list *list, char *s, const char *base)
-{
-  int bandwidth = -1;
-  int l;
-
-  for(; l = strcspn(s, "\r\n"), *s; s += l+1+strspn(s+l+1, "\r\n")) {
-    s[l] = 0;
-    if(l == 0)
-      continue;
-    const char *s2, *s3;
-    if((s2 = mystrbegins(s, "#EXT-X-STREAM-INF:")) != NULL) {
-      s3 = strstr(s2, "BANDWIDTH=");
-      if(s3 != NULL)
-        bandwidth = atoi(s3 + strlen("BANDWIDTH="));
-    } else if(*s == '#') {
-      continue;
-    } else if(bandwidth != -1) {
-      char *playlist = url_resolve_relative_from_base(base, s);
-      vsource_insert(list, playlist, "application/x-mpegURL", bandwidth,
-		     BACKEND_VIDEO_NO_FS_SCAN);
-      free(playlist);
-      bandwidth = -1;
-    }
-  }
-}
-
-
-
-
-/**
- *
- */
-static void
-vsource_load_hls(struct vsource_list *list, const char *url)
-{
-  buf_t *b;
-  char errbuf[256];
-
-  b = fa_load(url,
-               FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)),
-               NULL);
-
-  if(b == NULL) {
-    TRACE(TRACE_INFO, "HLS", "Unable to open %s -- %s", url, errbuf);
-    return;
-  }
-
-  if(mystrbegins(buf_cstr(b), "#EXTM3U")) {
-    b = buf_make_writable(b);
-    vsource_parse_hls(list, buf_str(b), url);
-  } else {
-    TRACE(TRACE_INFO, "HLS", "%s is not an EXTM3U file", url);
-  }
-  buf_release(b);
-}
-
-
-/**
- *
- */
-void
-vsource_add_hls(struct vsource_list *vsl, char *hls, const char *url)
-{
-  vsource_remove(vsl, url);
-  vsource_parse_hls(vsl, hls, url);
-}
-
-
-/**
- *
- */
 static event_t *
 play_video(const char *url, struct media_pipe *mp,
 	   int flags, int priority,
 	   char *errbuf, size_t errlen,
 	   video_queue_t *vq,
-           const char *parent_url, const char *parent_title)
+           const char *parent_url, const char *parent_title,
+           prop_t *origin)
 {
   htsmsg_t *subs, *sources;
   const char *str;
@@ -258,11 +171,13 @@ play_video(const char *url, struct media_pipe *mp,
 
   video_args_t va;
 
+  if(parent_url != NULL && parent_url[0] == 0)
+    parent_url = NULL;
 
   memset(&va, 0, sizeof(va));
   va.episode = -1;
   va.season = -1;
-
+  va.origin = origin;
   va.priority = priority;
 
   LIST_INIT(&vsources);
@@ -285,7 +200,8 @@ play_video(const char *url, struct media_pipe *mp,
 	TRACE(TRACE_DEBUG, "vp", "Page %s redirects to video source %s\n",
 	      url, rstr_get(r));
 	event_t *e = play_video(rstr_get(r), mp, flags, priority,
-				errbuf, errlen, vq, parent_title, parent_url);
+				errbuf, errlen, vq, parent_title, parent_url,
+                                origin);
 	rstr_release(r);
 	return e;
       }
@@ -323,20 +239,13 @@ play_video(const char *url, struct media_pipe *mp,
     }
 
     HTSMSG_FOREACH(f, sources) {
-      htsmsg_t *src = &f->hmf_msg;
+      htsmsg_t *src = f->hmf_childs;
       const char *url      = htsmsg_get_str(src, "url");
       const char *mimetype = htsmsg_get_str(src, "mimetype");
       int bitrate          = htsmsg_get_u32_or_default(src, "bitrate", -1);
 
       if(url == NULL)
         continue;
-
-      if(mimetype != NULL && 
-         (!strcmp(mimetype, "application/vnd.apple.mpegurl") ||
-          !strcmp(mimetype, "audio/mpegurl"))) {
-        vsource_load_hls(&vsources, url);
-        continue;
-      }
 
       vsource_insert(&vsources, url, mimetype, bitrate,
 		     BACKEND_VIDEO_NO_FS_SCAN);
@@ -381,7 +290,7 @@ play_video(const char *url, struct media_pipe *mp,
 
     if((subs = htsmsg_get_list(m, "subtitles")) != NULL) {
       HTSMSG_FOREACH(f, subs) {
-        htsmsg_t *sub = &f->hmf_msg;
+        htsmsg_t *sub = f->hmf_childs;
         const char *title = htsmsg_get_str(sub, "title");
         const char *url = htsmsg_get_str(sub, "url");
         const char *lang = htsmsg_get_str(sub, "language");
@@ -446,7 +355,7 @@ play_video(const char *url, struct media_pipe *mp,
 
   vsource_cleanup(&vsources);
   if(m)
-    htsmsg_destroy(m);
+    htsmsg_release(m);
   return e;
 }
 
@@ -633,6 +542,7 @@ vq_entries_callback(void *opaque, prop_event_t event, ...)
 
   case PROP_HAVE_MORE_CHILDS_YES:
   case PROP_HAVE_MORE_CHILDS_NO:
+  case PROP_SUGGEST_FOCUS:
     break;
 
   default:
@@ -738,7 +648,7 @@ video_player_idle(void *aux)
   char errbuf[256];
   prop_t *errprop = prop_ref_inc(prop_create(mp->mp_prop_root, "error"));
   video_queue_t *vq = NULL;
-  int play_flags = 0;
+  int play_flags_permanent = 0;
   int play_priority = 0;
   rstr_t *play_url = NULL;
   int force_continuous = 0;
@@ -746,19 +656,55 @@ video_player_idle(void *aux)
   rstr_t *parent_url = NULL;
   rstr_t *parent_title = NULL;
 
+  enum {
+    RESUME_NO,
+    RESUME_AS_GLOBAL_SETTING,
+    RESUME_YES,
+  } resume_mode = RESUME_NO;
+
 
   while(run) {
 
     if(play_url != NULL) {
       prop_set_void(errprop);
+
+      usage_inc_counter("playvideo", 1);
+
+      int play_flags = play_flags_permanent;
+
+      switch(resume_mode) {
+      case RESUME_NO:
+        break;
+
+      case RESUME_AS_GLOBAL_SETTING:
+        if(video_settings.resume_mode == VIDEO_RESUME_YES)
+          play_flags |= BACKEND_VIDEO_RESUME;
+        break;
+
+      case RESUME_YES:
+        play_flags |= BACKEND_VIDEO_RESUME;
+        break;
+      }
+
+      resume_mode = RESUME_NO; // For next item during continuous play
+
+      TRACE(TRACE_DEBUG, "vp", "Playing '%s'%s%s%s",
+            rstr_get(play_url),
+            play_flags & BACKEND_VIDEO_PRIMARY  ? ", primary" : "",
+            play_flags & BACKEND_VIDEO_NO_AUDIO ? ", no-audio" : "",
+            play_flags & BACKEND_VIDEO_RESUME   ? ", attempt-resume" : "");
+
       e = play_video(rstr_get(play_url), mp,
 		     play_flags, play_priority,
 		     errbuf, sizeof(errbuf), vq,
-                     rstr_get(parent_url), rstr_get(parent_title));
+                     rstr_get(parent_url), rstr_get(parent_title),
+                     origin);
       mp_bump_epoch(mp);
       prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
-      if(e == NULL)
+      if(e == NULL) {
 	prop_set_string(errprop, errbuf);
+        mp->mp_video_frame_deliver(NULL, mp->mp_video_frame_opaque);
+      }
     }
 
     if(e == NULL) {
@@ -778,15 +724,12 @@ video_player_idle(void *aux)
       force_continuous = 0;
       prop_set_void(errprop);
       event_playurl_t *ep = (event_playurl_t *)e;
-      play_flags = 0;
+      play_flags_permanent = 0;
       if(ep->primary)
-	play_flags |= BACKEND_VIDEO_PRIMARY;
+	play_flags_permanent |= BACKEND_VIDEO_PRIMARY;
       if(ep->no_audio)
-	play_flags |= BACKEND_VIDEO_NO_AUDIO;
+	play_flags_permanent |= BACKEND_VIDEO_NO_AUDIO;
       play_priority = ep->priority;
-
-      TRACE(TRACE_DEBUG, "vp", "Playing %s flags:0x%x", ep->url,
-	    play_flags);
 
       prop_ref_dec(origin);
       if(vq != NULL) {
@@ -814,50 +757,56 @@ video_player_idle(void *aux)
       rstr_release(play_url);
       play_url = rstr_alloc(ep->url);
 
+      resume_mode = RESUME_AS_GLOBAL_SETTING;
+
       if(ep->how) {
 	if(!strcmp(ep->how, "beginning"))
-	  play_flags |= BACKEND_VIDEO_START_FROM_BEGINNING;
-	if(!strcmp(ep->how, "resume"))
-	  play_flags |= BACKEND_VIDEO_RESUME;
-	if(!strcmp(ep->how, "continuous"))
+          resume_mode = RESUME_NO;
+	else if(!strcmp(ep->how, "resume"))
+          resume_mode = RESUME_YES;
+	else if(!strcmp(ep->how, "continuous"))
 	  force_continuous = 1;
       }
 
     } else if(event_is_type(e, EVENT_EXIT)) {
       event_release(e);
       break;
-    } else if(event_is_type(e, EVENT_EOF) || 
-	      event_is_action(e, ACTION_SKIP_FORWARD) || 
-	      event_is_action(e, ACTION_SKIP_BACKWARD)) {
+
+    } else if(event_is_type(e, EVENT_EOF) ||
+              event_is_action(e, ACTION_SKIP_FORWARD) ||
+              event_is_action(e, ACTION_SKIP_BACKWARD)) {
 
       // Try to figure out which track to play next
 
       prop_t *next = NULL;
-      int skp = event_is_action(e, ACTION_SKIP_FORWARD) ||
+
+      int skp =
+        event_is_action(e, ACTION_SKIP_FORWARD) ||
 	event_is_action(e, ACTION_SKIP_BACKWARD);
+
       if(vq && (video_settings.continuous_playback || force_continuous || skp))
 	next = video_queue_find_next(vq, origin,
-				     event_is_action(e, ACTION_SKIP_BACKWARD), 
+				     event_is_action(e, ACTION_SKIP_BACKWARD),
 				     0);
-      
+
       prop_ref_dec(origin);
       origin = NULL;
-
-      if(skp)
-	play_flags |= BACKEND_VIDEO_START_FROM_BEGINNING;
 
       rstr_release(play_url);
 
       if(next != NULL) {
 	play_url = prop_get_string(next, "url", NULL);
 	origin = next;
+
+        prop_suggest_focus(origin);
+
       } else {
 	play_url = NULL;
       }
       if(play_url == NULL)
 	mp_set_playstatus_stop(mp);
     }
-    
+
     event_release(e);
     e = NULL;
   }

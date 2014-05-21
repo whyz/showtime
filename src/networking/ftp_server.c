@@ -38,6 +38,7 @@
 #include "fileaccess/fileaccess.h"
 #include "fileaccess/fa_proto.h"
 #include "htsmsg/htsmsg_store.h"
+#include "usage.h"
 
 static asyncio_fd_t *ftp_server_fd;
 
@@ -317,7 +318,7 @@ construct_path(char *dst, size_t dstlen,
 
     if(at_root) {
       ftp_write(fc, 550, "%s: Can't go further up", path);
-      return 0;
+      return 1;
     }
 
     snprintf(dst, dstlen, "%s", fc->fc_wd);
@@ -336,12 +337,12 @@ construct_path(char *dst, size_t dstlen,
     if(path[r]) {
       ftp_write(fc, 550, "%s: Path contains invalid character: '%c'",
                 path, path[r]);
-      return 0;
+      return 1;
     }
 
     if(strstr(path, "/..")) {
       ftp_write(fc, 550, "%s: Path contains invalid component: '/..'", path);
-      return 0;
+      return 1;
     }
 
     if(*path == '/') {
@@ -932,6 +933,9 @@ ftp_accept(void *opaque, int fd, const net_addr_t *local_addr,
   fc->fc_accept_socket = -1;
   set_wd(fc, "/");
   set_type(fc, 'A');
+
+  usage_inc_counter("ftpserverconnect", 1);
+
   hts_thread_create_detached("FTP-session", ftp_session, fc,
 			     THREAD_PRIO_MODEL);
 

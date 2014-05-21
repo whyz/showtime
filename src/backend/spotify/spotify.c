@@ -53,6 +53,7 @@
 #include "metadata/metadata.h"
 #include "prop/prop_concat.h"
 #include "plugins.h"
+#include "usage.h"
 
 #ifdef CONFIG_LIBSPOTIFY_LOAD_RUNTIME
 #include <dlfcn.h>
@@ -977,7 +978,7 @@ set_image_uri(prop_t *p, link_fn_t *link_fn, void *entity)
   }
 
   rstr_t *rstr = htsmsg_json_serialize_to_rstr(m, "imageset:");
-  htsmsg_destroy(m);
+  htsmsg_release(m);
   prop_set_rstring(p, rstr);
   rstr_release(rstr);
 }
@@ -4176,6 +4177,8 @@ be_spotify_play(const char *url, media_pipe_t *mp,
   
   memset(&su, 0, sizeof(su));
 
+  usage_inc_counter("spotifyplay", 1);
+
   if(!strcmp(url, "spotify:track:0000000000000000000000")) {
     /* Invalid track - happens for localtracks */
     snprintf(errbuf, errlen, "Invalid track");
@@ -4209,7 +4212,7 @@ be_spotify_play(const char *url, media_pipe_t *mp,
 
   hts_mutex_unlock(&spotify_mutex);
 
-  mp_configure(mp, MP_PLAY_CAPS_SEEK | MP_PLAY_CAPS_PAUSE,
+  mp_configure(mp, MP_CAN_SEEK | MP_CAN_PAUSE,
 	       MP_BUFFER_NONE, 0, "tracks");
 
   mp_set_playstatus_by_hold(mp, hold, NULL);
@@ -4657,7 +4660,7 @@ spotify_shutdown_late(void *opaque, int exitcode)
  *
  */
 static void
-be_spotify_search(prop_t *source, const char *query)
+be_spotify_search(prop_t *source, const char *query, prop_t *loading)
 {
   if(spotify_start(NULL, 0, 1))
     return;

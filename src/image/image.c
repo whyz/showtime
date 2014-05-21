@@ -29,7 +29,8 @@
 struct pixmap *(*accel_image_decode)(image_coded_type_t type,
 				     struct buf *buf,
 				     const image_meta_t *im,
-				     char *errbuf, size_t errlen);
+				     char *errbuf, size_t errlen,
+                                     const image_t *img);
 
 
 
@@ -242,16 +243,11 @@ image_decode_coded(image_t *im, const image_meta_t *meta,
 {
   image_component_t *ic = &im->im_components[0];
   image_component_coded_t *icc = &ic->coded;
-  image_t *r;
 
   if(icc->icc_type == IMAGE_SVG) {
-    r = svg_decode(icc->icc_buf, meta, errbuf, errlen);
-    /*
-     * svg_decode() is a bit weird in the sense that it will take ownership
-     * of buf, so we need to forget about it
-     */
+    buf_t *b = icc->icc_buf;
     icc->icc_buf = NULL;
-    return r;
+    return svg_decode(b, meta, errbuf, errlen);
   }
 
   im->im_origin_coded_type = icc->icc_type;
@@ -259,7 +255,8 @@ image_decode_coded(image_t *im, const image_meta_t *meta,
   pixmap_t *pm = NULL;
 
   if(accel_image_decode != NULL)
-    pm = accel_image_decode(icc->icc_type, icc->icc_buf, meta, errbuf, errlen);
+    pm = accel_image_decode(icc->icc_type, icc->icc_buf, meta, errbuf, errlen,
+                            im);
 
   if(pm == NULL)
     pm = image_decode_libav(icc->icc_type, icc->icc_buf, meta, errbuf, errlen);

@@ -122,6 +122,8 @@ glw_video_widget_event(glw_t *w, event_t *e)
   if(event_is_action(e, ACTION_PLAYPAUSE) ||
      event_is_action(e, ACTION_PLAY) ||
      event_is_action(e, ACTION_PAUSE) ||
+     event_is_action(e, ACTION_SKIP_FORWARD) ||
+     event_is_action(e, ACTION_SKIP_BACKWARD) ||
      event_is_action(e, ACTION_SHOW_MEDIA_STATS)) {
     mp_enqueue_event(mp, e);
     return 1;
@@ -967,8 +969,12 @@ glw_video_render(glw_t *w, const glw_rctx_t *rc)
     event_release(e);
   }
 
+  hts_mutex_lock(&gv->gv_surface_mutex);
+
   if(gv->gv_engine != NULL)
     gv->gv_engine->gve_render(gv, &rc1);
+
+  hts_mutex_unlock(&gv->gv_surface_mutex);
 
   glw_video_overlay_render(gv, rc, &rc0);
 }

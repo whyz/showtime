@@ -36,6 +36,7 @@
 
 #include "fileaccess/svfs.h"
 #include "dvdnav/dvdnav.h"
+#include "usage.h"
 
 static char *make_nice_title(const char *t);
 
@@ -770,6 +771,8 @@ dvd_play(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
   event_t *e = NULL;
   const char *title;
 
+  usage_inc_counter("playvideodvd", 1);
+
   TRACE(TRACE_DEBUG, "DVD", "Starting playback of %s", url);
 
   prop_set_stringf(prop_create(mp->mp_prop_metadata, "format"), "DVD");
@@ -803,7 +806,7 @@ dvd_play(const char *url, media_pipe_t *mp, char *errstr, size_t errlen,
   /* Might wanna use deep buffering but it requires some modification
      to buffer draining code */
 
-  mp_configure(mp, MP_PLAY_CAPS_PAUSE | MP_PLAY_CAPS_EJECT,
+  mp_configure(mp, MP_CAN_PAUSE | MP_CAN_EJECT,
 	       MP_BUFFER_SHALLOW, 0, "dvd");
 
   mp_set_playstatus_by_hold(mp, dp->dp_hold, NULL);

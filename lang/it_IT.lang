@@ -5,20 +5,16 @@ maintainer: Red Squirrel <iam@redsquirrel87.com>
 # ./ext/miner/miner.c
 #
 id: Do you like Showtime? You can donate money to the project by mining Litecoins on your PS3
-# Missing translation
-msg: 
+msg: Ti piace Showtime? Puoi donare soldi al progetto attraverso Litecoin dalla tua PS3
 
 id: Donate money to the Showtime project by mining litecoints
-# Missing translation
-msg: 
+msg: Dona soldi al progetto Showtime attraverso Litecoin
 
 id: Donations
-# Missing translation
-msg: 
+msg: Donazioni
 
 id: Show me more
-# Missing translation
-msg: 
+msg: Mostrami di più
 
 #
 # ./glwskins/default/cmdmenu.view
@@ -47,6 +43,9 @@ msg: Esci da Showtime
 id: Go to Home screen
 msg: Vai alla Home
 
+id: Hide system info
+msg: Nascondi info di sistema
+
 id: Navigation
 msg: Navigazione
 
@@ -61,6 +60,9 @@ msg: Spegni
 
 id: Reload current page
 msg: Ricarica pagina attuale
+
+id: Show system info
+msg: Mostra info di sistema
 
 id: Suspend
 msg: Sospendi
@@ -160,6 +162,24 @@ msg: Impostazioni video
 #
 id: System log
 msg: Log di sistema
+
+#
+# ./glwskins/default/osk.view
+#
+id: Cancel
+msg: Annulla
+
+id: Clear
+msg: Pulisci
+
+id: Default
+msg: Default
+
+id: Keyboard layout:
+msg: Layout tastiera:
+
+id: OK
+msg: OK
 
 #
 # ./glwskins/default/pages/directory.view
@@ -391,6 +411,12 @@ id: Playback status
 msg: Stato di riproduzione
 
 #
+# ./glwskins/default/pages/wideinfo/video.view
+#
+id: Seen:
+msg: Visto:
+
+#
 # ./glwskins/default/playdecks/dvd.view
 #
 id: Chapter: %d
@@ -415,15 +441,6 @@ id: Username
 msg: Nome Utente
 
 #
-# ./glwskins/default/popups/common.view
-#
-id: Cancel
-msg: Annulla
-
-id: OK
-msg: OK
-
-#
 # ./glwskins/default/screensaver.view
 #
 id: No media loaded
@@ -436,15 +453,13 @@ id: CPU Temp
 msg: Temperatura CPU
 
 id: Fragmentation
-# Missing translation
-msg: 
+msg: Frammentazione
 
 id: GPU Temp
 msg: Temperatura GPU
 
 id: Inactive mem
-# Missing translation
-msg: 
+msg: Memoria inattiva
 
 id: Memory usage
 msg: Memoria utilizzata
@@ -468,32 +483,25 @@ msg: Volume principale: %d dB
 # ./resources/spuminer/settings.view
 #
 id: Apart from enabling this option you do not need to do anything else to make your donations for the project.
-# Missing translation
-msg: 
+msg: Apparte attivare questa opzione non devi fare altro per donare al progetto.
 
 id: Enable mining
-# Missing translation
-msg: 
+msg: Attiva Litecoin
 
 id: For more information about Litecoin, please visit http://litecoin.org
-# Missing translation
-msg: 
+msg: Per maggiori informazioni su Litecoin, visita http://litecoin.org
 
 id: If you like Showtime you can donate money to the project by letting your Playstation 3 mine Litecoins while Showtime is running.
-# Missing translation
-msg: 
+msg: Se ti piace Showtime puoi donare soldi al progetto lasciando la tua Playstation 3 ad usare Litecoin mentre Showtime è in esecuzione.
 
 id: Mining will not interfere with video playback performance as it only uses the leftover capacity of the SPU processors.
-# Missing translation
-msg: 
+msg: Usare Litecoin non interferirà con le prestazioni di riproduzione video poiché utilizza la capacità inutilizzate dei processori SPU.
 
 id: Please consider enabling this option. / %s
-# Missing translation
-msg: 
+msg: Per favore considera seriamente di attivare questa opzione. / %s
 
 id: Thanks for your support!
-# Missing translation
-msg: 
+msg: Grazie per il tuo supporto!
 
 #
 # ./src/api/tmdb.c
@@ -511,6 +519,18 @@ id: System is low on memory (%d kB RAM available)
 msg: Memoria in esaurimento (%d kB di RAM disponibile)
 
 #
+# ./src/arch/rpi/rpi_audio.c
+#
+id: Analog
+msg: Analogico
+
+id: Audio output port
+msg: Porta d'uscita Audio
+
+id: HDMI
+msg: HDMI
+
+#
 # ./src/arch/rpi/rpi_cec.c
 #
 id: Configure how Showtime communicates with your TV
@@ -518,6 +538,72 @@ msg: Configura come Showtime comunica con la tua TV
 
 id: Consumer Electronics Control
 msg: Canale CEC
+
+#
+# ./src/audio2/audio.c
+#
+id: Audio delay
+msg: Ritardo audio
+
+id: Audio gain adjustment during video playback
+msg: Regolazione del guadagno audio durante la riproduzione video
+
+id: Audio settings during video playback
+msg: Impostazioni audio durante la riproduzione video
+
+id: Setup audio output
+msg: Imposta uscita audio
+
+#
+# ./src/audio2/audio_test.c
+#
+id: 440Hz sinewave -12dB
+msg: 440Hz sinewave -12dB 
+
+id: Audio test
+msg: Test audio
+
+id: Center
+msg: Al centro
+
+id: Front Left
+msg: Anteriore sinistro
+
+id: Front Right
+msg: Anteriore destro
+
+id: LFE
+msg: LFE
+
+id: Pink noise
+msg: Rumore rosa
+
+id: Play test signal
+msg: Test segnale di riproduzione
+
+id: Rear Left
+msg: Posteriore sinistro
+
+id: Rear Right
+msg: Posteriore destro
+
+id: Speaker position
+msg: Posizione altoparlante
+
+id: Surround Left
+msg: Surround sinistro 
+
+id: Surround Right
+msg:  Surround destro
+
+id: Test signal type
+msg: Test tipo di segnale
+
+#
+# ./src/audio2/pulseaudio.c
+#
+id: Unable to initialize audio system %s -- %s
+msg: Impossibile inizializzare il sistema audio %s -- %s
 
 #
 # ./src/backend/dvd/cdda.c
@@ -712,12 +798,13 @@ id: Enable file deletion from item menu
 msg: Attiva eliminazione file dal menu
 
 id: File browsing
-# Missing translation
-msg: 
+msg: Gestione file
 
 id: Show filename extensions
-# Missing translation
-msg: 
+msg: Mostra estensioni nel nome del file
+
+id: Store per-file settings in filesystem
+msg: Memorizza nel filesystem impostazioni separate per ogni file
 
 id: %d archive parts
 msg[0]: 
@@ -800,14 +887,20 @@ msg: Password salvate eliminate.
 id: Align subtitles on video frame
 msg: Allineare sottotitoli su frame video
 
-id: Audio delay
-msg: Ritardo audio
-
 id: Audio volume
 msg: Volume audio
 
 id: Go to standby after video ends
 msg: Vai in standby dopo la fine del video
+
+id: Reset defaults for folder '%s'
+msg: Ripristina impostazioni di default per la cartella '%s' 
+
+id: Save as defaults for folder '%s'
+msg: Salva impostazioni come di default per la cartella '%s' 
+
+id: Save as global default
+msg: Salva impostazioni come di default per tutto
 
 id: Stretch video to fullscreen
 msg: Adatta video a Schermo Pieno
@@ -826,6 +919,9 @@ msg: Dimensione dei sottotitoli
 
 id: Subtitle vertical displacement
 msg: Spostamento verticale dei sottotitoli
+
+id: Video frame interpolation
+msg: Interpolazione dei frame video
 
 id: Video zoom
 msg: Zoom video
@@ -857,26 +953,53 @@ msg: Modalita' metadata
 #
 # ./src/metadata/metadata.c
 #
-id: Custom search query
-msg: Ricerca personalizzata
-
-id: Custom title
-msg: Titolo personalizzato
-
 id: Embedded in file
 msg: Incorporato nel file
 
+id: Track %d
+msg: Traccia %d
+
+#
+# ./src/metadata/metadata_sources.c
+#
 id: Enabled
 msg: Attivo
-
-id: IMDb ID
-msg: ID IMDb
 
 id: Metadata
 msg: Metadata
 
 id: Metadata configuration and provider settings
 msg: Configurazione metadata e impostazioni provider
+
+id: Providers for Music
+msg: Provider per Musica
+
+id: Providers for Video
+msg: Provider per Video
+
+#
+# ./src/metadata/metadb.c
+#
+id: %d items deleted
+msg: %d oggetti eliminati
+
+id: Clear all metadata
+msg: Pulisci tutti i metadata
+
+id: Clearing all metadata means losing <b>all</b> information about:\n\nIf a track/movie has been seen\nNumber of times a track/movie has been played\nPlayback resume position\n\nIt will also erase the metadata cached from external sources such as themoviedb.org, etc\n\nAre you sure you proceed?
+msg: Pulire tutti i metadata significa perdere <b>tutte</b> le informazioni riguardo:\n\nSe una traccia/film e' stata visionata\nIl numero di volte che una traccia/film e' stata riprodotta\nLa posizione di ripresa della riproduzione\n\nVerranno cancellati anche i metadata nella cache di sorgenti esterne come themoviedb.org, ecc...\n\nSei sicuro di voler procedere?
+
+#
+# ./src/metadata/mlp.c
+#
+id: Custom search query
+msg: Ricerca personalizzata
+
+id: Custom title
+msg: Titolo personalizzato
+
+id: IMDb ID
+msg: ID IMDb
 
 id: Metadata loaded from '%s' using %s
 msg: Metadata caricato da '%s' usando %s
@@ -899,20 +1022,11 @@ msg: Nessun dato trovato
 id: None
 msg: Nessuno
 
-id: Providers for Music
-msg: Provider per Musica
-
-id: Providers for Video
-msg: Provider per Video
-
 id: Refresh metadata
 msg: Aggiorna metadata
 
 id: Title, Season, Episode
 msg: Titolo, Stagione, Episodio
-
-id: Track %d
-msg: Traccia %d
 
 id: custom IMDb ID
 msg: ID IMDb personalizzato
@@ -928,18 +1042,6 @@ msg: nome file come episodio TV
 
 id: folder name
 msg: nome cartella
-
-#
-# ./src/metadata/metadb.c
-#
-id: %d items deleted
-msg: %d oggetti eliminati
-
-id: Clear all metadata
-msg: Pulisci tutti i metadata
-
-id: Clearing all metadata means losing <b>all</b> information about:\n\nIf a track/movie has been seen\nNumber of times a track/movie has been played\nPlayback resume position\n\nIt will also erase the metadata cached from external sources such as themoviedb.org, etc\n\nAre you sure you proceed?
-msg: Pulire tutti i metadata significa perdere <b>tutte</b> le informazioni riguardo:\n\nSe una traccia/film e' stata visionata\nIl numero di volte che una traccia/film e' stata riprodotta\nLa posizione di ripresa della riproduzione\n\nVerranno cancellati anche i metadata nella cache di sorgenti esterne come themoviedb.org, ecc...\n\nSei sicuro di voler procedere?
 
 #
 # ./src/navigator.c
@@ -1031,9 +1133,6 @@ msg: Servizi Cloud
 id: Corrupt plugin bundle
 msg: Bundle di plugin corrotto
 
-id: Default
-msg: Default
-
 id: Disk write error
 msg: Errore di scrittura su disco
 
@@ -1075,6 +1174,9 @@ msg: Non installato
 
 id: Not upgradable
 msg: Non aggiornabile
+
+id: On Screen Keyboards
+msg: Tastiera a schermo
 
 id: Online TV
 msg: TV online
@@ -1213,9 +1315,6 @@ msg: Auto
 
 id: Automatically select from this source
 msg: Seleziona automaticamente da questa fonte
-
-id: Center
-msg: Al centro
 
 id: Central subtitle folder
 msg: Cartella principale sottotitoli
@@ -1394,6 +1493,12 @@ msg: Servizio non trovato
 #
 # ./src/video/ps3_vdec.c
 #
+id: Cell-h264: %d Ref-frames for 1080 content is incompatible with PS3 HW decoder. Disabling acceleration
+msg: Cell-h264: %d frame di riferimento per il contenuto 1080p incompatibile con il decoder HW di PS3. Disattivazione accelerazione
+
+id: Cell-h264: Broken headers, Disabling acceleration
+msg: Cell-h264: header non valido. Disattivazione accelerazione
+
 id: Cell-h264: Forcing level 4.2 for content in level %d.%d. This may break video playback.
 msg: Cell-h264: Forzando il livello 4.2 per contenuto al livello %d.%d. Questo potrebbe inibire la riproduzione del video.
 

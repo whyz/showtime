@@ -329,10 +329,10 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh,
 	   htsmsg_get_str(json, "type") != NULL) {
 	  md->md_title = rstr_alloc(title);
 	  md->md_contenttype = CONTENT_PLUGIN;
-	  htsmsg_destroy(json);
+	  htsmsg_release(json);
 	  return 1;
 	}
-	htsmsg_destroy(json);
+	htsmsg_release(json);
       }
     }
     metdata_set_redirect(md, "zip://%s", url);
@@ -364,6 +364,12 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh,
 
   if(!memcmp(buf, gifsig, sizeof(gifsig))) {
     /* GIF */
+    md->md_contenttype = CONTENT_IMAGE;
+    return 1;
+  }
+
+  if(!memcmp(buf, "<?xml", 5) && find_str((char *)buf, l, "<svg")) {
+    /* SVG */
     md->md_contenttype = CONTENT_IMAGE;
     return 1;
   }
@@ -647,7 +653,7 @@ fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx,
 			  tmp1,
 			  lang ? lang->value : NULL,
 			  stream->disposition,
-			  tn);
+			  tn, avctx->channels);
     }
   
     md->md_contenttype = CONTENT_FILE;

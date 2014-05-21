@@ -256,7 +256,7 @@ backend_imageloader(rstr_t *url0, const image_meta_t *im0,
     }
     if(best == NULL) {
       snprintf(errbuf, errlen, "No image in set");
-      htsmsg_destroy(m);
+      htsmsg_release(m);
       return NULL;
     }
     url = best;
@@ -326,7 +326,7 @@ backend_imageloader(rstr_t *url0, const image_meta_t *im0,
 
  out:
   if(m)
-    htsmsg_destroy(m);
+    htsmsg_release(m);
   return img;
 }
 
@@ -480,12 +480,12 @@ backend_resolve_item(const char *url, prop_t *item)
  *
  */
 void
-backend_search(prop_t *model, const char *url)
+backend_search(prop_t *model, const char *url, prop_t *loading)
 {
   backend_t *be;
 
   LIST_FOREACH(be, &backends, be_global_link)
     if(be->be_search != NULL)
-      be->be_search(model, url);
+      be->be_search(model, url, loading);
 }
 

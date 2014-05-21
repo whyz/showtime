@@ -53,9 +53,8 @@ typedef enum {
 #define BACKEND_VIDEO_NO_AUDIO    0x2
 #define BACKEND_VIDEO_NO_FS_SCAN  0x4 // Don't scan FS for subtitles
 #define BACKEND_VIDEO_SET_TITLE   0x8
-#define BACKEND_VIDEO_START_FROM_BEGINNING 0x10
-#define BACKEND_VIDEO_RESUME      0x20
-#define BACKEND_VIDEO_NO_FILE_HASH     0x40
+#define BACKEND_VIDEO_RESUME      0x10
+#define BACKEND_VIDEO_NO_FILE_HASH 0x20
 
 
 /**
@@ -78,7 +77,7 @@ typedef struct video_args {
   uint8_t subdbhash[16]; // md5sum of first 64k + last 64k
   const char *parent_url;
   const char *parent_title;
-
+  prop_t *origin;
 } video_args_t;
 
 
@@ -121,7 +120,7 @@ typedef struct backend {
 
   int (*be_probe)(const char *url, char *errbuf, size_t errlen);
 
-  void (*be_search)(struct prop *model, const char *query);
+  void (*be_search)(struct prop *model, const char *query, prop_t *loading);
 
   int (*be_resolve_item)(const char *url, prop_t *item);
 
@@ -177,7 +176,7 @@ int backend_resolve_item(const char *url, prop_t *item)
 
 rstr_t *backend_normalize(rstr_t *url);
 
-void backend_search(prop_t *model, const char *url);
+void backend_search(prop_t *model, const char *url, prop_t *loading);
 
 int backend_page_open(prop_t *root, const char *url0, int sync);
 

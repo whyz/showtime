@@ -348,6 +348,7 @@ typedef struct {
 
 typedef struct {
   int steps;
+  int did_move;
 } glw_move_op_t;
 
 
@@ -1354,7 +1355,7 @@ glw_t *glw_prev_widget(glw_t *w);
 
 glw_t *glw_first_widget(glw_t *w);
 
-glw_t *glw_last_widget(glw_t *w);
+glw_t *glw_last_widget(glw_t *w, int focusable);
 
 void glw_set_fullscreen(glw_root_t *gr, int fullscreen);
 

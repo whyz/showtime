@@ -416,7 +416,7 @@ plugin_props_from_file(prop_t *prop, const char *zipfile)
     update_state(pl);
     hts_mutex_unlock(&plugin_mutex);
   }
-  htsmsg_destroy(pm);
+  htsmsg_release(pm);
 
 }
 
@@ -491,7 +491,7 @@ plugin_load(const char *url, char *errbuf, size_t errlen, int force,
     if(type == NULL) {
       snprintf(errbuf, errlen, "Missing \"type\" element in control file %s",
 	    ctrlfile);
-      htsmsg_destroy(ctrl);
+      htsmsg_release(ctrl);
       return -1;
     }
 
@@ -499,7 +499,7 @@ plugin_load(const char *url, char *errbuf, size_t errlen, int force,
     if(id == NULL) {
       snprintf(errbuf, errlen, "Missing \"id\" element in control file %s",
 	    ctrlfile);
-      htsmsg_destroy(ctrl);
+      htsmsg_release(ctrl);
       return -1;
     }
 
@@ -508,7 +508,7 @@ plugin_load(const char *url, char *errbuf, size_t errlen, int force,
     if(!force && pl->pl_loaded) {
       snprintf(errbuf, errlen, "Plugin \"%s\" already loaded",
 	       id);
-      htsmsg_destroy(ctrl);
+      htsmsg_release(ctrl);
       return -1;
     }
 
@@ -523,7 +523,7 @@ plugin_load(const char *url, char *errbuf, size_t errlen, int force,
       if(file == NULL) {
 	snprintf(errbuf, errlen, "Missing \"file\" element in control file %s",
 		 ctrlfile);
-	htsmsg_destroy(ctrl);
+	htsmsg_release(ctrl);
 	return -1;
       }
       snprintf(fullpath, sizeof(fullpath), "%s/%s", url, file);
@@ -590,7 +590,7 @@ plugin_load(const char *url, char *errbuf, size_t errlen, int force,
 
       pl->pl_loaded = 1;
     }
-    htsmsg_destroy(ctrl);
+    htsmsg_release(ctrl);
     update_state(pl);
     return r;
 
@@ -681,14 +681,14 @@ repo_get(const char *repo, char *errbuf, size_t errlen)
 
   if(ver != 1) {
     snprintf(errbuf, errlen, "Unsupported repository version %d", ver);
-    htsmsg_destroy(json);
+    htsmsg_release(json);
     return NULL;
   }
 
   const char *msg = htsmsg_get_str(json, "message");
   if(msg != NULL) {
     snprintf(errbuf, errlen, "%s", msg);
-    htsmsg_destroy(json);
+    htsmsg_release(json);
     return NULL;
   }
   
@@ -778,7 +778,7 @@ plugin_load_repo(void)
       }
     }
   }
-  htsmsg_destroy(msg);
+  htsmsg_release(msg);
   return 0;
 }
 
@@ -1240,7 +1240,11 @@ plugin_install(plugin_t *pl, const char *package)
   prop_link(_p("Downloading"), status);
   prop_set(pl->pl_status, "canInstall", PROP_SET_INT, 0);
 
+  hts_mutex_unlock(&plugin_mutex);
+
   buf_t *b = fa_load(package, FA_LOAD_ERRBUF(errbuf, sizeof(errbuf)), NULL);
+
+  hts_mutex_lock(&plugin_mutex);
 
   if(b == NULL) {
     prop_unlink(status);
@@ -1382,7 +1386,7 @@ plugin_open_file(prop_t *page, const char *url)
   } else {
     nav_open_errorf(page, _("Field \"id\" not found in plugin.json"));
   }
-  htsmsg_destroy(pm);
+  htsmsg_release(pm);
 }
 
 /**
@@ -1580,4 +1584,30 @@ plugin_unload_views(plugin_t *pl)
     prop_ref_dec(pve->pve_type_prop);
     free(pve);
   }
+}
+
+
+/**
+ *
+ */
+htsmsg_t *
+plugins_get_installed_list(void)
+{
+  htsmsg_t *m = htsmsg_create_map();
+  plugin_t *pl;
+
+  hts_mutex_lock(&plugin_mutex);
+
+  LIST_FOREACH(pl, &plugins, pl_link) {
+    if(!pl->pl_installed)
+      continue;
+
+    htsmsg_t *p = htsmsg_create_map();
+    if(pl->pl_inst_ver != NULL)
+      htsmsg_add_str(p, "v", pl->pl_inst_ver);
+    htsmsg_add_msg(m, pl->pl_id, p);
+  }
+
+  hts_mutex_unlock(&plugin_mutex);
+  return m;
 }

@@ -665,7 +665,7 @@ metadb_construct_imageset(sqlite3_stmt *sel, int urlcol, int wcol, int hcol)
   }
 
   rstr_t *rstr = htsmsg_json_serialize_to_rstr(m, "imageset:");
-  htsmsg_destroy(m);
+  htsmsg_release(m);
   return rstr;
 }
 
@@ -2080,7 +2080,7 @@ metadb_metadata_get_streams(sqlite3 *db, metadata_t *md, int64_t videoitem_id)
 			(const char *)sqlite3_column_text(sel, 1),
 			(const char *)sqlite3_column_text(sel, 2),
 			sqlite3_column_int(sel, 5),
-			tn);
+			tn, -1);
   }
   sqlite3_finalize(sel);
   return 0;

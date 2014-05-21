@@ -760,6 +760,10 @@ page_redirect(nav_page_t *np, const char *url)
   navigator_t *nav = np->np_nav;
 
   TRACE(TRACE_DEBUG, "navigator", "Following redirect to %s", url);
+
+  if(nav->nav_page_current == np)
+    prop_unlink(nav->nav_prop_curpage);
+
   prop_t *p = np->np_prop_root;
 
   page_unsub(np);
@@ -895,7 +899,7 @@ bookmarks_save(void)
   }
 
   htsmsg_store_save(m, "bookmarks2");
-  htsmsg_destroy(m);
+  htsmsg_release(m);
 }
 
 
@@ -1261,7 +1265,7 @@ bookmarks_init(void)
 	bookmark_load(o);
       }
     }
-    htsmsg_destroy(m);
+    htsmsg_release(m);
     bookmarks_save();
     htsmsg_store_remove("bookmarks");
   } else if((m = htsmsg_store_load("bookmarks2")) != NULL) {
@@ -1271,6 +1275,6 @@ bookmarks_init(void)
 	continue;
       bookmark_load(o);
     }
-    htsmsg_destroy(m);
+    htsmsg_release(m);
   }
 }
