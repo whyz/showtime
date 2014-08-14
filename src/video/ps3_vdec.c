@@ -517,7 +517,7 @@ picture_out(vdec_decoder_t *vdd)
 
   hts_mutex_lock(&vdd->mtx);
 
-  LIST_INSERT_SORTED(&vdd->pictures, vp, link, vp_cmp);
+  LIST_INSERT_SORTED(&vdd->pictures, vp, link, vp_cmp, vdec_pic_t);
 
   if(vdd->max_order != -1) {
     if(vp->order > vdd->max_order) {
@@ -815,7 +815,7 @@ video_ps3_vdec_codec_create(media_codec_t *mc, const media_codec_params_t *mcp,
 
     dec_type.codec_type = VDEC_CODEC_TYPE_H264;
     if(mcp != NULL && mcp->level > 42) {
-      notify_add(mp->mp_prop_notifications, NOTIFY_WARNING, NULL, 10,
+      notify_add(mp->mp_prop_notifications, NOTIFY_WARNING, NULL, 5,
 		 _("Cell-h264: Forcing level 4.2 for content in level %d.%d. This may break video playback."), mcp->level / 10, mcp->level % 10);
     }
     dec_type.profile_level = 42;

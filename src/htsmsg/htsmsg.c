@@ -22,7 +22,6 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
@@ -132,6 +131,7 @@ htsmsg_t *
 htsmsg_create_map(void)
 {
   htsmsg_t *msg = calloc(1, sizeof(htsmsg_t));
+  msg->hm_refcount = 1;
   TAILQ_INIT(&msg->hm_fields);
   return msg;
 }
@@ -143,6 +143,7 @@ htsmsg_t *
 htsmsg_create_list(void)
 {
   htsmsg_t *msg = calloc(1, sizeof(htsmsg_t));
+  msg->hm_refcount = 1;
   TAILQ_INIT(&msg->hm_fields);
   msg->hm_islist = 1;
   return msg;
@@ -155,13 +156,15 @@ htsmsg_create_list(void)
 void
 htsmsg_release(htsmsg_t *msg)
 {
-  if(msg == NULL)
-    return;
-
-  if(atomic_add(&msg->hm_refcount, -1) > 1)
-    return;
-
   htsmsg_field_t *f;
+
+  if (msg == NULL)
+    return;
+
+  msg->hm_refcount--;
+  if(msg->hm_refcount > 0)
+    return;
+
 
   while((f = TAILQ_FIRST(&msg->hm_fields)) != NULL)
     htsmsg_field_destroy(msg, f);
@@ -176,7 +179,7 @@ htsmsg_release(htsmsg_t *msg)
 htsmsg_t *
 htsmsg_retain(htsmsg_t *msg)
 {
-  atomic_add(&msg->hm_refcount, 1);
+  msg->hm_refcount++;
   return msg;
 }
 
@@ -425,10 +428,16 @@ htsmsg_get_bin(htsmsg_t *msg, const char *name, const void **binp,
 	       size_t *lenp)
 {
   htsmsg_field_t *f;
-  
+
   if((f = htsmsg_field_find(msg, name)) == NULL)
     return HTSMSG_ERR_FIELD_NOT_FOUND;
-  
+
+  if(f->hmf_type == HMF_STR) {
+    *binp = f->hmf_str;
+    *lenp = strlen(f->hmf_str);
+    return 0;
+  }
+
   if(f->hmf_type != HMF_BIN)
     return HTSMSG_ERR_CONVERSION_IMPOSSIBLE;
 
@@ -567,7 +576,7 @@ htsmsg_print0(htsmsg_t *msg, int indent)
 
     for(i = 0; i < indent; i++) printf("\t");
 
-    printf("%s %s%s%s%s(", f->hmf_name ?: "",
+    printf("%s %s%s%s%s(", f->hmf_name ? f->hmf_name : "",
            f->hmf_namespace ? "[in " : "",
            rstr_get(f->hmf_namespace) ?: "",
            f->hmf_namespace ? "] " : "",

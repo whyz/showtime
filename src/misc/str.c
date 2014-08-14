@@ -148,6 +148,26 @@ static const char url_escape_path[256] = {
   0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,   // 0xf0
 };
 
+
+static const char url_escape_space_only[256] = {
+  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,   // 0x00
+  0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0,   // 0x10
+  0,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x20
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x30
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x40
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x50
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x60
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x70
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x80
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0x90
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0xa0
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0xb0
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0xc0
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0xd0
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0xe0
+  1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1,   // 0xf0
+};
+
 /**
  *
  */
@@ -158,10 +178,19 @@ url_escape(char *dst, const int size, const char *src, int how)
   int r = 0;
   const char *table;
 
-  if(how == URL_ESCAPE_PATH)
+  switch(how) {
+  case URL_ESCAPE_PATH:
     table = url_escape_path;
-  else
+    break;
+  case URL_ESCAPE_PARAM:
     table = url_escape_param;
+    break;
+  case URL_ESCAPE_SPACE_ONLY:
+    table = url_escape_space_only;
+    break;
+  default:
+    abort();
+  }
 
   while((s = *src++) != 0) {
     switch(table[s]) {
@@ -1067,18 +1096,20 @@ strappend(char **strp, const char *src)
  *
  */
 int
-hex2bin(uint8_t *buf, size_t buflen, const char *str)
+hex2binl(uint8_t *buf, size_t buflen, const char *str, int maxlen)
 {
   int hi, lo;
   size_t bl = buflen;
   while(*str) {
+    if(maxlen < 2)
+      break;
     if(buflen == 0)
       return -1;
     if((hi = hexnibble(*str++)) == -1)
       return -1;
     if((lo = hexnibble(*str++)) == -1)
       return -1;
-
+    maxlen -= 2;
     *buf++ = hi << 4 | lo;
     buflen--;
   }
@@ -1244,7 +1275,7 @@ extern const uint16_t CP1256[];
 extern const uint16_t CP1257[];
 extern const uint16_t CP1258[];
 
-#define ALIAS(x...) (const char *[]){x, NULL}
+#define ALIAS(x, ...) (const char *[]){x, ##__VA_ARGS__, NULL}
 
 const static charset_t charsets[] = {
    // ISO-8869-1 must be first

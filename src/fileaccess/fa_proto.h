@@ -35,7 +35,7 @@ typedef struct fa_protocol {
 #define FAP_ALLOW_CACHE          0x2
 #define FAP_NO_PARKING           0x4
 
-  int fap_refcount;
+  atomic_t fap_refcount;
 
   void (*fap_init)(void);
 
@@ -87,6 +87,11 @@ typedef struct fa_protocol {
    * Return size of file
    */
   int64_t (*fap_fsize)(fa_handle_t *fh);
+
+  /**
+   * Truncate file
+   */
+  fa_err_code_t (*fap_ftruncate)(fa_handle_t *fh, uint64_t newsize);
 
   /**
    * stat(2) file
@@ -217,7 +222,21 @@ typedef struct fa_protocol {
                                  const char *name,
                                  void **datap, size_t *lenp);
 
+  /**
+   * Set a deadline for when we expect the next read to complete
+   *
+   * deadline is delta time un µs
+   */
+  void (*fap_deadline)(fa_handle_t *fh, int deadline);
+
+  /**
+   * Return file system info
+   */
+  fa_err_code_t (*fap_fsinfo)(struct fa_protocol *fap, const char *url,
+                              fa_fsinfo_t *ffi);
+
 } fa_protocol_t;
+
 
 
 
@@ -227,8 +246,8 @@ void fileaccess_unregister_dynamic(fa_protocol_t *fap);
 
 void fileaccess_register_entry(fa_protocol_t *fap);
 
-#define FAP_REGISTER(name) \
-  static void  __attribute__((constructor)) fap_register_ ## name(void) { \
+#define FAP_REGISTER(name)                                              \
+  INITIALIZER(fap_register_ ## name) {                                  \
     fileaccess_register_entry(&fa_protocol_ ## name);			\
   }
 

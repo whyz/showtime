@@ -51,6 +51,8 @@
 #include "fa_indexer.h"
 #include "settings.h"
 #include "notifications.h"
+#include "misc/minmax.h"
+
 
 static struct fa_protocol_list fileaccess_all_protocols;
 static HTS_MUTEX_DECL(fap_mutex);
@@ -64,7 +66,7 @@ fap_release(fa_protocol_t *fap)
   if(fap->fap_fini == NULL)
     return;
 
-  if(atomic_add(&fap->fap_refcount, -1) > 1)
+  if(atomic_dec(&fap->fap_refcount))
     return;
 
   fap->fap_fini(fap);
@@ -77,7 +79,7 @@ fap_release(fa_protocol_t *fap)
 static void
 fap_retain(fa_protocol_t *fap)
 {
-  atomic_add(&fap->fap_refcount, 1);
+  atomic_inc(&fap->fap_refcount);
 }
 
 /**
@@ -332,6 +334,18 @@ fa_read(void *fh_, void *buf, size_t size)
   return r;
 }
 
+/**
+ *
+ */
+void
+fa_deadline(void *fh_, int deadline)
+{
+  fa_handle_t *fh = fh_;
+
+  if(fh->fh_proto->fap_deadline != NULL)
+    fh->fh_proto->fap_deadline(fh, deadline);
+}
+
 
 /**
  *
@@ -369,6 +383,19 @@ fa_fsize(void *fh_)
 {
   fa_handle_t *fh = fh_;
   return fh->fh_proto->fap_fsize(fh);
+}
+
+
+/**
+ *
+ */
+int
+fa_ftruncate(void *fh_, uint64_t newsize)
+{
+  fa_handle_t *fh = fh_;
+  if(fh->fh_proto->fap_ftruncate == NULL)
+    return FAP_NOT_SUPPORTED;
+  return fh->fh_proto->fap_ftruncate(fh, newsize);
 }
 
 
@@ -1266,6 +1293,30 @@ fa_get_xattr(const char *url, const char *name, void **datap, size_t *lenp)
 /**
  *
  */
+fa_err_code_t
+fa_fsinfo(const char *url, fa_fsinfo_t *ffi)
+{
+  fa_protocol_t *fap;
+  char *filename;
+  int r;
+
+  if((filename = fa_resolve_proto(url, &fap, NULL, NULL, 0)) == NULL)
+    return FAP_NOT_SUPPORTED;
+
+  if(fap->fap_fsinfo == NULL) {
+    r = FAP_NOT_SUPPORTED;
+  } else {
+    r = fap->fap_fsinfo(fap, url, ffi);
+  }
+  fap_release(fap);
+  free(filename);
+  return r;
+}
+
+
+/**
+ *
+ */
 void
 fileaccess_register_entry(fa_protocol_t *fap)
 {
@@ -1279,7 +1330,7 @@ fileaccess_register_entry(fa_protocol_t *fap)
 void
 fileaccess_register_dynamic(fa_protocol_t *fap)
 {
-  fap->fap_refcount = 1;
+  atomic_set(&fap->fap_refcount, 1);
   hts_mutex_lock(&fap_mutex);
   LIST_INSERT_HEAD(&fileaccess_all_protocols, fap, fap_link);
   hts_mutex_unlock(&fap_mutex);
@@ -1343,6 +1394,9 @@ fileaccess_init(void)
                  SETTING_HTSMSG("filenameextensions", store, "faconf"),
                  NULL);
 
+  gconf.settings_bittorrent =
+    settings_add_dir(gconf.settings_general, _p("BitTorrent"),
+                     NULL, NULL, NULL, "settings:bittorrent");
   return 0;
 }
 

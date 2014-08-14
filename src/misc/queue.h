@@ -112,6 +112,11 @@
 		(var) = (*(((struct headname *)((var)->field.tqe_prev))->tqh_last)))
 #endif
 
+#ifndef TAILQ_HEAD_INITIALIZER
+#define TAILQ_HEAD_INITIALIZER(head)					\
+	{ NULL, &(head).tqh_first }
+#endif
+
 /*
  * Some extra functions for LIST manipulation
  */
@@ -123,11 +128,11 @@
         (newhead)->lh_first = (oldhead)->lh_first;			\
 } while (0) 
 
-#define LIST_INSERT_SORTED(head, elm, field, cmpfunc) do {	\
+#define LIST_INSERT_SORTED(head, elm, field, cmpfunc, type) do {\
         if(LIST_EMPTY(head)) {					\
            LIST_INSERT_HEAD(head, elm, field);			\
         } else {						\
-           typeof(elm) _tmp;					\
+                type *_tmp;					\
            LIST_FOREACH(_tmp,head,field) {			\
               if(cmpfunc(elm,_tmp) <= 0) {			\
                 LIST_INSERT_BEFORE(_tmp,elm,field);		\
@@ -141,11 +146,11 @@
         }							\
 } while(0)
 
-#define TAILQ_INSERT_SORTED(head, elm, field, cmpfunc) do {	\
+#define TAILQ_INSERT_SORTED(head, elm, field, cmpfunc,type) do {\
         if(TAILQ_FIRST(head) == NULL) {				\
            TAILQ_INSERT_HEAD(head, elm, field);			\
         } else {						\
-           typeof(elm) _tmp;					\
+           type *_tmp;					\
            TAILQ_FOREACH(_tmp,head,field) {			\
               if(cmpfunc(elm,_tmp) <= 0) {			\
                 TAILQ_INSERT_BEFORE(_tmp,elm,field);		\

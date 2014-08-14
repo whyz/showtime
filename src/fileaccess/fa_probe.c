@@ -238,7 +238,7 @@ metdata_set_redirect(metadata_t *md, const char *fmt, ...)
  *
  */
 static int
-jpeginfo_reader(void *handle, void *buf, off_t offset, size_t size)
+jpeginfo_reader(void *handle, void *buf, int64_t offset, size_t size)
 {
   if(fa_seek(handle, offset, SEEK_SET) != offset)
     return -1;
@@ -293,6 +293,12 @@ fa_probe_header(metadata_t *md, const char *url, fa_handle_t *fh,
     fa_probe_psid(md, buf); 
     md->md_contenttype = CONTENT_ALBUM;
     metdata_set_redirect(md, "sidfile://%s/", url);
+    return 1;
+  }
+
+  if(l >= 256 && (!memcmp(buf, "d8:announce", 11))) {
+    md->md_contenttype = CONTENT_ARCHIVE;
+    metdata_set_redirect(md, "torrentfile://%s/", url);
     return 1;
   }
 
@@ -671,11 +677,15 @@ fa_lavf_load_meta(metadata_t *md, AVFormatContext *fctx,
  */
 metadata_t *
 fa_probe_metadata(const char *url, char *errbuf, size_t errsize,
-		  const char *filename)
+		  const char *filename, prop_t *stats)
 {
   AVFormatContext *fctx;
 
-  fa_handle_t *fh = fa_open_ex(url, errbuf, errsize, FA_BUFFERED_SMALL, NULL);
+  fa_open_extra_t foe = {
+    .foe_stats = stats
+  };
+
+  fa_handle_t *fh = fa_open_ex(url, errbuf, errsize, FA_BUFFERED_SMALL, &foe);
 
   if(fh == NULL) 
     return NULL;

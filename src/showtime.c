@@ -255,6 +255,8 @@ showtime_init(void)
 
   gconf.exit_code = 1;
 
+  net_init();
+
   unicode_init();
 
   /* Initialize property tree */
@@ -537,6 +539,19 @@ parse_opts(int argc, char **argv)
     } else if (!strcmp(argv[0], "--showtime-shell-fd") && argc > 1) {
       gconf.showtime_shell_fd = atoi(argv[1]);
       argc -= 2; argv += 2;
+    } else if (!strcmp(argv[0], "--proxy") && argc > 1) {
+      char *x = mystrdupa(argv[1]);
+      char *pstr = strchr(x, ':');
+
+      if(pstr != NULL) {
+        *pstr++ = 0;
+        gconf.proxy_port = atoi(pstr);
+      } else {
+        gconf.proxy_port = 1080;
+      }
+      snprintf(gconf.proxy_host, sizeof(gconf.proxy_host), "%s", x);
+      printf("Proxy set to %s:%d\n", gconf.proxy_host, gconf.proxy_port);
+      argc -= 2; argv += 2;
 #ifdef __APPLE__
     /* ignore -psn argument, process serial number */
     } else if(!strncmp(argv[0], "-psn", 4)) {
@@ -602,6 +617,18 @@ showtime_flush_caches(void)
   htsmsg_store_flush();
 }
 
+/**
+ * To avoid hang on exit we launch a special thread that will force
+ * exit after 5 seconds
+ */
+static void *
+shutdown_eject(void *aux)
+{
+  sleep(5);
+  arch_exit();
+  return NULL;
+}
+
 
 /**
  *
@@ -616,6 +643,8 @@ showtime_shutdown(int retcode)
     gconf.exit_code = retcode;
     arch_exit();
   }
+
+  hts_thread_create_detached("eject", shutdown_eject, NULL, THREAD_PRIO_BGTASK);
 
   event_dispatch(event_create_action(ACTION_STOP));
   prop_destroy_by_name(prop_get_global(), "popups");

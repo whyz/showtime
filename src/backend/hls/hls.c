@@ -42,6 +42,7 @@
 #include "hls.h"
 #include "subtitles/subtitles.h"
 #include "usage.h"
+#include "misc/minmax.h"
 
 /**
  * Relevant docs:
@@ -195,9 +196,9 @@ typedef struct hls {
 
 } hls_t;
 
-#define HLS_TRACE(h, x...) do {			\
-  if((h)->h_debug)				\
-    TRACE(TRACE_DEBUG, "HLS", x);		\
+#define HLS_TRACE(h, x, ...) do {                               \
+    if((h)->h_debug)                                            \
+      TRACE(TRACE_DEBUG, "HLS", x, ##__VA_ARGS__);		\
   } while(0)
 
 
@@ -1009,32 +1010,6 @@ demuxer_select_variant(hls_t *h, hls_demuxer_t *hd)
 }
 
 
-
-/**
- *
- */
-static void
-select_subtitle_track(media_pipe_t *mp, const char *id)
-{
-  TRACE(TRACE_DEBUG, "HLS", "Selecting subtitle track %s", id);
-
-  mp_send_cmd(mp, &mp->mp_video, MB_CTRL_FLUSH_SUBTITLES);
-
-  if(!strcmp(id, "sub:off")) {
-    prop_set_string(mp->mp_prop_subtitle_track_current, id);
-    mp->mp_video.mq_stream2 = -1;
-
-    mp_load_ext_sub(mp, NULL, NULL);
-
-  } else {
-
-    mp->mp_video.mq_stream2 = -1;
-    prop_set_string(mp->mp_prop_subtitle_track_current, id);
-    mp_load_ext_sub(mp, id, NULL);
-  }
-}
-
-
 /**
  *
  */
@@ -1154,6 +1129,23 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
         continue;
       }
 
+
+#if 0
+      printf("%s: PTS=%-16lld DTS=%-16lld %16lld\n",
+             mb->mb_data_type == MB_VIDEO ? "VIDEO" : "AUDIO",
+             pkt.pts, pkt.dts, pkt.pts - pkt.dts);
+#endif
+
+      /**
+       * Some HLS live servers (FlashCom/3.5.5) can send broken PTS
+       * timestamps.  Try to detect those and filter them out. Code
+       * downstream will repair them.
+       */
+
+      if(pkt.pts != AV_NOPTS_VALUE && pkt.dts != AV_NOPTS_VALUE &&
+         (pkt.pts - pkt.dts > 900000 || pkt.pts < pkt.dts))
+        pkt.pts = AV_NOPTS_VALUE;
+
       mb->mb_pts = rescale(hs->hs_fctx, pkt.pts, si);
       mb->mb_dts = rescale(hs->hs_fctx, pkt.dts, si);
 
@@ -1233,13 +1225,6 @@ hls_play(hls_t *h, media_pipe_t *mp, char *errbuf, size_t errlen,
       event_ts_t *ets = (event_ts_t *)e;
       hls_seek(h, ets->ts + hd->hd_delta_ts, ets->ts, 0, &mb);
 
-    } else if(event_is_action(e, ACTION_STOP)) {
-      mp_set_playstatus_stop(mp);
-
-    } else if(event_is_type(e, EVENT_SELECT_SUBTITLE_TRACK)) {
-      event_select_track_t *est = (event_select_track_t *)e;
-      select_subtitle_track(mp, est->id);
-
     } else if(event_is_action(e, ACTION_SKIP_FORWARD)) {
       break;
     } else if(event_is_action(e, ACTION_SKIP_BACKWARD)) {
@@ -1312,7 +1297,8 @@ hls_add_variant(hls_t *h, const char *url, hls_variant_t **hvp,
   hls_variant_t *hv = *hvp;
 
   hv->hv_url = url_resolve_relative_from_base(h->h_baseurl, url);
-  TAILQ_INSERT_SORTED(&hd->hd_variants, hv, hv_link, variant_cmp);
+  TAILQ_INSERT_SORTED(&hd->hd_variants, hv, hv_link, variant_cmp,
+                      hls_variant_t);
   *hvp = NULL;
 }
 

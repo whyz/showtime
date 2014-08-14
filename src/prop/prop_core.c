@@ -55,7 +55,8 @@ static void prop_flood_flag(prop_t *p, int set, int clr);
 
 static void prop_destroy_childs0(prop_t *p);
 
-#define PROPTRACE(fmt...) trace(TRACE_NO_PROP, TRACE_DEBUG, "prop", fmt)
+#define PROPTRACE(fmt, ...) \
+  trace(TRACE_NO_PROP, TRACE_DEBUG, "prop", fmt, ##__VA_ARGS__)
 
 #ifdef PROP_SUB_STATS
 static LIST_HEAD(, prop_sub) all_subs;
@@ -115,7 +116,7 @@ prop_get_name(prop_t *p)
 /**
  *
  */
-__attribute__((unused)) static const char *
+attribute_unused static const char *
 prop_get_DN(prop_t *p, int compact)
 {
   static __thread int idx;
@@ -209,14 +210,14 @@ prop_ref_dec_traced(prop_t *p, const char *file, int line)
     struct prop_ref_trace *prt = malloc(sizeof(struct prop_ref_trace));
     prt->file = file;
     prt->line = line;
-    prt->value = p->hp_refcount - 1;
+    prt->value = atomic_get(&p->hp_refcount) - 1;
     prt->which = 0;
     hts_mutex_lock(&prop_ref_mutex);
     SIMPLEQ_INSERT_TAIL(&p->hp_ref_trace, prt, link);
     hts_mutex_unlock(&prop_ref_mutex);
   }
   
-  if(atomic_add(&p->hp_refcount, -1) > 1)
+  if(atomic_dec(&p->hp_refcount))
     return;
   if(p->hp_flags & PROP_REF_TRACED) 
     printf("Prop %p was finalized by %s:%d\n", p, file, line);
@@ -236,7 +237,7 @@ prop_ref_dec_traced(prop_t *p, const char *file, int line)
 /**
  *
  */
-static void
+void
 prop_ref_dec_traced_locked(prop_t *p, const char *file, int line)
 {
   if(p == NULL)
@@ -248,14 +249,14 @@ prop_ref_dec_traced_locked(prop_t *p, const char *file, int line)
     struct prop_ref_trace *prt = malloc(sizeof(struct prop_ref_trace));
     prt->file = file;
     prt->line = line;
-    prt->value = p->hp_refcount - 1;
+    prt->value = atomic_get(&p->hp_refcount) - 1;
     prt->which = 0;
     hts_mutex_lock(&prop_ref_mutex);
     SIMPLEQ_INSERT_TAIL(&p->hp_ref_trace, prt, link);
     hts_mutex_unlock(&prop_ref_mutex);
   }
   
-  if(atomic_add(&p->hp_refcount, -1) > 1)
+  if(atomic_dec(&p->hp_refcount))
     return;
   if(p->hp_flags & PROP_REF_TRACED) 
     printf("Prop %p was finalized by %s:%d\n", p, file, line);
@@ -269,7 +270,6 @@ prop_ref_dec_traced_locked(prop_t *p, const char *file, int line)
   pool_put(prop_pool, p);
 }
 
-#define prop_ref_dec_locked(p) prop_ref_dec_traced_locked(p, __FILE__, __LINE__)
 
 
 /**
@@ -281,12 +281,12 @@ prop_ref_inc_traced(prop_t *p, const char *file, int line)
   if(p == NULL)
     return NULL;
 
-  atomic_add(&p->hp_refcount, 1);
+  atomic_inc(&p->hp_refcount);
   if(p->hp_flags & PROP_REF_TRACED) {
     struct prop_ref_trace *prt = malloc(sizeof(struct prop_ref_trace));
     prt->file = file;
     prt->line = line;
-    prt->value = p->hp_refcount;
+    prt->value = atomic_get(&p->hp_refcount);
     prt->which = 1;
     hts_mutex_lock(&prop_ref_mutex);
     SIMPLEQ_INSERT_TAIL(&p->hp_ref_trace, prt, link);
@@ -330,7 +330,7 @@ prop_print_trace(prop_t *p)
 void
 prop_ref_dec(prop_t *p)
 {
-  if(p == NULL || atomic_add(&p->hp_refcount, -1) > 1)
+  if(p == NULL || atomic_dec(&p->hp_refcount))
     return;
   assert(p->hp_type == PROP_ZOMBIE);
   assert(p->hp_tags == NULL);
@@ -347,10 +347,10 @@ prop_ref_dec(prop_t *p)
 /**
  *
  */
-static void
+void
 prop_ref_dec_locked(prop_t *p)
 {
-  if(p == NULL || atomic_add(&p->hp_refcount, -1) > 1)
+  if(p == NULL || atomic_dec(&p->hp_refcount))
     return;
   assert(p->hp_type == PROP_ZOMBIE);
   assert(p->hp_tags == NULL);
@@ -368,7 +368,7 @@ prop_t *
 prop_ref_inc(prop_t *p)
 {
   if(p != NULL)
-    atomic_add(&p->hp_refcount, 1);
+    atomic_inc(&p->hp_refcount);
   return p;
 }
 
@@ -399,7 +399,7 @@ prop_xref_addref(prop_t *p)
 void
 prop_sub_ref_dec_locked(prop_sub_t *s)
 {
-  if(atomic_add(&s->hps_refcount, -1) > 1)
+  if(atomic_dec(&s->hps_refcount))
     return;
   pool_put(sub_pool, s);
 }
@@ -998,7 +998,7 @@ static prop_notify_t *
 get_notify(prop_sub_t *s)
 {
   prop_notify_t *n = pool_get(notify_pool);
-  atomic_add(&s->hps_refcount, 1);
+  atomic_inc(&s->hps_refcount);
   n->hpn_sub = s;
   return n;
 }
@@ -1272,7 +1272,7 @@ prop_build_notify_child(prop_sub_t *s, prop_t *p, prop_event_t event,
   n = get_notify(s);
 
   if(p != NULL)
-    atomic_add(&p->hp_refcount, 1);
+    atomic_inc(&p->hp_refcount);
   n->hpn_flags = flags;
   n->hpn_prop = p;
   n->hpn_event = event;
@@ -1319,9 +1319,9 @@ prop_build_notify_child2(prop_sub_t *s, prop_t *p, prop_t *extra,
 
   n = get_notify(s);
 
-  atomic_add(&p->hp_refcount, 1);
+  atomic_inc(&p->hp_refcount);
   if(extra != NULL)
-    atomic_add(&extra->hp_refcount, 1);
+    atomic_inc(&extra->hp_refcount);
 
   n->hpn_prop = p;
   n->hpn_prop2 = extra;
@@ -1407,7 +1407,7 @@ prop_send_ext_event0(prop_t *p, event_t *e)
 
     n->hpn_event = PROP_EXT_EVENT;
     n->hpn_prop2 = prop_ref_inc(p);
-    atomic_add(&e->e_refcount, 1);
+    atomic_inc(&e->e_refcount);
     n->hpn_ext_event = e;
     courier_enqueue(s, n);
   }
@@ -1496,7 +1496,7 @@ prop_check_canonical_subs_descending(prop_t *p)
 /**
  *
  */
-static int  __attribute__ ((warn_unused_result))
+static int attribute_unused_result
 prop_clean(prop_t *p)
 {
   if(p->hp_flags & PROP_CLIPPED_VALUE) {
@@ -1540,7 +1540,7 @@ prop_clean(prop_t *p)
 /**
  *
  */
-static void
+void
 prop_make_dir(prop_t *p, prop_sub_t *skipme, const char *origin)
 {
   if(p->hp_type == PROP_DIR)
@@ -1587,7 +1587,7 @@ prop_make(const char *name, int noalloc, prop_t *parent)
 #endif
   hp->hp_flags = noalloc ? PROP_NAME_NOT_ALLOCATED : 0;
   hp->hp_originator = NULL;
-  hp->hp_refcount = 1;
+  atomic_set(&hp->hp_refcount, 1);
   hp->hp_xref = 1;
   hp->hp_type = PROP_VOID;
   if(noalloc)
@@ -1954,7 +1954,7 @@ prop_destroy0(prop_t *p)
       psubs++;
 
     printf("Entering prop_destroy0(%s) [type=%d, refcnt=%d, xref=%d, csubs=%d, psubs=%d]\n",
-	   propname(p), p->hp_type, p->hp_refcount, p->hp_xref,
+	   propname(p), p->hp_type, atomic_get(&p->hp_refcount), p->hp_xref,
 	   csubs, psubs);
   }
 #endif
@@ -2725,7 +2725,7 @@ prop_subscribe(int flags, ...)
   s->hps_trampoline = trampoline;
   s->hps_callback = cb;
   s->hps_opaque = opaque;
-  s->hps_refcount = 1;
+  atomic_set(&s->hps_refcount, 1);
   s->hps_user_int = user_int;
 
   if(origin_chain[0] != NULL) {
@@ -5035,8 +5035,8 @@ prop_print_tree0(prop_t *p, int indent, int flags)
 {
   prop_t *c;
 
-  fprintf(stderr, "%*.s%s[%p %d %c%c]: ", indent, "", 
-	  p->hp_name, p, p->hp_xref,
+  fprintf(stderr, "%*.s%s[%p %d %d %c%c]: ", indent, "", 
+	  p->hp_name, p, atomic_get(&p->hp_refcount), p->hp_xref,
 	  p->hp_flags & PROP_MULTI_SUB ? 'M' : ' ',
 	  p->hp_flags & PROP_MULTI_NOTIFY ? 'N' : ' ');
 
@@ -5090,7 +5090,7 @@ prop_print_tree0(prop_t *p, int indent, int flags)
     break;
     
   case PROP_ZOMBIE:
-    fprintf(stderr, "<zombie, ref=%d>\n", p->hp_refcount);
+    fprintf(stderr, "<zombie, ref=%d>\n", atomic_get(&p->hp_refcount));
     break;
   }
 

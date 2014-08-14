@@ -21,7 +21,6 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
@@ -29,6 +28,7 @@
 #include "htsbuf.h"
 #include "showtime.h"
 #include "misc/rstr.h"
+#include "misc/minmax.h"
 
 /**
  *
@@ -85,7 +85,7 @@ htsbuf_append(htsbuf_queue_t *hq, const void *buf, size_t len)
     c = MIN(hd->hd_data_size - hd->hd_data_len, len);
     memcpy(hd->hd_data + hd->hd_data_len, buf, c);
     hd->hd_data_len += c;
-    buf += c;
+    buf = (const char *)buf + c;
     len -= c;
   }
   if(len == 0)
@@ -142,7 +142,7 @@ htsbuf_read(htsbuf_queue_t *hq, void *buf, size_t len)
     memcpy(buf, hd->hd_data + hd->hd_data_off, c);
 
     r += c;
-    buf += c;
+    buf = (char *)buf + c;
     len -= c;
     hd->hd_data_off += c;
     hq->hq_size -= c;
@@ -190,7 +190,7 @@ htsbuf_peek(htsbuf_queue_t *hq, void *buf, size_t len)
     memcpy(buf, hd->hd_data + hd->hd_data_off, c);
 
     r += c;
-    buf += c;
+    buf = (char *)buf + c;
     len -= c;
 
     hd = TAILQ_NEXT(hd, hd_link);
@@ -260,23 +260,6 @@ htsbuf_appendq(htsbuf_queue_t *hq, htsbuf_queue_t *src)
     TAILQ_REMOVE(&src->hq_q, hd, hd_link);
     TAILQ_INSERT_TAIL(&hq->hq_q, hd, hd_link);
   }
-}
-
-
-void
-htsbuf_dump_raw_stderr(htsbuf_queue_t *hq)
-{
-  htsbuf_data_t *hd;
-  char n = '\n';
-
-  TAILQ_FOREACH(hd, &hq->hq_q, hd_link) {
-    if(write(2, hd->hd_data + hd->hd_data_off,
-	     hd->hd_data_len - hd->hd_data_off)
-       != hd->hd_data_len - hd->hd_data_off)
-      break;
-  }
-  if(write(2, &n, 1) != 1)
-    return;
 }
 
 

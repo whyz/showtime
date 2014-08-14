@@ -32,8 +32,9 @@ void url_deescape(char *s);
 
 void deescape_cstyle(char *s);
 
-#define URL_ESCAPE_PATH   1
-#define URL_ESCAPE_PARAM  2
+#define URL_ESCAPE_PATH       1
+#define URL_ESCAPE_PARAM      2
+#define URL_ESCAPE_SPACE_ONLY 3
 
 int url_escape(char *dest, const int size, const char *src, int how);
 
@@ -73,7 +74,9 @@ void strvec_free(char **s);
 
 void strappend(char **strp, const char *src);
 
-int hex2bin(uint8_t *buf, size_t buflen, const char *str);
+int hex2binl(uint8_t *buf, size_t buflen, const char *str, int maxlen);
+
+#define hex2bin(a,b,c) hex2binl(a,b,c,INT32_MAX)
 
 void bin2hex(char *dst, size_t dstlen, const uint8_t *src, size_t srclen);
 

@@ -54,6 +54,14 @@ RB_HEAD(fa_dir_entry_tree, fa_dir_entry);
 /**
  *
  */
+typedef struct fa_fsinfo {
+  uint64_t ffi_size;
+  uint64_t ffi_avail;
+} fa_fsinfo_t;
+
+/**
+ *
+ */
 typedef struct fa_stat {
   int64_t fs_size; // -1 if unknown (a pipe)
 
@@ -200,9 +208,11 @@ void *fa_open_vpaths(const char *url, const char **vpaths,
                      struct fa_open_extra *foe);
 void fa_close(void *fh);
 int fa_read(void *fh, void *buf, size_t size);
+void fa_deadline(void *fh_, int deadline);
 int fa_write(void *fh, const void *buf, size_t size);
 int64_t fa_seek(void *fh, int64_t pos, int whence);
 int64_t fa_fsize(void *fh);
+int fa_ftruncate(void *fh, uint64_t newsize);
 int fa_seek_is_fast(void *fh);
 int fa_stat(const char *url, struct fa_stat *buf, char *errbuf, size_t errsize);
 int fa_findfile(const char *path, const char *file, 
@@ -228,6 +238,8 @@ fa_err_code_t fa_set_xattr(const char *url, const char *name,
 
 fa_err_code_t fa_get_xattr(const char *url, const char *name,
                            void **datap, size_t *lenp);
+
+fa_err_code_t fa_fsinfo(const char *url, fa_fsinfo_t *ffi);
 
 int fa_copy_from_fh(const char *to, fa_handle_t *src,
                     char *errbuf, size_t errsize);
@@ -302,12 +314,12 @@ enum {
 #define FA_LOAD_REQUEST_HEADERS(a)      FA_LOAD_TAG_REQUEST_HEADERS, a
 #define FA_LOAD_RESPONSE_HEADERS(a)     FA_LOAD_TAG_RESPONSE_HEADERS, a
 
-buf_t *fa_load(const char *url, ...)  __attribute__((__sentinel__(0)));
+buf_t *fa_load(const char *url, ...) attribute_null_sentinel;
 
 buf_t *fa_load_and_close(fa_handle_t *fh);
 
 int fa_parent(char *dst, size_t dstlen, const char *url)
-  __attribute__ ((warn_unused_result));
+  attribute_unused_result;
 
 int fa_normalize(const char *url, char *dst, size_t dstlen);
 
@@ -399,7 +411,7 @@ enum {
 #define HTTP_CONNECT_TIMEOUT(a)            HTTP_TAG_CONNECT_TIMEOUT, a
 #define HTTP_READ_TIMEOUT(a)               HTTP_TAG_READ_TIMEOUT, a
 
-int http_req(const char *url, ...)  __attribute__((__sentinel__(0)));
+int http_req(const char *url, ...) attribute_null_sentinel;
 
 int http_client_oauth(struct http_auth_req *har,
 		      const char *consumer_key,

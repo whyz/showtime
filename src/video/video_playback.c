@@ -36,7 +36,7 @@
 #include "misc/str.h"
 #include "usage.h"
 
-static hts_mutex_t video_queue_mutex;
+static HTS_MUTEX_DECL(video_queue_mutex);
 
 
 TAILQ_HEAD(video_queue_entry_queue, video_queue_entry);
@@ -103,7 +103,7 @@ vsource_insert(struct vsource_list *list,
   vs->vs_url = strdup(url);
   vs->vs_mimetype = mimetype ? strdup(mimetype) : NULL;
   vs->vs_flags = flags;
-  LIST_INSERT_SORTED(list, vs, vs_link, vs_cmp);
+  LIST_INSERT_SORTED(list, vs, vs_link, vs_cmp, vsource_t);
 }
 
 
@@ -703,7 +703,6 @@ video_player_idle(void *aux)
       prop_set(mp->mp_prop_root, "loading", PROP_SET_INT, 0);
       if(e == NULL) {
 	prop_set_string(errprop, errbuf);
-        mp->mp_video_frame_deliver(NULL, mp->mp_video_frame_opaque);
       }
     }
 
@@ -804,7 +803,7 @@ video_player_idle(void *aux)
 	play_url = NULL;
       }
       if(play_url == NULL)
-	mp_set_playstatus_stop(mp);
+        prop_set_string(mp->mp_prop_playstatus, "stop");
     }
 
     event_release(e);
@@ -843,10 +842,4 @@ video_playback_destroy(media_pipe_t *mp)
   event_t *e = event_create_type(EVENT_EXIT);
   mp_enqueue_event(mp, e);
   event_release(e);
-}
-
-
-static void __attribute__((constructor)) video_playback_init(void)
-{
-  hts_mutex_init(&video_queue_mutex);
 }

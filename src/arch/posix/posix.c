@@ -54,6 +54,7 @@ get_system_concurrency(void)
 #include <limits.h>
 #include <syslog.h>
 #include <sys/statvfs.h>
+#include <sys/time.h>
 #include <signal.h>
 #include "text/text.h"
 #include "showtime.h"
@@ -62,7 +63,47 @@ get_system_concurrency(void)
 
 #include "posix.h"
 
+#include <sys/utsname.h>
+
 static int decorate_trace;
+
+#ifdef linux
+
+/**
+ *
+ */
+static char *
+linux_get_dist(void)
+{
+  char buf[1024] = {0};
+  FILE *fp = popen("lsb_release -d", "r");
+  if(fp == NULL)
+    return NULL;
+
+  char *ret = NULL;
+  while(1) {
+    int r = fread(buf, 1, sizeof(buf) - 1, fp);
+    if(r == 0)
+      break;
+
+    const char *s;
+    if((s = mystrbegins(buf, "Description:")) != NULL) {
+      while(*s && *s <= 32)
+        s++;
+
+      if(*s) {
+        ret = strdup(s);
+        ret[strcspn(ret, "\n\r")] = 0;
+        break;
+      }
+    }
+  }
+
+  fclose(fp);
+  return ret;
+}
+#endif
+
 
 /**
  *
@@ -70,6 +111,26 @@ static int decorate_trace;
 void
 posix_init(void)
 {
+  struct utsname uts;
+
+  if(!uname(&uts)) {
+    char *dist = NULL;
+#ifdef linux
+    dist = linux_get_dist();
+#endif
+    if(dist != NULL) {
+      snprintf(gconf.os_info, sizeof(gconf.os_info), "%s", dist);
+      free(dist);
+    } else {
+      snprintf(gconf.os_info, sizeof(gconf.os_info),
+               "%s-%s-%s-%s",
+               uts.sysname,
+               uts.release,
+               uts.version,
+               uts.machine);
+    }
+  }
+
   struct timeval tv;
   gettimeofday(&tv, NULL);
   srand(tv.tv_usec);
@@ -115,8 +176,6 @@ posix_init(void)
     setrlimit(RLIMIT_DATA, &rlim);
   } while(0);
 #endif
-
-  net_initialize();
 
   if(gconf.trace_to_syslog)
     openlog("showtime", 0, LOG_USER);
@@ -225,7 +284,7 @@ hfree(void *ptr, size_t size)
 
 
 void
-my_localtime(const time_t *now, struct tm *tm)
+arch_localtime(const time_t *now, struct tm *tm)
 {
   localtime_r(now, tm);
 }

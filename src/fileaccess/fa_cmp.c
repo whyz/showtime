@@ -114,7 +114,7 @@ cmp_read(fa_handle_t *handle, void *buf, size_t size)
   void *tmp = malloc(size);
 
 
-  off_t pos = lseek(s->s_fd, 0, SEEK_CUR);
+  int64_t pos = lseek(s->s_fd, 0, SEEK_CUR);
 
   int r2 = read(s->s_fd, tmp, size);
 
@@ -137,7 +137,7 @@ cmp_read(fa_handle_t *handle, void *buf, size_t size)
       exit(1);
     }
   }
-
+  free(tmp);
   return r1;
 }
 
