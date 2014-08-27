@@ -27,8 +27,6 @@
 
 void arch_exit(void) attribute_noreturn;
 
-int64_t arch_cache_avail_bytes(void);
-
 int arch_pipe(int pipefd[2]);
 
 void arch_sync_path(const char *path);
@@ -44,3 +42,4 @@ int arch_stop_req(void);
 
 void arch_localtime(const time_t *timep, struct tm *tm);
 
+void stackdump(const char *logprefix);

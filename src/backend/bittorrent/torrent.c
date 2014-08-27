@@ -87,7 +87,7 @@ torrent_trace(const torrent_t *t, const char *msg, ...)
 static void
 torrent_add_tracker(torrent_t *to, const char *url)
 {
-  torrent_tracker_t *tt;
+  tracker_torrent_t *tt;
 
   LIST_FOREACH(tt, &to->to_trackers, tt_torrent_link) {
     if(!strcmp(tt->tt_tracker->t_url, url))
@@ -186,8 +186,6 @@ torrent_create(buf_t *b, char *errbuf, size_t errlen)
 
   }
   htsmsg_release(doc);
-
-  to->to_refcount++;
   return to;
 }
 
@@ -201,6 +199,16 @@ block_destroy(torrent_block_t *tb)
   LIST_REMOVE(tb, tb_piece_link);
   assert(LIST_FIRST(&tb->tb_requests) == NULL);
   free(tb);
+}
+
+
+/**
+ *
+ */
+void
+torrent_retain(torrent_t *to)
+{
+  to->to_refcount++;
 }
 
 
@@ -1365,7 +1373,7 @@ torrent_piece_verify_hash(torrent_t *to, torrent_piece_t *tp)
   uint8_t digest[20];
   sha1_decl(shactx);
 
-  to->to_refcount++;
+  torrent_retain(to);
   tp->tp_refcount++;
 
   hts_mutex_unlock(&bittorrent_mutex);
