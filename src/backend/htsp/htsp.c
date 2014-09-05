@@ -67,9 +67,9 @@ typedef struct htsp_tag {
   LIST_ENTRY(htsp_tag) ht_link;
   char *ht_id;
   char *ht_title;
-  unsigned int ht_num_channels;
-  int32_t *ht_channels;
   prop_t *ht_root;
+  prop_t *ht_nodes;     // sorted output nodes
+  prop_t *ht_channels;  // source nodes
 } htsp_tag_t;
 
 
@@ -110,6 +110,7 @@ typedef struct htsp_connection {
   atomic_t hc_sid_generator; /* Subscription ID */
 
   prop_t *hc_channels_model;
+  prop_t *hc_channels_sorted;
   prop_t *hc_channels_nodes;
 
   prop_t *hc_tags_model;
@@ -266,7 +267,7 @@ htsp_reqreply(htsp_connection_t *hc, htsmsg_t *m)
     htsmsg_delete_field(m, "username");
     htsmsg_delete_field(m, "digest");
 
-    if(username != NULL) 
+    if(username != NULL)
       htsmsg_add_str(m, "username", username);
 
     if(password != NULL) {
@@ -301,7 +302,7 @@ htsp_reqreply(htsp_connection_t *hc, htsmsg_t *m)
   if(tcp_write_data(tc, buf, len)) {
     free(buf);
     htsmsg_release(m);
-    
+
     if(hm != NULL) {
       hts_mutex_lock(&hc->hc_rpc_mutex);
       TAILQ_REMOVE(&hc->hc_rpc_queue, hm, hm_link);
@@ -331,7 +332,7 @@ htsp_reqreply(htsp_connection_t *hc, htsmsg_t *m)
 
       hts_cond_wait(&hc->hc_rpc_cond, &hc->hc_rpc_mutex);
     }
-      
+
     TAILQ_REMOVE(&hc->hc_rpc_queue, hm, hm_link);
     hts_mutex_unlock(&hc->hc_rpc_mutex);
     reply = hm->hm_msg;
@@ -345,7 +346,7 @@ htsp_reqreply(htsp_connection_t *hc, htsmsg_t *m)
     }
   }
 
-  
+
   if(!htsmsg_get_u32(reply, "noaccess", &noaccess) && noaccess) {
     retry++;
     goto again;
@@ -370,7 +371,7 @@ htsp_login(htsp_connection_t *hc)
   htsmsg_add_str(m, "clientname", "HTS Showtime");
   htsmsg_add_u32(m, "htspversion", 1);
   htsmsg_add_str(m, "method", "hello");
-  
+
   if((m = htsp_reqreply(hc, m)) == NULL) {
     return -1;
   }
@@ -419,7 +420,7 @@ update_events(htsp_connection_t *hc, prop_t *metadata, int id, int next)
       prop_destroy_childs(events);
       return;
     }
-    
+
     id = next;
     linkstate = 1;
   }
@@ -457,10 +458,10 @@ update_events(htsp_connection_t *hc, prop_t *metadata, int id, int next)
 		      htsmsg_get_str(m, "description"));
       if(!htsmsg_get_u32(m, "start", &u32))
 	prop_set_int(prop_create(e, "start"), u32);
-      
+
       if(!htsmsg_get_u32(m, "stop", &u32))
 	prop_set_int(prop_create(e, "stop"), u32);
-      
+
       switch(linkstate) {
       case 0:
 	prop_link(e, current_event);
@@ -508,7 +509,7 @@ htsp_channel_get(htsp_connection_t *hc, int id, int create)
 
   snprintf(txt, sizeof(txt), "%d", id);
   prop_t *p = ch->ch_root = prop_create_root(txt);
-  
+
   snprintf(txt, sizeof(txt), "htsp://%s:%d/channel/%d",
 	   hc->hc_hostname, hc->hc_port, id);
   prop_set_string(prop_create(ch->ch_root, "url"), txt);
@@ -520,7 +521,7 @@ htsp_channel_get(htsp_connection_t *hc, int id, int create)
   ch->ch_prop_events = prop_create(m, "events");
 
   prop_set_string(prop_create(ch->ch_root, "type"), "tvchannel");
-  
+
   LIST_INSERT_HEAD(&hc->hc_channels, ch, ch_link);
   ch->ch_id = id;
   return ch;
@@ -544,7 +545,7 @@ htsp_channelAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
 
   title = htsmsg_get_str(m, "channelName");
   icon  = htsmsg_get_str(m, "channelIcon");
-  chnum = htsmsg_get_s32_or_default(m, "channelNumber", -1);
+  chnum = htsmsg_get_s32_or_default(m, "channelNumber", 0);
   snprintf(txt, sizeof(txt), "%d", id);
 
   hts_mutex_lock(&hc->hc_meta_mutex);
@@ -573,9 +574,11 @@ htsp_channelAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
     mystrset(&ch->ch_title, title);
     prop_set_string(ch->ch_prop_title, title);
   }
-  if(chnum != -1)
-    prop_set_int(ch->ch_prop_channelNumber, chnum);
 
+  if(chnum > 0)
+    prop_set_int(ch->ch_prop_channelNumber, chnum);
+  else
+    prop_set_void(ch->ch_prop_channelNumber);
 
   if(htsmsg_get_u32(m, "eventId", &id))
     id = 0;
@@ -614,7 +617,7 @@ htsp_channelDelete(htsp_connection_t *hc, htsmsg_t *m)
 
   if((ch = htsp_channel_get(hc, id, 0)) != NULL)
     channel_destroy(ch);
-  
+
   hts_mutex_unlock(&hc->hc_meta_mutex);
 }
 
@@ -634,7 +637,7 @@ channel_delete_all(htsp_connection_t *hc)
 /**
  *
  */
-static int 
+static int
 tag_compar(htsp_tag_t *a, htsp_tag_t *b)
 {
   return dictcmp(a->ht_title, b->ht_title);
@@ -650,14 +653,13 @@ htsp_tagAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
   const char *id;
   htsmsg_t *members;
   htsmsg_field_t *f;
-  prop_t *metadata, *before, *nodes;
+  prop_t *metadata;
   char txt[200];
-  int num = 0, i;
   htsp_tag_t *ht, *n;
   const char *title;
   if((id = htsmsg_get_str(m, "tagId")) == NULL)
     return;
-  
+
   title =  htsmsg_get_str(m, "tagName");
 
   hts_mutex_lock(&hc->hc_meta_mutex);
@@ -675,21 +677,35 @@ htsp_tagAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
 
     snprintf(txt, sizeof(txt), "htsp://%s:%d/tag/%s",
 	     hc->hc_hostname, hc->hc_port, id);
-    
-    prop_set_string(prop_create(ht->ht_root, "url"), txt);
-    prop_set_string(prop_create(ht->ht_root, "type"), "directory");
+
+    prop_set(ht->ht_root, "url", PROP_SET_STRING, txt);
+    prop_set(ht->ht_root, "type", PROP_SET_STRING, "directory");
+
+    ht->ht_channels = prop_create(ht->ht_root, "channels");
+    ht->ht_nodes = prop_create(ht->ht_root, "nodes");
+
+    struct prop_nf *nf =
+      prop_nf_create(ht->ht_nodes,
+                     ht->ht_channels,
+                     NULL,
+                     PROP_NF_AUTODESTROY);
+
+    prop_nf_sort(nf, "node.metadata.channelNumber", 0, 0, NULL, 0);
+    prop_nf_release(nf);
+
+
 
     if(prop_set_parent_ex(ht->ht_root, hc->hc_tags_nodes,
 			  n ? n->ht_root : NULL, NULL))
       abort();
-    
+
   } else {
-    
+
     LIST_FOREACH(ht, &hc->hc_tags, ht_link) {
       if(!strcmp(ht->ht_id, id))
 	break;
     }
-    
+
     if(ht == NULL) {
       TRACE(TRACE_ERROR, "HTSP", "Got update for unknown tag %s", id);
       hts_mutex_unlock(&hc->hc_meta_mutex);
@@ -707,64 +723,46 @@ htsp_tagAddUpdate(htsp_connection_t *hc, htsmsg_t *m, int create)
     }
   }
 
-  
+
 
   metadata = prop_create(ht->ht_root, "metadata");
 
-  prop_set_string(prop_create(metadata, "title"), htsmsg_get_str(m, "tagName"));
-  prop_set_string(prop_create(metadata, "icon"), htsmsg_get_str(m, "tagIcon"));
-  prop_set_int(prop_create(metadata, "titledIcon"),
-	       htsmsg_get_u32_or_default(m, "tagTitledIcon", 0));
+  prop_set(metadata, "title", PROP_SET_STRING, htsmsg_get_str(m, "tagName"));
+  prop_set(metadata, "icon",  PROP_SET_STRING, htsmsg_get_str(m, "tagIcon"));
+  prop_set(metadata, "titledIcon", PROP_SET_INT,
+           htsmsg_get_u32_or_default(m, "tagTitledIcon", 0));
 
-  // Create ordered list of channels in this tag
-  nodes = prop_create(ht->ht_root, "nodes");
+
+
   if((members = htsmsg_get_list(m, "members")) == NULL) {
     hts_mutex_unlock(&hc->hc_meta_mutex);
     return;
   }
 
-  before = NULL;
+  prop_mark_childs(ht->ht_channels);
 
-  TAILQ_FOREACH_REVERSE(f, &members->hm_fields, htsmsg_field_queue, hmf_link) {
+  HTSMSG_FOREACH(f, members) {
+    char url[512];
     if(f->hmf_type != HMF_S64)
       continue;
-    
-    snprintf(txt, sizeof(txt), "%" PRId64, f->hmf_s64);
-    prop_t *ch = prop_create(nodes, txt);
-    prop_move(ch, before);
 
-    prop_set_string(prop_create(ch, "type"), "tvchannel");
-    prop_set_stringf(prop_create(ch, "url"), 
-		     "htsp://%s:%d/channel/%" PRId64,
-		     hc->hc_hostname, hc->hc_port, f->hmf_s64);
+    snprintf(txt, sizeof(txt), "%" PRId64, f->hmf_s64);
+    prop_t *ch = prop_create(ht->ht_channels, txt);
+
+    prop_unmark(ch);
+
+    snprintf(url, sizeof(url), "htsp://%s:%d/channel/%" PRId64,
+             hc->hc_hostname, hc->hc_port, f->hmf_s64);
+
+    prop_set(ch, "type", PROP_SET_STRING, "tvchannel");
+    prop_set(ch, "url", PROP_SET_STRING, url);
 
     prop_t *orig = prop_create(hc->hc_channels_nodes, txt);
 
     prop_link(prop_create(orig, "metadata"), prop_create(ch, "metadata"));
-    before = ch;
-    num++;
   }
 
-  LIST_FOREACH(ht, &hc->hc_tags, ht_link) {
-    if(!strcmp(ht->ht_id, id))
-      break;
-  }
-
-  if(ht == NULL) {
-    ht = calloc(1, sizeof(htsp_tag_t));
-    LIST_INSERT_HEAD(&hc->hc_tags, ht, ht_link);
-    ht->ht_id = strdup(id);
-  }
-
-  ht->ht_num_channels = num;
-  ht->ht_channels = realloc(ht->ht_channels, num * sizeof(int));
-
-  i = 0;
-  TAILQ_FOREACH(f, &members->hm_fields, hmf_link) {
-    if(f->hmf_type != HMF_S64)
-      continue;
-    ht->ht_channels[i++] = f->hmf_s64;
-  }
+  prop_destroy_marked_childs(ht->ht_channels);
 
   hts_mutex_unlock(&hc->hc_meta_mutex);
 }
@@ -779,7 +777,6 @@ tag_destroy(htsp_tag_t *ht)
   LIST_REMOVE(ht, ht_link);
   free(ht->ht_id);
   free(ht->ht_title);
-  free(ht->ht_channels);
   prop_destroy(ht->ht_root);
   free(ht);
 }
@@ -804,7 +801,7 @@ htsp_tagDelete(htsp_connection_t *hc, htsmsg_t *m)
 
   if(ht != NULL)
     tag_destroy(ht);
-  
+
   hts_mutex_unlock(&hc->hc_meta_mutex);
 }
 
@@ -842,7 +839,7 @@ htsp_worker_thread(void *aux)
 
 
   while(1) {
-    
+
     hts_mutex_lock(&hc->hc_worker_mutex);
 
     while((hm = TAILQ_FIRST(&hc->hc_worker_queue)) == NULL)
@@ -1011,7 +1008,7 @@ htsp_thread(void *aux)
 	break;
     }
 
-    TRACE(TRACE_ERROR, "HTSP", "Disconnected from %s:%d", 
+    TRACE(TRACE_ERROR, "HTSP", "Disconnected from %s:%d",
 	  hc->hc_hostname, hc->hc_port);
 
     tcp_close(hc->hc_tc);
@@ -1027,13 +1024,13 @@ htsp_thread(void *aux)
       if(hc->hc_tc != NULL)
 	break;
 
-      TRACE(TRACE_ERROR, "HTSP", "Connection to %s:%d failed: %s", 
+      TRACE(TRACE_ERROR, "HTSP", "Connection to %s:%d failed: %s",
 	    hc->hc_hostname, hc->hc_port, errbuf);
       sleep(1);
       continue;
     }
-    
-    TRACE(TRACE_INFO, "HTSP", "Reconnected to %s:%d", 
+
+    TRACE(TRACE_INFO, "HTSP", "Reconnected to %s:%d",
 	  hc->hc_hostname, hc->hc_port);
 
     tag_delete_all(hc);
@@ -1079,7 +1076,7 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
   tc = tcp_connect(hostname, port, errbuf, errlen, 3000, 0, NULL);
   if(tc == NULL) {
     hts_mutex_unlock(&htsp_global_mutex);
-    TRACE(TRACE_ERROR, "HTSP", "Connection to %s:%d failed: %s", 
+    TRACE(TRACE_ERROR, "HTSP", "Connection to %s:%d failed: %s",
 	  hostname, port, errbuf);
     return NULL;
   }
@@ -1094,12 +1091,23 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
   meta = prop_create(hc->hc_tags_model, "metadata");
   prop_set_string(prop_create(meta, "title"), "Channel groups");
 
-  
+  hc->hc_channels_nodes = prop_create_root(NULL);
+
   nodes = prop_create(hc->hc_tags_model, "nodes");
 
-
   hc->hc_channels_model = prop_create(nodes, NULL);
-  hc->hc_channels_nodes  = prop_create(hc->hc_channels_model, "nodes");
+  hc->hc_channels_sorted = prop_create(hc->hc_channels_model, "nodes");
+
+  struct prop_nf *nf =
+    prop_nf_create(hc->hc_channels_sorted,
+                   hc->hc_channels_nodes,
+                   NULL,
+                   PROP_NF_AUTODESTROY);
+
+  prop_nf_sort(nf, "node.metadata.channelNumber", 0, 0, NULL, 0);
+  prop_nf_release(nf);
+
+
   prop_set_string(prop_create(hc->hc_channels_model, "type"), "directory");
   meta = prop_create(hc->hc_channels_model, "metadata");
   prop_set_string(prop_create(meta, "title"), "All channels");
@@ -1108,7 +1116,7 @@ htsp_connection_find(const char *url, char *path, size_t pathlen,
   prop_set_string(prop_create(hc->hc_channels_model, "type"),
 		  "directory");
 
-    
+
   hts_mutex_init(&hc->hc_rpc_mutex);
   hts_cond_init(&hc->hc_rpc_cond, &hc->hc_rpc_mutex);
   TAILQ_INIT(&hc->hc_rpc_queue);
@@ -1207,7 +1215,7 @@ be_htsp_open(prop_t *page, const char *url, int sync)
   char path[URL_MAX];
   char errbuf[256];
 
-  if((hc = htsp_connection_find(url, path, sizeof(path), 
+  if((hc = htsp_connection_find(url, path, sizeof(path),
 				errbuf, sizeof(errbuf))) == NULL)
     return nav_open_error(page, errbuf);
 
@@ -1220,8 +1228,8 @@ be_htsp_open(prop_t *page, const char *url, int sync)
     return backend_open_video(page, url, sync);
 
   if(!strcmp(path, "/channels")) {
-    
-    make_model(page, "Channels", hc->hc_channels_nodes, "tvchannels");
+
+    make_model(page, "Channels", hc->hc_channels_sorted, "tvchannels");
 
   } else if(!strncmp(path, "/tag/", strlen("/tag/"))) {
     prop_t *model;
@@ -1248,7 +1256,7 @@ htsp_set_subtitles(media_pipe_t *mp, const char *id)
   if(!strcmp(id, "off")) {
     mp->mp_video.mq_stream2 = -1;
     prop_set_string(mp->mp_prop_subtitle_track_current, "sub:off");
-    
+
   } else {
     unsigned int idx = atoi(id);
 
@@ -1267,7 +1275,7 @@ htsp_set_audio(media_pipe_t *mp, const char *id)
   if(!strcmp(id, "off")) {
     mp->mp_audio.mq_stream = -1;
     prop_set_string(mp->mp_prop_audio_track_current, "audio:off");
-    
+
   } else {
     unsigned int idx = atoi(id);
 
@@ -1289,7 +1297,7 @@ set_channel(htsp_connection_t *hc, htsp_subscription_t *hs, int chid,
 
   if((ch = htsp_channel_get(hc, chid, 1)) != NULL) {
     prop_t *m = hs->hs_mp->mp_prop_metadata;
-    
+
     TRACE(TRACE_DEBUG, "HTSP", "Subscribing to channel %s", ch->ch_title);
 
     prop_link(ch->ch_prop_title, prop_create(m, "title"));
@@ -1301,7 +1309,7 @@ set_channel(htsp_connection_t *hc, htsp_subscription_t *hs, int chid,
   } else {
     mystrset(name, NULL);
   }
-  
+
   hts_mutex_unlock(&hc->hc_meta_mutex);
 }
 
@@ -1406,7 +1414,7 @@ prio_to_weight(int p)
  *
  */
 static event_t *
-htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs, 
+htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 		char *errbuf, size_t errlen,
 		int primary, int priority, video_queue_t *vq,
 		const char *url)
@@ -1430,7 +1438,7 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
   htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
   htsmsg_add_u32(m, "weight", prio_to_weight(priority));
   htsmsg_add_u32(m, "timeshiftPeriod", 3600);
-  
+
   if((m = htsp_reqreply(hc, m)) == NULL) {
     snprintf(errbuf, errlen, "Connection with server lost");
     return NULL;
@@ -1460,14 +1468,14 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 
   while(1) {
     e = mp_dequeue_event(mp);
-    
+
     if(event_is_type(e, EVENT_SEEK)) {
       event_ts_t *ets = (event_ts_t *)e;
 
       TRACE(TRACE_DEBUG, "HTSP", "%s: Seek to %"PRId64, name, ets->ts);
-      
+
       m = htsmsg_create_map();
-      
+
       htsmsg_add_str(m, "method", "subscriptionSkip");
       htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
       htsmsg_add_u32(m, "absolute", 1);
@@ -1477,14 +1485,14 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 	snprintf(errbuf, errlen, "Connection with server lost");
 	return NULL;
       }
-      
+
       if((err = htsmsg_get_str(m, "error")) != NULL) {
 	snprintf(errbuf, errlen, "From server: %s", err);
 	htsmsg_release(m);
 	return NULL;
       }
-      
-      htsmsg_release(m);      
+
+      htsmsg_release(m);
 
 
     } else if(mp_flags & MP_CAN_PAUSE && event_is_type(e, EVENT_HOLD)) {
@@ -1495,7 +1503,7 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
       TRACE(TRACE_DEBUG, "HTSP", "%s: Hold set to %d", name, hold);
 
       m = htsmsg_create_map();
-      
+
       htsmsg_add_str(m, "method", "subscriptionSpeed");
       htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
       htsmsg_add_u32(m, "speed", 100 * !hold);
@@ -1504,14 +1512,14 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 	snprintf(errbuf, errlen, "Connection with server lost");
 	return NULL;
       }
-      
+
       if((err = htsmsg_get_str(m, "error")) != NULL) {
 	snprintf(errbuf, errlen, "From server: %s", err);
 	htsmsg_release(m);
 	return NULL;
       }
-      
-      htsmsg_release(m);      
+
+      htsmsg_release(m);
 
     } else if(event_is_type(e, EVENT_SELECT_SUBTITLE_TRACK)) {
       event_select_track_t *est = (event_select_track_t *)e;
@@ -1532,7 +1540,7 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 	    name, ei->val);
 
       m = htsmsg_create_map();
-      
+
       htsmsg_add_str(m, "method", "subscriptionChangeWeight");
       htsmsg_add_u32(m, "subscriptionId", hs->hs_sid);
       htsmsg_add_u32(m, "weight", prio_to_weight(ei->val));
@@ -1541,13 +1549,13 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
 	snprintf(errbuf, errlen, "Connection with server lost");
 	return NULL;
       }
-      
+
       if((err = htsmsg_get_str(m, "error")) != NULL) {
 	snprintf(errbuf, errlen, "From server: %s", err);
 	htsmsg_release(m);
 	return NULL;
       }
-      
+
       htsmsg_release(m);
 
     } else if(event_is_action(e, ACTION_PREV_CHANNEL) ||
@@ -1572,7 +1580,7 @@ htsp_subscriber(htsp_connection_t *hc, htsp_subscription_t *hs,
   }
 
   prop_set_string(mp->mp_prop_playstatus, "stop");
-  
+
   m = htsmsg_create_map();
 
   htsmsg_add_str(m, "method", "unsubscribe");
@@ -1592,7 +1600,7 @@ static void
 htsp_free_streams(htsp_subscription_t *hs)
 {
   htsp_subscription_stream_t *hss;
-  
+
   while((hss = LIST_FIRST(&hs->hs_streams)) != NULL) {
     LIST_REMOVE(hss, hss_link);
     if(hss->hss_cw != NULL)
@@ -1694,13 +1702,13 @@ htsp_file_read(fa_handle_t *handle, void *buf, size_t size)
 
   if((m = htsp_reqreply(hf->hf_hc, m)) == NULL)
     return -1;
-  
+
   size_t datalen;
   const void *data;
 
   if(htsmsg_get_bin(m, "data", &data, &datalen))
     return -1;
-  
+
   int r = MIN(datalen, size); // Be sure
   hf->hf_pos += r;
   memcpy(buf, data, r);
@@ -1799,7 +1807,7 @@ be_htsp_playvideo(const char *url, media_pipe_t *mp,
 	"Starting video playback %s primary=%s, priority=%d",
 	url, primary ? "yes" : "no", va->priority);
 
-  if((hc = htsp_connection_find(url, path, sizeof(path), 
+  if((hc = htsp_connection_find(url, path, sizeof(path),
 				errbuf, errlen)) == NULL) {
     return NULL;
   }
@@ -1874,7 +1882,7 @@ htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m)
   if(htsmsg_get_u32(m, "stream", &stream)  ||
      htsmsg_get_bin(m, "payload", &bin, &binlen))
     return;
-  
+
   if((hs = htsp_find_subscription_by_msg(hc, m)) == NULL)
     return;
 
@@ -1886,7 +1894,7 @@ htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m)
     LIST_FOREACH(hss, &hs->hs_streams, hss_link)
       if(hss->hss_index == stream)
 	break;
-      
+
     if(hss != NULL) {
 
       mb = media_buf_alloc_unlocked(mp, binlen);
@@ -1913,7 +1921,7 @@ htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m)
 	mb->mb_cw = media_codec_ref(hss->hss_cw);
 
       memcpy(mb->mb_data, bin, binlen);
-  
+
       mb->mb_size = binlen;
 
       if(mb->mb_data_type == MB_SUBTITLE)
@@ -1923,7 +1931,7 @@ htsp_mux_input(htsp_connection_t *hc, htsmsg_t *m)
 	mb->mb_drive_clock = 1;
 
       if(mb_enqueue_no_block(mp, hss->hss_mq, mb,
-			     mb->mb_data_type == MB_SUBTITLE ? 
+			     mb->mb_data_type == MB_SUBTITLE ?
 			     mb->mb_data_type : -1))
 	media_buf_free_unlocked(mp, mb);
     }
@@ -2025,22 +2033,23 @@ htsp_subscriptionStart(htsp_connection_t *hc, htsmsg_t *m)
 	media_type = MEDIA_TYPE_VIDEO;
 	nicename = "H264";
 	mcp.cheat_for_speed = 1;
+        mcp.broken_aud_placement = 1;
       } else if(!strcmp(type, "DVBSUB")) {
 	codec_id = AV_CODEC_ID_DVB_SUBTITLE;
 	media_type = MEDIA_TYPE_SUBTITLE;
 	nicename = "Bitmap";
 
 	uint32_t composition_id, ancillary_id;
-	
+
 	if(htsmsg_get_u32(sub, "composition_id", &composition_id)) {
 	  composition_id = 0;
-	  TRACE(TRACE_ERROR, "HTSP", 
+	  TRACE(TRACE_ERROR, "HTSP",
 		"Subtitle stream #%d missing composition id", idx);
 	}
 
 	if(htsmsg_get_u32(sub, "ancillary_id", &ancillary_id)) {
 	  ancillary_id = 0;
-	  TRACE(TRACE_ERROR, "HTSP", 
+	  TRACE(TRACE_ERROR, "HTSP",
 		"Subtitle stream #%d missing ancillary id", idx);
 	}
 
@@ -2112,7 +2121,7 @@ htsp_subscriptionStart(htsp_connection_t *hc, htsmsg_t *m)
       case MEDIA_TYPE_AUDIO:
 	hss->hss_mq = &mp->mp_audio;
 	hss->hss_data_type = MB_AUDIO;
-	
+
 	if(astream == -1)
 	  astream = idx;
 
@@ -2158,7 +2167,7 @@ htsp_subscriptionStatus(htsp_connection_t *hc, htsmsg_t *m)
 {
   htsp_subscription_t *hs;
   const char *status = htsmsg_get_str(m, "status");
-    
+
   if((hs = htsp_find_subscription_by_msg(hc, m)) == NULL)
     return;
 
